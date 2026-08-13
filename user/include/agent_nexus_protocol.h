@@ -3,6 +3,13 @@
 
 #include <agent.h>
 
+/* Stable, task-independent autonomous-model request contract. */
+#define AGENT_NEXUS_AUTONOMY_CONTRACT_VERSION 2U
+#define AGENT_NEXUS_SYSTEM_POLICY_SHA256 \
+	"3c6ff394bf6494d80208898e7440ba1da4fde43787e5162e46eaeb51d90c27b4"
+#define AGENT_NEXUS_TOOL_CATALOG_SHA256 \
+	"4d31b3dedab5b0b8084089a66b609b0f6ffecd17f6da031cd997cbbdf154ffe5"
+
 /*
  * Agent IPC currently carries a NUL-terminated 64-byte payload.  Nexus keeps
  * its task ABI binary and canonical by encoding these exact 44 little-endian
@@ -57,9 +64,12 @@ enum agent_nexus_task_state {
 
 /* ASSIGN uses status as the task type; terminal messages use Agent status. */
 enum agent_nexus_task_type {
-	AGENT_NEXUS_TASK_SYSTEM_SNAPSHOT = 1001,
-	AGENT_NEXUS_TASK_LOCAL_RESEARCH = 1002,
-	AGENT_NEXUS_TASK_COMPOSE_REPORT = 1003,
+	AGENT_NEXUS_TASK_INSPECT_RUNTIME = 1001,
+	AGENT_NEXUS_TASK_SOURCE_SEARCH = 1002,
+	AGENT_NEXUS_TASK_SOURCE_READ = 1003,
+	AGENT_NEXUS_TASK_DRAFT_REPORT = 1004,
+	AGENT_NEXUS_TASK_INSPECT_PROCESSES = 1005,
+	AGENT_NEXUS_TASK_INSPECT_CONTEXT = 1006,
 	AGENT_NEXUS_TASK_USER_TURN = 2001,
 	AGENT_NEXUS_TASK_MODEL_REQUEST = 2002,
 	AGENT_NEXUS_TASK_APPROVAL = 2003,
@@ -97,8 +107,8 @@ struct agent_nexus_task {
 
 #define AGENT_NEXUS_ARTIFACT_MAGIC   0x3158414eU /* "NAX1" */
 #define AGENT_NEXUS_ARTIFACT_VERSION 1U
-#define AGENT_NEXUS_ARTIFACT_MAX     1024U
-#define AGENT_NEXUS_ARTIFACT_SLOTS   32U
+#define AGENT_NEXUS_ARTIFACT_MAX     3072U
+#define AGENT_NEXUS_ARTIFACT_SLOTS   65535U
 #define AGENT_NEXUS_ARTIFACT_PATH_SIZE 14U
 
 #define AGENT_NEXUS_ARTIFACT_HANDLE(generation, slot) \
@@ -128,7 +138,7 @@ enum agent_nexus_product_role {
 #define AGENT_NEXUS_ARTIFACT_F_KNOWN_MASK 0x03U
 
 enum agent_nexus_artifact_kind {
-	AGENT_NEXUS_ARTIFACT_SEED = 1,
+	AGENT_NEXUS_ARTIFACT_TOOL_INPUT = 1,
 	AGENT_NEXUS_ARTIFACT_MODEL_REQUEST = 2,
 	AGENT_NEXUS_ARTIFACT_MODEL_RESPONSE = 3,
 	AGENT_NEXUS_ARTIFACT_TASK_CAPSULE = 4,
@@ -206,8 +216,10 @@ struct agent_nexus_task_capsule {
 	unsigned int secondary_handle;
 	unsigned int result_handle;
 	unsigned int objective_length;
-	char objective[161];
-	unsigned char reserved[3];
+	char objective[2801];
+	unsigned int argument_length;
+	char argument[129];
+	unsigned char reserved[2];
 	struct agent_nexus_artifact_actor target;
 };
 
@@ -237,9 +249,9 @@ _Static_assert(__builtin_offsetof(struct agent_nexus_artifact_header,
 	       "Nexus artifact manifest digest offset");
 _Static_assert(sizeof(struct agent_nexus_task_capsule) <=
 	       AGENT_NEXUS_ARTIFACT_MAX, "Nexus task capsule bound");
-_Static_assert(sizeof(struct agent_nexus_task_capsule) == 216,
+_Static_assert(sizeof(struct agent_nexus_task_capsule) == 2992,
 	       "Nexus task capsule layout");
 _Static_assert(__builtin_offsetof(struct agent_nexus_task_capsule, target) ==
-	       192, "Nexus task capsule target offset");
+	       2968, "Nexus task capsule target offset");
 
 #endif

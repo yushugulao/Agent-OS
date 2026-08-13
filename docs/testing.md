@@ -20,10 +20,10 @@
 | --- | --- | --- | --- |
 | `ABI` 一致性 | RISC-V 探针、静态断言、固定的布局清单 | 内核态和用户态共用的结构、系统调用号和清单摘要一致 | `make agent-uapi-check` |
 | 模块调用关系 | 检查源码归属、调用关系和 workflow fence | Context、Live Query、workflow fence 等代码仍在实际调用链中 | `make agent-module-check` |
-| Host 控制程序 | 测试 Python 和 Shell 协议处理程序 | Console、Nexus、Execution Contract、资源账户和检查程序能正确处理输入 | `make local-host-selftests` |
+| Host 控制程序 | 测试 Python 和 Shell 协议处理程序 | Console、Nexus 自主合约、Task ledger、源码证据认证、Execution Contract 和资源账户能正确处理输入 | `make local-host-selftests` |
 | Guest 功能 | 每个场景独立启动 QEMU，并执行真实的 RISC-V 系统调用 | Agent 身份、工具、Context、VFS、调度和 Task Channel 完成整个生命周期 | `make agentos-test` |
 | 权限与恢复 | 越权输入、容量耗尽、故障注入和重启 | 非法请求被拒绝；恢复后状态一致，资源能够回收 | 各专项 Guest 测试和故障测试 |
-| 长时间会话 | controller、observer 和固定模型回复配合运行 | 多个轮次、审批、任务分派、artifact 交接和关闭顺序正确 | Console、Nexus 固定 replay |
+| 长时间会话 | controller、observer 和固定 provider 回复配合运行 | Console 的工具/审批路径与 Nexus 的自主决策、brokered Task、证据结算、报告回读和关闭顺序正确 | Console、Nexus replay |
 | 业务结果 | 两套镜像使用同一输入和同一结果判定程序 | 普通 uCore 与 AgentOS-uCore 得到相同结果 | `make dual-platform-run` |
 | 性能测试 | 多次独立启动；在同一测试批次内配对；遍历参数组合 | 保存每个样本的用时、I/O、唤醒等待和公平性 | `one_shot_metrics/data/20260811` |
 
@@ -67,7 +67,8 @@ make local-host-selftests
 | Live Query | lifecycle generation、inode incarnation、索引调用、mutation barrier，以及 traversal/indexed 结果是否一致 |
 | Task Channel | `SQ/CQ` 协议、传输、single issuer、cancel、backpressure 和 resync 流程 |
 | 工作流调度 | 资源账户、scheduler model、阻塞唤醒和资源记账 |
-| Console 与 Nexus | 串口消息、本地 socket、controller、observer、task 和 artifact 协议 |
+| Console 与 Nexus | 串口消息、本地 socket、controller/observer、任意用户任务、五工具自主选择、Task/artifact/evidence 协议和报告回读 |
+| Nexus Host 信任根 | Host/Guest 系统策略和工具目录 digest、Task ledger 转换与身份绑定、brokered worker 结果、源码 corpus revision/manifest attestation |
 | 双平台工具 | 普通 uCore 与 AgentOS-uCore 的状态提取、结果比较和来源清单 |
 
 每项自测都会自行构造输入。测试失败时会直接列出缺失字段、错误的状态变化或有问题的源码调用点。
@@ -195,9 +196,15 @@ make agentos-nexus-check
 make agentos-nexus-replay TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-Console replay 检查 7 个请求摘要、3 个连续轮次、`query_file`、`echo` 和 `send_message` 的工具结果，以及一次拒绝、一次批准、本次启动的内核时间线和正常关闭。Nexus replay 检查 11 个请求摘要、4 个 Agent identity、`N1` 任务生命周期、错误句柄后的重新安排、3 份 artifact 及其 provenance、拒绝发布，以及 controller 和 observer 的状态是否一致。
+Console replay 检查脚本化多轮会话中 `query_file`、`echo` 和 `send_message` 的工具结果，以及审批记录、本次启动的内核时间线和正常关闭。
 
-两项测试都会真正启动 QEMU Guest。固定数据只替换在线 provider 回复；工具执行、Context sequence、审批记录、任务状态和会话关闭都由本次运行产生。具体操作见[运行方法](usage.md)。
+Nexus replay 把 fixture 视为一次自主运行的协议捕获，而不是产品的固定业务流程。验证器接受“不用工具直接回答”和“模型自行选择工具”两类路径；对后者逐轮核对模型只返回一个工具调用或最终答案，不把 fixture 中的顺序和调用次数当成 runtime 策略。公开表面必须恰好包含 `source_search`、`source_read`、`inspect_runtime`、`draft_report` 和 `read_artifact` 五个工具。
+
+每个 Nexus 轮次都由 Host Task ledger 重放 root/子 Task DAG、内核身份、状态迁移、工具参数摘要、brokered artifact 和 terminal root。`source_search` 只产生发现数据；`source_read` 还必须由 Host 在启动 QEMU 前加载的不可变 `build_source_snapshot` 重放，并将 citation、revision、manifest digest、行范围和 artifact digest 绑定到 evidence root。`inspect_runtime` 只能证明当前 Guest boot 观察，不会被提升成 attested source fact。`draft_report` 的模型文本由 Analyst worker 原样保存，`read_artifact` 必须回读本轮最新句柄的完全相同字节，而且两个工具都不执行外部发布。
+
+会话协商的上限为每轮 16 个模型决策与 32 次可重试 provider 错误。Nexus 生成请求必须保持 `max_tokens=114514`；DeepSeek V4 还要求 `thinking.type=enabled` 和 `reasoning_effort=max`。测试确认工具轮次间的 provider-private `reasoning_content` 只原样回传给 provider，不出现在 Guest、controller 或 telemetry。生成预算与公开输出界限分开：Guest 返回的最终正文仍不得超过 2048 个 UTF-8 字节。
+
+两项 replay 都会真正启动 QEMU Guest。固定数据只替换在线 provider 回复；工具执行、Context sequence、Task/evidence 记录、controller/observer 投影和会话关闭都由本次运行产生。具体操作见[运行方法](usage.md)。
 
 ## 7. 双平台对照测试
 
@@ -217,7 +224,7 @@ make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 
 ## 8. 专项性能结果与数据
 
-本节汇总 Live Query、Task Channel 和 Agent Loop 三类机制的测量结果与数据入口。本轮性能数据冻结在源码提交 `2b14fb1f74b9bd093e6de939a16554620835699e`，共独立启动 QEMU 30 次；当前版本的后续功能改动另由功能回归验证，以下数字仍按该历史批次报告。串口原始输出、逐样本表、数据清单和检查结果保存在 [`one_shot_metrics/data/20260811`](../one_shot_metrics/data/20260811/)；[`COMPLETED`](../one_shot_metrics/data/20260811/COMPLETED) 表示本轮采集已经结束。
+本节汇总 Live Query、Task Channel 和 Agent Loop 三类机制的测量结果与数据入口。性能数据共独立启动 QEMU 30 次。串口原始输出、逐样本表、数据清单和检查结果保存在 [`one_shot_metrics/data/20260811`](../one_shot_metrics/data/20260811/)；[`COMPLETED`](../one_shot_metrics/data/20260811/COMPLETED) 表示本轮采集已经结束。
 
 | 对应机制 | 主要结果 | 对系统设计的评价 |
 | --- | --- | --- |

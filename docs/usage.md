@@ -7,7 +7,7 @@
 - [1. 准备环境并构建](#1-准备环境并构建)
 - [2. 运行固定 replay](#2-运行固定-replay)
 - [3. 使用单 Agent Console](#3-使用单-agent-console)
-- [4. 使用多 Agent 工作流](#4-使用多-agent-工作流)
+- [4. 使用 Nexus 自主任务工作流](#4-使用-nexus-自主任务工作流)
 - [5. 接入 DeepSeek](#5-接入-deepseek)
 - [6. 观察运行状态并退出](#6-观察运行状态并退出)
 - [7. 运行双平台对照测试](#7-运行双平台对照测试)
@@ -91,13 +91,13 @@ make agentos-nexus-check
 make agentos-nexus-replay TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-replay 按照 [`ci/agentos-nexus-script.txt`](../ci/agentos-nexus-script.txt) 启动 Coordinator、System、Research 和 Analyst 四个 Agent。System Agent 采集系统状态，Research Agent 先提交一个错误句柄，Coordinator 随后重新安排任务；Analyst 收到两类 artifact 后整理报告。流程还会拒绝一次发布请求，并在最后关闭会话。检查通过后输出：
+Nexus replay 按照 [`ci/agentos-nexus-script.txt`](../ci/agentos-nexus-script.txt) 提交普通用户任务，并回放一次真实自主运行捕获的 provider 字节。回放数据只是协议回归输入，不会把工具顺序或业务结论写成 Nexus 的固定计划。检查程序会核对直接回答和工具路径、Task ledger、brokered worker 结算、源码证据认证、报告回读、controller/observer 投影与正常关闭。通过时输出会按本次 fixture 列出 provider rounds、tasks 和已验证特性：
 
 ```text
-agentos-nexus-replay: PASS (11 digests, 3 turns, 4 roles, replan, denied publish, clean close)
+agentos-nexus-replay: PASS (<provider rounds> provider rounds, <tasks> tasks, <verified features>)
 ```
 
-这两条 `PASS` 由检查程序在核对模型请求、工具结果、Context sequence、审批记录、observer 快照和关闭顺序后给出。
+Console 的 `PASS` 仍由检查程序在核对模型请求、工具结果、Context sequence、审批记录、observer 快照和关闭顺序后给出。Nexus 还会额外核对自主模型合约与证据根。
 
 ## 3. 使用单 Agent Console
 
@@ -130,9 +130,17 @@ AgentOS session <session-id> ready
 
 一次审批只对当前会话、轮次和请求生效，同时绑定 correlation、参数 digest、nonce 和有效期。模型修改参数后，系统会重新发起审批。
 
-## 4. 使用多 Agent 工作流
+## 4. 使用 Nexus 自主任务工作流
 
-Nexus 会在同一次运行中建立四个彼此独立的 Agent。Coordinator 拆分任务，System 采集本次启动的内核状态，Research 读取来源数据，Analyst 汇总前两者交付的 artifact。各 Agent 如何传递任务和结果，见[多 Agent 工作流](modules/workflow-runtime.md)。
+Nexus 接收任意非空用户任务。每个决策轮次由模型自行返回最终答案，或从五个公开工具中选择一个；模型可以不用工具，也可以重复或改变调用顺序。Guest 不会先设定“系统观察→资料检索→分析”的必经路径。工具需要专业进程时，运行时才创建绑定本轮 root Task 的子 Task，并通过 broker 验证和物化结果。详细过程见[Nexus 自主任务 Runtime](modules/workflow-runtime.md#七nexus-自主任务-runtime)。
+
+| 工具 | 边界 |
+| --- | --- |
+| `source_search` | 在受限的 `build_source_snapshot` 中搜索一个字面子串；结果只用于发现候选源码 |
+| `source_read` | 读取搜索结果的精确行并返回可由 Host 重放验证的 citation |
+| `inspect_runtime` | 通过 System specialist 读取当前 Guest boot 的状态；它是本次运行观察，不是源码证明 |
+| `draft_report` | 通过 Analyst specialist 原样保存模型自己的报告文本；worker 不添加结论 |
+| `read_artifact` | 只回读本轮最新的 `draft_report` 内容；临时证据和旧轮次句柄会被拒绝 |
 
 离线运行命令如下：
 
@@ -152,13 +160,13 @@ Nexus 支持 Console 的全部命令，并增加三个工作流查询命令：
 
 | 命令 | 作用 |
 | --- | --- |
-| `/agents` | 查看四个 Agent 的 PID、`role`、`identity` 和运行状态 |
-| `/tasks` | 查看 `N1` 任务的分配、运行、完成和失败状态 |
-| `/artifacts` | 查看当前工作流产生的 artifact handle、来源和摘要 |
+| `/agents` | 查看当前 Nexus 运行时参与进程的 PID、`role`、`identity` 和状态 |
+| `/tasks` | 查看 root/子 Task 的分配、运行与 terminal 状态 |
+| `/artifacts` | 查看本轮持久报告句柄与临时证据计数，以及来源摘要 |
 
-四个 Agent 各自拥有 PID、`identity` 和 Context。它们通过内核 `MESSAGE` 和 Nexus `N1` 消息传递任务。generation-safe artifact handle 与 lifecycle generation 绑定，访问时可以排除跨 generation 的旧句柄；任务失败后可以重新分派，最后由 Coordinator 汇总结果。
+每轮都有一个 root Task。Host 端的 Task ledger 核对 `TASK_EVENT` 状态迁移、父子关系、内核身份、工具参数摘要、artifact/evidence 绑定与 terminal 根哈希。需要 specialist 的工具通过内核 `MESSAGE` 和 `N1` 任务通道交付；Coordinator 对 worker 结果重放计算并核对 digest 后才物化结果。generation-safe handle 与 lifecycle generation 绑定，因此不接受跨代或跨轮次回读。`draft_report` 和 `read_artifact` 只用于当前回答的临时草稿与完整性回读，不会发布外部文件，报告 artifact 会在轮次终态前清理。
 
-每份 artifact 的 header 与 payload 由 `agent_file_publish()` 一次提交。内核写完整内容后才接入正式文件名，所以读取方不会遇到只写了一半的结果；同名文件已经存在时也不会被覆盖。若调用返回 `DUPLICATE` 或 `INDETERMINATE`，Nexus 会回读正式路径，只有内容与本次提交逐字节相同且文件恰好在 payload 后结束，才按幂等发布继续处理。
+单轮最多接受 16 个模型决策，并单独允许最多 32 次可重试 provider 错误；可重试传输失败不会冒充成模型的新决策。provider 生成请求的 `max_tokens` 为 `114514`。这是模型生成预算，不会扩大 Guest 对外公开的最终答案；最终正文仍限制为 2048 个 UTF-8 字节。
 
 ## 5. 接入 DeepSeek
 
@@ -190,7 +198,7 @@ make agentos-console-deepseek \
   AGENTOS_CONSOLE_API_KEY_FILE=/absolute/path/to/deepseek-key.txt
 ```
 
-Nexus 对应的变量为 `AGENTOS_NEXUS_API_KEY_FILE`。Host daemon 读取密钥并发起 `HTTPS` 请求；Guest 收到模型回复后，继续检查工具选择、schema 和 capability，等待用户审批，完成 Context commit 并推进工作流。在线 provider 只改变模型回复的来源，后续步骤仍由本次运行完成。
+Nexus 对应的变量为 `AGENTOS_NEXUS_API_KEY_FILE`。Host daemon 读取密钥并发起 `HTTPS` 请求；Guest 收到模型回复后，依次检查自主合约、工具 schema、capability、Task 证明和 Context commit。DeepSeek V4 请求显式使用 `thinking.type=enabled` 与 `reasoning_effort=max`。工具轮次之间需要的 provider-private `reasoning_content` 由中继向 provider 原样回传，但不进入 Guest、controller 输出或 telemetry。在线 provider 只改变模型回复的来源，工具执行和证明结算仍由本次运行完成。
 
 ## 6. 观察运行状态并退出
 

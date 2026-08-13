@@ -10,7 +10,7 @@ Agent Loop 的决策过程留在 Guest，内核负责跨轮次仍需保持一致
 - [四、Workflow Credit Domain](#四workflow-credit-domain)
 - [五、工作流 EEVDF](#五工作流-eevdf)
 - [六、Evidence Ring 与 Workflow Fence](#六evidence-ring-与-workflow-fence)
-- [七、Nexus 多 Agent Runtime](#七nexus-多-agent-runtime)
+- [七、Nexus 自主任务 Runtime](#七nexus-自主任务-runtime)
 - [八、源码位置与测试](#八源码位置与测试)
 
 ## 一、运行过程
@@ -222,30 +222,45 @@ agent_evidence_seal(key, fence_sequence, challenge,
 
 对于带请求编号的调用，同一编号配不同 `challenge` 返回 `CONFLICT`，更旧编号返回 `STALE`。上一次生成的回执尚未成功复制到用户态时，后续请求返回 `RETRY`。不要求回执的调用不进入 Replay 检查。生成失败时，内核恢复接纳新操作，也不会递增屏障序号。
 
-## 七、Nexus 多 Agent Runtime
+## 七、Nexus 自主任务 Runtime
 
 <p align="center">
-  <img src="../figures/architecture/nexus_runtime_flow.jpg" alt="Nexus 多智能体协作流程" width="960">
+  <img src="../figures/architecture/nexus_runtime_flow.jpg" alt="Nexus 自主任务决策、工具 broker 与证据结算流程" width="960">
 </p>
 
-**图 1　Nexus 多 Agent 协作流程**
+**图 1　Nexus 自主任务与证据结算流程**
 
 原生图源见 [`nexus_runtime_flow.drawio`](../figures/architecture/nexus_runtime_flow.drawio)。
 
-`agentnexus_ucore` 在同一工作流中创建四个独立进程。它们各有自己的 PID、Agent identity 和 Context，但共用生命周期、文件访问范围和 Workflow Credit Domain。
+### 7.1 任意任务与模型决策
 
-| 角色 | 主要任务 | 协作对象 |
+`agentnexus_ucore` 把用户输入作为本轮 root Task 的非空目标，不从关键词推断一套预制业务流程。Host 信任根要求 Guest 发出完全一致的 system policy 和五工具目录，并校验两者的 SHA-256。在每个决策轮次中，模型只返回一个 function call 或最终答案；是否使用工具、使用哪一个、顺序和次数都由模型自行决定。同一工具可以重复调用，也可以在工具结果不足时换用其他工具。
+
+单轮最多接受 16 个模型决策。可重试 provider 错误另设 32 次上限，不计作已交付的模型决策；总尝试数同时受两者之和约束。provider generation 的 `max_tokens` 为 `114514`。该预算与 Guest 公开最终正文的存储与协议界限独立，后者仍为 2048 个 UTF-8 字节。
+
+DeepSeek V4 provider 请求显式设置 `thinking.type=enabled` 和 `reasoning_effort=max`。工具轮次之间需要的 provider-private `reasoning_content` 由 Host relay 向 provider 原样回传，用于保持 provider 自身的思考上下文。该字段不进入 Guest wire，也不出现在 controller 输出或 telemetry 中。
+
+### 7.2 五工具与 brokered worker
+
+| 公开工具 | 执行路径 | 结果边界 |
 | --- | --- | --- |
-| 协调 Agent | 制订计划、分派任务、读取各角色结果、发起报告发布 | 系统观察、资料检索、分析 |
-| 系统观察 Agent | 读取进程、Context 和内核状态，形成系统状态 artifact | 协调、分析 |
-| 资料检索 Agent | 查询工作流文件并核对本地材料，形成资料 artifact | 协调、分析 |
-| 分析 Agent | 读取系统状态与资料 artifact，生成综合报告 | 协调 |
+| `source_search` | broker 将子 Task 交给 Research specialist | 对受限 `build_source_snapshot` 执行单个不区分大小写的字面子串搜索；结果是发现线索，不是最终引用证明 |
+| `source_read` | broker 将子 Task 交给 Research specialist | 读取候选 `source_id` 的精确行，返回可由 Host 重放验证的 citation |
+| `inspect_runtime` | broker 将子 Task 交给 System specialist | 只返回当前 Guest boot 的 `system_status`、`processes` 或 `context` 观察；不具有 source attestation |
+| `draft_report` | broker 将子 Task 交给 Analyst specialist | 原样保存模型给定的内容；Analyst 不进行第二次分析，也不添加结论 |
+| `read_artifact` | Coordinator 按当前轮次所有权直接回读 | 只接受本轮最新 `draft_report` 句柄，并返回完全相同的报告字节与 digest |
 
-协调 Agent 通过内核 `MESSAGE` 发送类型化任务。系统观察 Agent 和资料检索 Agent 用 `PROGRESS` 消息返回阶段数据，协调 Agent 收到后把数据写成工作流 artifact，再把 artifact 句柄交给下一角色。分析 Agent 通过 `TASK_RESULT` 返回报告句柄。协调 Agent 随后发起需要审批的发布请求。内核确认发布参数与用户批准的内容一致后，才执行最终发布。artifact 的读取权限由权限掩码控制。外部模型仍由 Host（宿主机）中的 Provider 中继连接，Guest（客户机）只保存轮次、关联编号、角色、Tool Registry 和 artifact 状态。
+前四类工具只有在被模型选中时才建立子 Task，因此 specialist 是按工具调用的执行者，而不是固定业务阶段。Coordinator 通过内核 `MESSAGE` 和 `N1` 任务协议发送 task capsule，并只允许一个子任务处于活动 dispatch。worker 通过 `ACCEPT`、`PROGRESS` 和单一 terminal 结果返回有界元数据。对临时 runtime/source 结果，Coordinator 使用相同输入重放计算 payload，核对 worker 上报的大小与 SHA-256，再以 brokered artifact 的形式物化；临时句柄不向模型历史或 controller 逃逸。
 
-artifact 发布使用 `agent_file_publish()`：内核先在未命名 inode 中写完 header 与 payload，再把正式文件名接入目录。同名并发发布只允许一个胜出且不覆盖已有文件；返回 `DUPLICATE` 或 `INDETERMINATE` 时，Nexus 必须逐字节回读正式路径并确认 EOF，内容完全相同才把它视为同一次结果的幂等重放。
+`draft_report` 是当前轮次唯一可持久到后续决策的报告 artifact。`read_artifact` 用它的 handle、kind、owner、payload digest 和轮次绑定执行完整性回读。这两个工具均无外部发布副作用；在 root Task 进入 terminal state 前，Guest 先删除该轮的报告命名空间。清理失败会封锁会话，而不是携带旧 artifact 继续下一轮。
 
-Guest 主程序位于 [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)，共用协议见 [`user/include/agent_nexus_protocol.h`](../../user/include/agent_nexus_protocol.h)，Host 连接沿用 [`host_tools/agentos_relayd.py`](../../host_tools/agentos_relayd.py)。运行方法见[运行指南](../usage.md#4-使用多-agent-工作流)。
+### 7.3 Task ledger 与 source attestation
+
+Guest 为每轮 root Task 和每个 brokered child Task 发出 `TASK_EVENT`。Host 的 [`agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py) 不保存任务正文或工具参数原文，而是保存有界元数据与哈希。它重放 lifecycle/turn 绑定、root-child DAG、内核认证的 PID/agent/control identity、任务状态迁移、工具参数 digest、artifact/evidence 绑定和 terminal 根哈希。未结算的子任务、不匹配的 worker 身份、被替换的 handle 或最终冻结后到达的事件都不能通过结算。
+
+源码证据不信任 Guest 自行声明的 digest。构建阶段把 `os/`、`include/`、`user/lib/` 和 `user/include/` 收录为有界 `build_source_snapshot`；Host 在 QEMU 启动前，用独立的 revision 和 manifest digest 加载并完整验证 corpus。`source_search` 的匹配只是 discovery projection。`source_read` 成功后，Host 从已验证的不可变内存副本中重建精确行、citation、chunk/artifact/projection digest，再将该证明绑定到工具与 Task ledger。源码正文作为不可信数据交给模型，不会进入 observer telemetry。最终回答中的 source-backed claim 只能使用 `source_read` 实际返回且被 Host 重放验证的 citation token。
+
+Guest 主程序位于 [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)，共用协议见 [`user/include/agent_nexus_protocol.h`](../../user/include/agent_nexus_protocol.h)，Host 自主合约、Task ledger 和 source attestation 分别位于 [`host_tools/agentos_nexus_contract.py`](../../host_tools/agentos_nexus_contract.py)、[`host_tools/agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py) 和 [`host_tools/agentos_source_attestation.py`](../../host_tools/agentos_source_attestation.py)。运行方法见[运行指南](../usage.md#4-使用-nexus-自主任务工作流)。
 
 ## 八、源码位置与测试
 
@@ -257,7 +272,7 @@ Guest 主程序位于 [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_
 | 工作流 EEVDF | [`os/workflow_scheduler.c`](../../os/workflow_scheduler.c)、[`os/proc.c`](../../os/proc.c) |
 | Evidence Ring 与 Workflow Fence | [`os/agent_evidence_ring.c`](../../os/agent_evidence_ring.c)、[`os/agent_workflow_fence.c`](../../os/agent_workflow_fence.c) |
 | 运行时间线 | [`os/agent_observe_timeline.c`](../../os/agent_observe_timeline.c) |
-| Nexus 任务与 artifact 发布 | [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)、[`user/lib/agent_nexus.c`](../../user/lib/agent_nexus.c)、[`os/agent_file_state.c`](../../os/agent_file_state.c)、[`os/fs.c`](../../os/fs.c) |
+| Nexus 自主合约、Task ledger、brokered worker、source attestation 与 report readback | [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)、[`user/lib/agent_nexus.c`](../../user/lib/agent_nexus.c)、[`user/lib/agent_nexus_source.c`](../../user/lib/agent_nexus_source.c)、[`host_tools/agentos_nexus_contract.py`](../../host_tools/agentos_nexus_contract.py)、[`host_tools/agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py)、[`host_tools/agentos_source_attestation.py`](../../host_tools/agentos_source_attestation.py) |
 
 Runtime 测试覆盖无丢失唤醒、慢订阅者隔离、心跳、消息路由、Workflow Credit Domain、Evidence Ring 票号、Workflow Fence 重试、EEVDF 和 Nexus Replay：
 

@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
+import http.client
 import io
 import json
 import os
@@ -181,6 +184,19 @@ class FrameCodecTests(unittest.TestCase):
                 )
             )
 
+    def test_larger_frame_budget_requires_explicit_nexus_opt_in(self) -> None:
+        payload = b"x" * relay.PROTOCOL_MAX_PAYLOAD_CEILING
+        with self.assertRaises(relay.WireProtocolError):
+            relay.FrameCodec().encode(
+                relay.WireFrame(SESSION, 1, "REQUEST", payload)
+            )
+        nexus = relay.FrameCodec(relay.PROTOCOL_MAX_PAYLOAD_CEILING)
+        line = nexus.encode(relay.WireFrame(SESSION, 1, "REQUEST", payload))
+        self.assertLessEqual(len(line), relay.PROTOCOL_MAX_WIRE_LINE_BYTES)
+        self.assertEqual(nexus.decode(line).payload, payload)
+        with self.assertRaises(ValueError):
+            relay.FrameCodec(relay.PROTOCOL_MAX_PAYLOAD_CEILING + 1)
+
     def test_noncanonical_base64_and_duplicate_json_keys_are_rejected(self) -> None:
         codec = relay.FrameCodec()
         line = codec.encode(relay.WireFrame(SESSION, 1, "REQUEST", b'{"a":1,"a":2}'))
@@ -204,6 +220,8 @@ class FrameCodecTests(unittest.TestCase):
 
 class RelaySessionTests(unittest.TestCase):
     def test_output_token_configuration_matches_guest_limit(self) -> None:
+        self.assertEqual(relay.MAX_OUTPUT_TOKENS, 2048)
+        self.assertEqual(relay.NEXUS_MAX_OUTPUT_TOKENS, 114514)
         provider = relay.ReplayProvider(
             (relay.ReplayRecord({"type": "final", "content": "unused"}),)
         )
@@ -219,6 +237,22 @@ class RelaySessionTests(unittest.TestCase):
                 goal="Reject an incompatible token budget.",
                 max_output_tokens=relay.MAX_OUTPUT_TOKENS + 1,
             )
+        with self.assertRaisesRegex(ValueError, "2048"):
+            relay.RelaySession(
+                provider,
+                goal="Do not widen the legacy session.",
+                max_output_tokens=relay.NEXUS_MAX_OUTPUT_TOKENS,
+            )
+
+        nexus_request = request(1, [{"role": "user", "content": "go"}])
+        nexus_request["max_tokens"] = relay.NEXUS_MAX_OUTPUT_TOKENS
+        normalized = relay.validate_guest_request(
+            nexus_request,
+            max_output_tokens=relay.NEXUS_MAX_OUTPUT_TOKENS,
+        )
+        self.assertEqual(
+            normalized["max_tokens"], relay.NEXUS_MAX_OUTPUT_TOKENS
+        )
 
     def test_replay_multiturn_tool_result_to_final_uses_same_serial_protocol(self) -> None:
         provider = relay.ReplayProvider(
@@ -637,6 +671,16 @@ class GoalInputTests(unittest.TestCase):
 
 
 class ProviderTranslationTests(unittest.TestCase):
+    def test_deepseek_legacy_tool_choice_uses_non_thinking_profile(self) -> None:
+        options = relay.DeepSeekProvider._provider_options_for_request(
+            object(),
+            {"tool_choice": {"tool": "read_status"}},
+            has_tools=True,
+        )
+        self.assertEqual(options["thinking"], {"type": "disabled"})
+        self.assertIs(options["parallel_tool_calls"], False)
+        self.assertNotIn("reasoning_effort", options)
+
     def test_openai_tool_use_then_tool_result_translation(self) -> None:
         opener = FakeOpener(
             (
@@ -835,7 +879,9 @@ class ProviderTranslationTests(unittest.TestCase):
         self.assertEqual(body["max_completion_tokens"], 128)
         self.assertNotIn("max_tokens", body)
 
-    def test_deepseek_non_thinking_tool_round_uses_documented_profile(self) -> None:
+    def test_deepseek_thinking_tool_round_replays_private_fields_exactly(self) -> None:
+        private_content = "I will inspect slot 7."
+        private_reasoning = "\u63a8\u7406\u4e2d: slot 7 \u2713"
         opener = FakeOpener(
             (
                 FakeResponse(
@@ -845,8 +891,8 @@ class ProviderTranslationTests(unittest.TestCase):
                                 "finish_reason": "tool_calls",
                                 "message": {
                                     "role": "assistant",
-                                    "content": "",
-                                    "reasoning_content": None,
+                                    "content": private_content,
+                                    "reasoning_content": private_reasoning,
                                     "tool_calls": [
                                         {
                                             "id": "call_deepseek_1",
@@ -895,11 +941,18 @@ class ProviderTranslationTests(unittest.TestCase):
             first_request,
             max_output_tokens=256,
         )
-        self.assertEqual(provider.complete(first).type, "tool_use")
+        first_reply = provider.complete(first)
+        self.assertEqual(first_reply.type, "tool_use")
+        public_wire = first_reply.wire_payload(1)
+        self.assertNotIn("content", public_wire)
+        self.assertNotIn("reasoning_content", public_wire)
+        self.assertNotIn(private_content, json.dumps(public_wire, ensure_ascii=False))
+        self.assertNotIn(private_reasoning, json.dumps(public_wire, ensure_ascii=False))
         body1 = json.loads(opener.requests[0][0].data)
         self.assertEqual(body1["model"], relay.DEEPSEEK_DEFAULT_MODEL)
         self.assertEqual(body1["max_tokens"], 128)
-        self.assertEqual(body1["thinking"], {"type": "disabled"})
+        self.assertEqual(body1["thinking"], {"type": "enabled"})
+        self.assertEqual(body1["reasoning_effort"], "max")
         self.assertIs(body1["parallel_tool_calls"], False)
         self.assertEqual(
             opener.requests[0][0].get_header("Authorization"), f"Bearer {secret}"
@@ -929,9 +982,13 @@ class ProviderTranslationTests(unittest.TestCase):
         )
         self.assertEqual(provider.complete(second).content, "slot 7 is ready")
         body2 = json.loads(opener.requests[1][0].data)
-        self.assertEqual(body2["thinking"], {"type": "disabled"})
+        self.assertEqual(body2["thinking"], {"type": "enabled"})
+        self.assertEqual(body2["reasoning_effort"], "max")
         self.assertIs(body2["parallel_tool_calls"], False)
-        self.assertNotIn("reasoning_content", body2["messages"][1])
+        self.assertEqual(body2["messages"][1]["content"], private_content)
+        self.assertEqual(
+            body2["messages"][1]["reasoning_content"], private_reasoning
+        )
         self.assertEqual(
             body2["messages"][1]["tool_calls"][0]["id"], "call_deepseek_1"
         )
@@ -969,10 +1026,472 @@ class ProviderTranslationTests(unittest.TestCase):
 
         self.assertEqual((reply.type, reply.content), ("final", "done"))
         body = json.loads(opener.requests[0][0].data)
-        self.assertEqual(body["thinking"], {"type": "disabled"})
+        self.assertEqual(body["thinking"], {"type": "enabled"})
+        self.assertEqual(body["reasoning_effort"], "max")
         self.assertNotIn("parallel_tool_calls", body)
 
-    def test_deepseek_serializes_multiple_tool_calls_and_reuses_first_call_id(self) -> None:
+    def test_deepseek_nexus_generation_budget_does_not_widen_public_final(self) -> None:
+        public_boundary = "\u00e9" * (relay.NEXUS_MAX_FINAL_BYTES // 2)
+        opener = FakeOpener(
+            (
+                FakeResponse(
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": public_boundary,
+                                    "reasoning_content": "private final reasoning",
+                                },
+                            }
+                        ]
+                    }
+                ),
+            )
+        )
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
+            api_key="sk-deepseek-test",
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        value = request(
+            1,
+            [{"role": "user", "content": "answer"}],
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        value["max_tokens"] = relay.NEXUS_MAX_OUTPUT_TOKENS
+
+        reply = provider.complete(
+            relay.validate_guest_request(
+                value,
+                max_output_tokens=relay.NEXUS_MAX_OUTPUT_TOKENS,
+            )
+        )
+
+        self.assertEqual(reply.content, public_boundary)
+        body = json.loads(opener.requests[0][0].data)
+        self.assertEqual(body["max_tokens"], relay.NEXUS_MAX_OUTPUT_TOKENS)
+        self.assertEqual(body["thinking"], {"type": "enabled"})
+        self.assertEqual(body["reasoning_effort"], "max")
+        oversized = {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": "x" * (relay.NEXUS_MAX_FINAL_BYTES + 1)
+                    },
+                }
+            ]
+        }
+        with self.assertRaises(relay.ProviderError) as raised:
+            relay.DeepSeekProvider._parse_response(oversized)
+        self.assertEqual(raised.exception.code, "BAD_PROVIDER_RESPONSE")
+
+    def test_deepseek_private_fields_are_scalar_bounded_and_nul_free(self) -> None:
+        def response() -> dict[str, object]:
+            return {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "reasoning_content": "reason",
+                            "tool_calls": [
+                                {
+                                    "id": "call_private_validation",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "read_status",
+                                        "arguments": '{"slot":7}',
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ]
+            }
+
+        valid = relay.DeepSeekProvider._parse_response(response())
+        self.assertIsNone(valid.provider_content)
+        self.assertEqual(valid.provider_reasoning_content, "reason")
+
+        cases = (
+            ("content", "missing", None),
+            ("content", "value", 7),
+            ("content", "value", "bad\0content"),
+            ("content", "value", "\ud800"),
+            ("reasoning_content", "missing", None),
+            ("reasoning_content", "value", None),
+            ("reasoning_content", "value", ["not", "scalar"]),
+            ("reasoning_content", "value", "bad\0reason"),
+            ("reasoning_content", "value", "\ud800"),
+        )
+        for field_name, operation, invalid in cases:
+            with self.subTest(field=field_name, invalid=repr(invalid)):
+                candidate = response()
+                message = candidate["choices"][0]["message"]
+                if operation == "missing":
+                    del message[field_name]
+                else:
+                    message[field_name] = invalid
+                with self.assertRaises(relay.ProviderError) as raised:
+                    relay.DeepSeekProvider._parse_response(candidate)
+                self.assertEqual(raised.exception.code, "BAD_PROVIDER_RESPONSE")
+                self.assertIs(raised.exception.retryable, True)
+
+        for field_name in ("content", "reasoning_content"):
+            with self.subTest(field=field_name, invalid="oversized"):
+                candidate = response()
+                candidate["choices"][0]["message"][field_name] = "123456789"
+                with mock.patch.object(
+                    relay, "MAX_PROVIDER_PRIVATE_TEXT_BYTES", 8
+                ):
+                    with self.assertRaises(relay.ProviderError) as raised:
+                        relay.DeepSeekProvider._parse_response(candidate)
+                self.assertEqual(raised.exception.code, "BAD_PROVIDER_RESPONSE")
+
+    def test_private_fields_change_selected_digest_but_not_public_wire(self) -> None:
+        def parsed(reasoning: str) -> relay.ModelReply:
+            return relay.DeepSeekProvider._parse_response(
+                {
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "role": "assistant",
+                                "content": "private preface",
+                                "reasoning_content": reasoning,
+                                "tool_calls": [
+                                    {
+                                        "id": "call_digest",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "read_status",
+                                            "arguments": '{"slot":7}',
+                                        },
+                                    }
+                                ],
+                            },
+                        }
+                    ]
+                }
+            )
+
+        first = parsed("private reason A")
+        second = parsed("private reason B")
+        first_digest = relay._reply_receipt_digest(first)
+        second_digest = relay._reply_receipt_digest(second)
+        self.assertNotEqual(first_digest, second_digest)
+        self.assertRegex(first_digest, r"^[0-9a-f]{64}$")
+        self.assertEqual(first.wire_payload(1), second.wire_payload(1))
+        self.assertNotIn("private preface", repr(first))
+        self.assertNotIn("private reason A", repr(first))
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(
+                relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=FakeOpener(())
+            ),
+            api_key="sk-deepseek-test",
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        receipt = relay.ProviderReceipt(
+            adapter_success=True,
+            transport="https",
+            endpoint=relay.DEEPSEEK_DEFAULT_ENDPOINT,
+            http_status=200,
+            request_sha256="1" * 64,
+            response_sha256="2" * 64,
+            selected_reply_sha256=second_digest,
+            attempt_count=1,
+            tool_choice_mode="auto",
+            raw_tool_call_count=1,
+        )
+        with self.assertRaises(relay.ProviderError) as mismatch:
+            provider.commit_model_reply(1, dataclasses.replace(first, receipt=receipt))
+        self.assertEqual(mismatch.exception.code, "BAD_PROVIDER_RESPONSE")
+        self.assertEqual(provider._provider_call_ids, {})
+
+        valid_receipt = dataclasses.replace(
+            receipt, selected_reply_sha256=first_digest
+        )
+        provider.commit_model_reply(
+            1, dataclasses.replace(first, receipt=valid_receipt)
+        )
+        self.assertEqual(
+            provider._provider_call_ids[1].selected_reply_sha256, first_digest
+        )
+
+    def test_deepseek_multistep_private_history_replays_verbatim_without_leak(self) -> None:
+        private = (
+            ("First private preface", "\u7b2c\u4e00\u6b65\u63a8\u7406 \u2713"),
+            (None, "second private reason\nwith exact spacing"),
+        )
+
+        def tool_response(call_id: str, slot: int, index: int) -> FakeResponse:
+            content, reasoning = private[index]
+            return FakeResponse(
+                {
+                    "id": f"chatcmpl-{index}",
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "role": "assistant",
+                                "content": content,
+                                "reasoning_content": reasoning,
+                                "tool_calls": [
+                                    {
+                                        "id": call_id,
+                                        "type": "function",
+                                        "function": {
+                                            "name": "read_status",
+                                            "arguments": json.dumps(
+                                                {"slot": slot}, separators=(",", ":")
+                                            ),
+                                        },
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                }
+            )
+
+        opener = FakeOpener(
+            (
+                tool_response("call_private_1", 7, 0),
+                tool_response("call_private_2", 8, 1),
+                FakeResponse(
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "both slots are ready",
+                                    "reasoning_content": "final private reasoning",
+                                },
+                            }
+                        ]
+                    }
+                ),
+            )
+        )
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
+            api_key="sk-deepseek-test",
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+
+        first_request = request(
+            1,
+            [{"role": "user", "content": "inspect both"}],
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+            tools=[TOOL],
+        )
+        first = provider.complete(
+            relay.validate_guest_request(first_request, max_output_tokens=256)
+        )
+        second_messages = [
+            {"role": "user", "content": "inspect both"},
+            {
+                "role": "assistant",
+                "tool_use": {
+                    "corr_id": 1,
+                    "tool": "read_status",
+                    "arguments": {"slot": 7},
+                },
+            },
+            {"role": "tool", "tool_corr_id": 1, "content": "slot 7 ready"},
+        ]
+        second = provider.complete(
+            relay.validate_guest_request(
+                request(
+                    2,
+                    second_messages,
+                    model=relay.DEEPSEEK_DEFAULT_MODEL,
+                    tools=[TOOL],
+                ),
+                max_output_tokens=256,
+            )
+        )
+        third_messages = [
+            *second_messages,
+            {
+                "role": "assistant",
+                "tool_use": {
+                    "corr_id": 2,
+                    "tool": "read_status",
+                    "arguments": {"slot": 8},
+                },
+            },
+            {"role": "tool", "tool_corr_id": 2, "content": "slot 8 ready"},
+        ]
+        final = provider.complete(
+            relay.validate_guest_request(
+                request(
+                    3,
+                    third_messages,
+                    model=relay.DEEPSEEK_DEFAULT_MODEL,
+                    tools=[TOOL],
+                ),
+                max_output_tokens=256,
+            )
+        )
+
+        self.assertEqual(final.content, "both slots are ready")
+        body2 = json.loads(opener.requests[1][0].data)
+        self.assertEqual(body2["messages"][1]["content"], private[0][0])
+        self.assertEqual(
+            body2["messages"][1]["reasoning_content"], private[0][1]
+        )
+        body3 = json.loads(opener.requests[2][0].data)
+        self.assertEqual(body3["messages"][1]["content"], private[0][0])
+        self.assertEqual(
+            body3["messages"][1]["reasoning_content"], private[0][1]
+        )
+        self.assertIsNone(body3["messages"][3]["content"])
+        self.assertEqual(
+            body3["messages"][3]["reasoning_content"], private[1][1]
+        )
+        for corr_id, reply in ((1, first), (2, second)):
+            binding = provider._provider_call_ids[corr_id]
+            assert reply.receipt is not None
+            self.assertEqual(
+                binding.selected_reply_sha256,
+                reply.receipt.selected_reply_sha256,
+            )
+            public = json.dumps(reply.wire_payload(corr_id), ensure_ascii=False)
+            receipt = json.dumps(dataclasses.asdict(reply.receipt), ensure_ascii=False)
+            for content, reasoning in private:
+                if content is not None:
+                    self.assertNotIn(content, public)
+                    self.assertNotIn(content, receipt)
+                self.assertNotIn(reasoning, public)
+                self.assertNotIn(reasoning, receipt)
+
+    def test_private_call_binding_commits_only_after_serial_delivery(self) -> None:
+        private_content = "private delivery preface"
+        private_reasoning = "private delivery reasoning"
+        opener = FakeOpener(
+            (
+                FakeResponse(
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "tool_calls",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": private_content,
+                                    "reasoning_content": private_reasoning,
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_after_serial",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "read_status",
+                                                "arguments": '{"slot":7}',
+                                            },
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    }
+                ),
+            )
+        )
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
+            api_key="sk-deepseek-test",
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        session = relay.RelaySession(
+            provider,
+            goal="Inspect slot 7.",
+            approved_tools=("read_status",),
+            session=SESSION,
+        )
+        value = request(
+            1,
+            [{"role": "user", "content": "inspect"}],
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+            tools=[TOOL],
+        )
+        response_line = session.handle_line(
+            session.codec.encode_json(SESSION, 1, "REQUEST", value)
+        )
+        assert response_line is not None
+
+        self.assertEqual(provider._provider_call_ids, {})
+        wire = session.codec.decode(response_line).json_object()
+        serialized_wire = json.dumps(wire, ensure_ascii=False)
+        self.assertNotIn(private_content, serialized_wire)
+        self.assertNotIn(private_reasoning, serialized_wire)
+        with self.assertRaises(relay.WireProtocolError) as mismatch:
+            session.confirm_serial_delivery(response_line + b"x")
+        self.assertEqual(mismatch.exception.code, "DELIVERY_MISMATCH")
+        self.assertEqual(provider._provider_call_ids, {})
+
+        session.confirm_serial_delivery(response_line)
+        binding = provider._provider_call_ids[1]
+        self.assertEqual(binding.provider_content, private_content)
+        self.assertEqual(
+            binding.provider_reasoning_content, private_reasoning
+        )
+
+    def test_private_call_bindings_fail_closed_evict_and_reset(self) -> None:
+        provider = relay.DeepSeekProvider(
+            relay.JsonHttpsClient(
+                relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=FakeOpener(())
+            ),
+            api_key="sk-deepseek-test",
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
+        )
+        for corr_id in range(1, relay.MAX_MESSAGES + 2):
+            provider.commit_model_reply(
+                corr_id,
+                relay.ModelReply(
+                    "tool_use",
+                    tool="read_status",
+                    arguments={"slot": corr_id},
+                    provider_call_id=f"call_{corr_id}",
+                    provider_content_present=True,
+                    provider_content=None,
+                    provider_reasoning_content=f"private-{corr_id}",
+                ),
+            )
+
+        self.assertEqual(len(provider._provider_call_ids), relay.MAX_MESSAGES)
+        with self.assertRaises(relay.ProviderError) as evicted:
+            provider._provider_call_id(1)
+        self.assertEqual(evicted.exception.code, "UNKNOWN_TOOL_CALL")
+        latest = relay.MAX_MESSAGES + 1
+        self.assertEqual(
+            provider._provider_call_id(
+                latest,
+                tool="read_status",
+                arguments={"slot": latest},
+            ),
+            f"call_{latest}",
+        )
+        with self.assertRaises(relay.ProviderError) as mismatch:
+            provider._provider_call_id(
+                latest,
+                tool="read_status",
+                arguments={"slot": latest + 1},
+            )
+        self.assertEqual(mismatch.exception.code, "TOOL_CALL_MISMATCH")
+        self.assertNotIn(f"private-{latest}", repr(provider._provider_call_ids))
+
+        provider.reset_session()
+        self.assertEqual(provider._provider_call_ids, {})
+        with self.assertRaises(relay.ProviderError) as reset:
+            provider._provider_call_id(latest)
+        self.assertEqual(reset.exception.code, "UNKNOWN_TOOL_CALL")
+
+    def test_deepseek_auto_rejects_multiple_tool_calls_without_committing_one(self) -> None:
         multi_call_response = {
             "choices": [
                 {
@@ -1003,18 +1522,17 @@ class ProviderTranslationTests(unittest.TestCase):
             ]
         }
         original = json.dumps(multi_call_response, sort_keys=True)
-        parsed = relay.DeepSeekProvider._parse_response(multi_call_response)
-        self.assertEqual(
-            (parsed.type, parsed.tool, parsed.arguments, parsed.provider_call_id),
-            ("tool_use", "read_status", {"slot": 7}, "call_deepseek_first"),
-        )
+        with self.assertRaises(relay.ProviderError) as raised:
+            relay.DeepSeekProvider._parse_response(multi_call_response)
+        self.assertEqual(raised.exception.code, "MULTIPLE_TOOL_CALLS")
+        self.assertIs(raised.exception.retryable, True)
         self.assertEqual(json.dumps(multi_call_response, sort_keys=True), original)
 
         wrong_finish = json.loads(original)
         wrong_finish["choices"][0]["finish_reason"] = "stop"
         with self.assertRaises(relay.ProviderError) as raised:
             relay.DeepSeekProvider._parse_response(wrong_finish)
-        self.assertEqual(raised.exception.code, "INCOMPLETE_MODEL_RESPONSE")
+        self.assertEqual(raised.exception.code, "MULTIPLE_TOOL_CALLS")
 
         malformed_first = json.loads(original)
         malformed_first["choices"][0]["message"]["tool_calls"][0]["function"][
@@ -1022,23 +1540,9 @@ class ProviderTranslationTests(unittest.TestCase):
         ] = {"slot": 7}
         with self.assertRaises(relay.ProviderError) as raised:
             relay.DeepSeekProvider._parse_response(malformed_first)
-        self.assertEqual(raised.exception.code, "BAD_PROVIDER_RESPONSE")
+        self.assertEqual(raised.exception.code, "MULTIPLE_TOOL_CALLS")
 
-        opener = FakeOpener(
-            (
-                FakeResponse(multi_call_response),
-                FakeResponse(
-                    {
-                        "choices": [
-                            {
-                                "finish_reason": "stop",
-                                "message": {"role": "assistant", "content": "ready"},
-                            }
-                        ]
-                    }
-                ),
-            )
-        )
+        opener = FakeOpener((FakeResponse(multi_call_response),))
         provider = relay.DeepSeekProvider(
             relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
             api_key="sk-deepseek-test",
@@ -1053,317 +1557,194 @@ class ProviderTranslationTests(unittest.TestCase):
             ),
             max_output_tokens=256,
         )
-        self.assertEqual(provider.complete(first).provider_call_id, "call_deepseek_first")
-        second = relay.validate_guest_request(
-            request(
-                2,
-                [
-                    {"role": "user", "content": "read"},
-                    {
-                        "role": "assistant",
-                        "tool_use": {
-                            "corr_id": 1,
-                            "tool": "read_status",
-                            "arguments": {"slot": 7},
-                        },
-                    },
-                    {"role": "tool", "tool_corr_id": 1, "content": "ready"},
-                ],
-                model=relay.DEEPSEEK_DEFAULT_MODEL,
-                tools=[TOOL],
-            ),
-            max_output_tokens=256,
-        )
-        self.assertEqual(provider.complete(second).content, "ready")
-        body = json.loads(opener.requests[1][0].data)
-        self.assertEqual(
-            body["messages"][1]["tool_calls"][0]["id"], "call_deepseek_first"
-        )
-        self.assertEqual(body["messages"][2]["tool_call_id"], "call_deepseek_first")
-        self.assertNotIn("call_deepseek_discarded", json.dumps(body))
+        with self.assertRaises(relay.ProviderError) as provider_error:
+            provider.complete(first)
+        self.assertEqual(provider_error.exception.code, "MULTIPLE_TOOL_CALLS")
+        failure_receipt = getattr(provider_error.exception, "receipt", None)
+        self.assertIsNotNone(failure_receipt)
+        self.assertIs(failure_receipt.adapter_success, False)
+        self.assertEqual(failure_receipt.raw_tool_call_count, 2)
+        self.assertEqual(failure_receipt.selected_index, -1)
+        self.assertEqual(failure_receipt.selected_reply_sha256, "")
+        self.assertEqual(failure_receipt.forced_tool, None)
+        self.assertEqual(provider._provider_call_ids, {})
+        self.assertEqual(len(opener.requests), 1)
 
-    def test_deepseek_forced_tool_selects_matching_call_and_binds_its_id(self) -> None:
-        multi_call_response = {
+    def test_deepseek_nullable_content_and_reasoning_replay_exactly(self) -> None:
+        reasoning = "private \u63a8\u7406 \u2713"
+        response = {
+            "id": "chatcmpl-mixed",
             "choices": [
                 {
                     "finish_reason": "tool_calls",
                     "message": {
                         "role": "assistant",
                         "content": None,
+                        "reasoning_content": reasoning,
                         "tool_calls": [
                             {
-                                "id": "call_wrong_first",
-                                "type": "function",
-                                "function": {
-                                    "name": "publish_report",
-                                    "arguments": '{"slot":3}',
-                                },
-                            },
-                            {
-                                "id": "call_forced_invalid",
-                                "type": "function",
-                                "function": {
-                                    "name": "read_status",
-                                    "arguments": '{"slot":"seven"}',
-                                },
-                            },
-                            {
-                                "id": "call_forced_match",
+                                "id": "call_mixed",
                                 "type": "function",
                                 "function": {
                                     "name": "read_status",
                                     "arguments": '{"slot":7}',
                                 },
-                            },
+                            }
                         ],
                     },
                 }
-            ]
+            ],
         }
-        original = json.dumps(multi_call_response, sort_keys=True)
-        parsed = relay.DeepSeekProvider._parse_response(
-            multi_call_response,
-            forced_tool="read_status",
-            forced_schema=TOOL["input_schema"],
-        )
-        self.assertEqual(
-            (parsed.tool, parsed.arguments, parsed.provider_call_id),
-            ("read_status", {"slot": 7}, "call_forced_match"),
-        )
-        self.assertEqual(json.dumps(multi_call_response, sort_keys=True), original)
-
-        opener = FakeOpener(
-            (
-                FakeResponse(multi_call_response),
-                FakeResponse(
-                    {
-                        "choices": [
-                            {
-                                "finish_reason": "stop",
-                                "message": {"role": "assistant", "content": "ready"},
-                            }
-                        ]
-                    }
-                ),
-            )
-        )
         provider = relay.DeepSeekProvider(
-            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
+            relay.JsonHttpsClient(
+                relay.DEEPSEEK_DEFAULT_ENDPOINT,
+                opener=FakeOpener((FakeResponse(response),)),
+            ),
             api_key="sk-deepseek-test",
             model=relay.DEEPSEEK_DEFAULT_MODEL,
         )
-        first_value = request(
-            1,
-            [{"role": "user", "content": "read"}],
-            model=relay.DEEPSEEK_DEFAULT_MODEL,
-            tools=[OTHER_TOOL, TOOL],
-        )
-        first_value["tool_choice"] = {"tool": "read_status"}
-        first = relay.validate_guest_request(first_value, max_output_tokens=256)
-        self.assertEqual(provider.complete(first).provider_call_id, "call_forced_match")
-        first_body = json.loads(opener.requests[0][0].data)
-        self.assertEqual(
-            first_body["tool_choice"],
-            {"type": "function", "function": {"name": "read_status"}},
-        )
-        self.assertEqual(
-            [item["function"]["name"] for item in first_body["tools"]],
-            ["read_status"],
-        )
-        self.assertEqual(
-            first_body["tools"][0]["function"]["parameters"], TOOL["input_schema"]
-        )
-
-        second = relay.validate_guest_request(
+        value = relay.validate_guest_request(
             request(
-                2,
-                [
-                    {"role": "user", "content": "read"},
-                    {
-                        "role": "assistant",
-                        "tool_use": {
-                            "corr_id": 1,
-                            "tool": "read_status",
-                            "arguments": {"slot": 7},
-                        },
-                    },
-                    {"role": "tool", "tool_corr_id": 1, "content": "ready"},
-                ],
+                1,
+                [{"role": "user", "content": "inspect"}],
                 model=relay.DEEPSEEK_DEFAULT_MODEL,
                 tools=[TOOL],
             ),
             max_output_tokens=256,
         )
-        self.assertEqual(provider.complete(second).content, "ready")
-        second_body = json.loads(opener.requests[1][0].data)
-        self.assertEqual(
-            second_body["messages"][1]["tool_calls"][0]["id"],
-            "call_forced_match",
+        reply = provider.complete(value)
+        self.assertEqual((reply.tool, reply.arguments), ("read_status", {"slot": 7}))
+        self.assertNotIn("content", reply.wire_payload(1))
+        binding = provider._provider_call_ids[1]
+        self.assertIs(binding.provider_content_present, True)
+        self.assertIsNone(binding.provider_content)
+        self.assertEqual(binding.provider_reasoning_content, reasoning)
+        history = provider._messages(
+            relay.validate_guest_request(
+                request(
+                    2,
+                    [
+                        {"role": "user", "content": "inspect"},
+                        {
+                            "role": "assistant",
+                            "tool_use": {
+                                "corr_id": 1,
+                                "tool": "read_status",
+                                "arguments": {"slot": 7},
+                            },
+                        },
+                        {"role": "tool", "tool_corr_id": 1, "content": "ready"},
+                    ],
+                    model=relay.DEEPSEEK_DEFAULT_MODEL,
+                    tools=[TOOL],
+                ),
+                max_output_tokens=256,
+            )
         )
-        self.assertEqual(
-            second_body["messages"][2]["tool_call_id"], "call_forced_match"
-        )
-        self.assertNotIn("call_wrong_first", json.dumps(second_body))
-        self.assertNotIn("call_forced_invalid", json.dumps(second_body))
+        self.assertIsNone(history[1]["content"])
+        self.assertEqual(history[1]["reasoning_content"], reasoning)
 
-    def test_deepseek_exact_choice_accepts_sixteenth_attempt(self) -> None:
-        self.assertEqual(relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS, 16)
-        invalid = {
+    def test_openai_and_anthropic_reject_mixed_text_and_tool(self) -> None:
+        openai_mixed = {
             "choices": [
                 {
                     "finish_reason": "tool_calls",
                     "message": {
+                        "content": "done already",
                         "tool_calls": [
                             {
-                                "id": "call_invalid_attempt",
-                                "type": "function",
-                                "function": {
-                                    "name": "read_status",
-                                    "arguments": '{"slot":"seven"}',
-                                },
-                            }
-                        ]
-                    },
-                }
-            ]
-        }
-        valid = {
-            "choices": [
-                {
-                    "finish_reason": "tool_calls",
-                    "message": {
-                        "tool_calls": [
-                            {
-                                "id": "call_valid_retry",
+                                "id": "call_1",
                                 "type": "function",
                                 "function": {
                                     "name": "read_status",
                                     "arguments": '{"slot":7}',
                                 },
                             }
-                        ]
+                        ],
                     },
                 }
             ]
         }
-        opener = FakeOpener(
-            tuple(
-                FakeResponse(invalid)
-                for _ in range(relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS - 1)
-            )
-            + (
-                FakeResponse(valid),
-                FakeResponse(
-                    {
-                        "choices": [
-                            {
-                                "finish_reason": "stop",
-                                "message": {"role": "assistant", "content": "ready"},
-                            }
-                        ]
-                    }
-                ),
-            )
-        )
+        with self.assertRaises(relay.ProviderError) as openai_error:
+            relay.OpenAICompatibleProvider._parse_response(openai_mixed)
+        self.assertEqual(openai_error.exception.code, "MIXED_MODEL_RESPONSE")
+        self.assertIs(openai_error.exception.retryable, True)
+
+        anthropic_mixed = {
+            "id": "msg-mixed",
+            "content": [
+                {"type": "text", "text": "done already"},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "read_status",
+                    "input": {"slot": 7},
+                },
+            ],
+            "stop_reason": "tool_use",
+        }
+        with self.assertRaises(relay.ProviderError) as anthropic_error:
+            relay.AnthropicMessagesProvider._parse_response(anthropic_mixed)
+        self.assertEqual(anthropic_error.exception.code, "MIXED_MODEL_RESPONSE")
+        self.assertIs(anthropic_error.exception.retryable, True)
+
+    def test_https_provider_reply_has_per_call_body_receipt_without_secrets(self) -> None:
+        raw_response = {
+            "id": "chatcmpl-proof-1",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "ready"},
+                }
+            ],
+        }
+        opener = FakeOpener((FakeResponse(raw_response),))
+        secret = "sk-receipt-secret"
         provider = relay.DeepSeekProvider(
-            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
-            api_key="sk-deepseek-test",
-            model=relay.DEEPSEEK_DEFAULT_MODEL,
-        )
-        first_value = request(
-            1,
-            [{"role": "user", "content": "read"}],
-            model=relay.DEEPSEEK_DEFAULT_MODEL,
-            tools=[TOOL],
-        )
-        first_value["tool_choice"] = {"tool": "read_status"}
-        first = relay.validate_guest_request(first_value, max_output_tokens=256)
-
-        ticks = iter(100.0 + index / 100 for index in range(100))
-        with mock.patch.object(relay.time, "monotonic", side_effect=lambda: next(ticks)):
-            reply = provider.complete(first, deadline_monotonic=130.0)
-
-        self.assertEqual(
-            (reply.tool, reply.arguments, reply.provider_call_id),
-            ("read_status", {"slot": 7}, "call_valid_retry"),
-        )
-        self.assertEqual(
-            len(opener.requests), relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS
-        )
-        exact_body = json.loads(opener.requests[0][0].data)
-        retry_body = json.loads(opener.requests[1][0].data)
-        self.assertNotEqual(opener.requests[0][0].data, opener.requests[1][0].data)
-        self.assertTrue(
-            all(
-                item[0].data == opener.requests[1][0].data
-                for item in opener.requests[1:]
-            )
-        )
-        self.assertEqual(
-            exact_body["tool_choice"],
-            {"type": "function", "function": {"name": "read_status"}},
-        )
-        self.assertEqual(retry_body["tool_choice"], "required")
-        self.assertEqual(retry_body["messages"][0]["role"], "system")
-        repair = retry_body["messages"][0]["content"]
-        self.assertIn("exactly one call to read_status", repair)
-        self.assertIn(
-            json.dumps(
-                TOOL["input_schema"], sort_keys=True, separators=(",", ":")
+            relay.JsonHttpsClient(
+                relay.DEEPSEEK_DEFAULT_ENDPOINT,
+                opener=opener,
+                secrets_to_redact=(secret,),
             ),
-            repair,
+            api_key=secret,
+            model=relay.DEEPSEEK_DEFAULT_MODEL,
         )
-        self.assertEqual(
-            [item["function"]["name"] for item in exact_body["tools"]],
-            ["read_status"],
-        )
-        self.assertEqual(
-            exact_body["tools"][0]["function"]["parameters"], TOOL["input_schema"]
-        )
-        request_timeouts = [item[1] for item in opener.requests]
-        self.assertTrue(
-            all(
-                current > following
-                for current, following in zip(request_timeouts, request_timeouts[1:])
-            )
-        )
-
-        second = relay.validate_guest_request(
+        value = relay.validate_guest_request(
             request(
-                2,
-                [
-                    {"role": "user", "content": "read"},
-                    {
-                        "role": "assistant",
-                        "tool_use": {
-                            "corr_id": 1,
-                            "tool": "read_status",
-                            "arguments": {"slot": 7},
-                        },
-                    },
-                    {"role": "tool", "tool_corr_id": 1, "content": "ready"},
-                ],
+                1,
+                [{"role": "user", "content": "answer"}],
                 model=relay.DEEPSEEK_DEFAULT_MODEL,
-                tools=[OTHER_TOOL, TOOL],
             ),
             max_output_tokens=256,
         )
-        self.assertEqual(provider.complete(second).content, "ready")
-        history_body = json.loads(
-            opener.requests[relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS][0].data
+        reply = provider.complete(value)
+        receipt = reply.receipt
+        self.assertIsNotNone(receipt)
+        assert receipt is not None
+        request_bytes = opener.requests[0][0].data
+        response_bytes = json.dumps(raw_response).encode("utf-8")
+        self.assertEqual(receipt.transport, "https")
+        self.assertIs(receipt.adapter_success, True)
+        self.assertEqual(receipt.endpoint, relay.DEEPSEEK_DEFAULT_ENDPOINT)
+        self.assertEqual(receipt.http_status, 200)
+        self.assertEqual(receipt.provider_response_id, "chatcmpl-proof-1")
+        self.assertEqual(
+            receipt.request_sha256, hashlib.sha256(request_bytes).hexdigest()
         )
         self.assertEqual(
-            [item["function"]["name"] for item in history_body["tools"]],
-            ["publish_report", "read_status"],
+            receipt.response_sha256, hashlib.sha256(response_bytes).hexdigest()
         )
-        self.assertEqual(
-            history_body["messages"][1]["tool_calls"][0]["id"],
-            "call_valid_retry",
-        )
-        self.assertEqual(
-            history_body["messages"][2]["tool_call_id"], "call_valid_retry"
-        )
-        self.assertNotIn("call_invalid_attempt", json.dumps(history_body))
+        self.assertRegex(receipt.selected_reply_sha256, r"^[0-9a-f]{64}$")
+        self.assertEqual(receipt.attempt_count, 1)
+        self.assertEqual(receipt.tool_choice_mode, "auto")
+        self.assertEqual(receipt.raw_tool_call_count, 0)
+        self.assertIsNone(receipt.forced_tool)
+        self.assertEqual(receipt.selected_tool_sha256, "")
+        serialized = json.dumps(dataclasses.asdict(receipt), sort_keys=True)
+        self.assertNotIn(secret, serialized)
+        self.assertNotIn("answer", serialized)
+        self.assertNotIn("ready", serialized)
+
 
     def test_deepseek_forced_tool_rejects_multiple_calls_without_match(self) -> None:
         response = {
@@ -1404,86 +1785,45 @@ class ProviderTranslationTests(unittest.TestCase):
         self.assertIn("read_status", raised.exception.public_message)
         self.assertEqual(json.dumps(response, sort_keys=True), original)
 
-    def test_deepseek_forced_tool_rejects_single_wrong_call_after_parse(self) -> None:
-        wrong_response = {
+    def test_deepseek_legacy_forced_tool_selects_schema_valid_call(self) -> None:
+        response = {
             "choices": [
                 {
                     "finish_reason": "tool_calls",
                     "message": {
+                        "role": "assistant",
+                        "content": None,
                         "tool_calls": [
                             {
                                 "id": "call_wrong",
                                 "type": "function",
                                 "function": {
                                     "name": "publish_report",
-                                    "arguments": "{}",
+                                    "arguments": '{"handle":3}',
                                 },
-                            }
-                        ]
-                    },
-                }
-            ]
-        }
-        opener = FakeOpener(
-            tuple(
-                FakeResponse(wrong_response)
-                for _ in range(relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS)
-            )
-        )
-        provider = relay.DeepSeekProvider(
-            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
-            api_key="sk-deepseek-test",
-            model=relay.DEEPSEEK_DEFAULT_MODEL,
-        )
-        value = request(
-            1,
-            [{"role": "user", "content": "read"}],
-            model=relay.DEEPSEEK_DEFAULT_MODEL,
-            tools=[TOOL],
-        )
-        value["tool_choice"] = {"tool": "read_status"}
-
-        with self.assertRaises(relay.ProviderError) as raised:
-            provider.complete(
-                relay.validate_guest_request(value, max_output_tokens=256)
-            )
-
-        self.assertEqual(raised.exception.code, "TOOL_CHOICE_MISMATCH")
-        self.assertIn("read_status", raised.exception.public_message)
-        self.assertEqual(
-            len(opener.requests), relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS
-        )
-        with self.assertRaises(relay.ProviderError) as unbound:
-            provider._provider_call_id(1)
-        self.assertEqual(unbound.exception.code, "UNKNOWN_TOOL_CALL")
-
-    def test_deepseek_exact_choice_fails_after_sixteenth_schema_mismatch(self) -> None:
-        self.assertEqual(relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS, 16)
-        invalid_response = {
-            "choices": [
-                {
-                    "finish_reason": "tool_calls",
-                    "message": {
-                        "tool_calls": [
+                            },
                             {
-                                "id": "call_invalid_arguments",
+                                "id": "call_invalid",
                                 "type": "function",
                                 "function": {
                                     "name": "read_status",
                                     "arguments": '{"slot":"seven"}',
                                 },
-                            }
-                        ]
+                            },
+                            {
+                                "id": "call_valid",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_status",
+                                    "arguments": '{"slot":7}',
+                                },
+                            },
+                        ],
                     },
                 }
             ]
         }
-        opener = FakeOpener(
-            tuple(
-                FakeResponse(invalid_response)
-                for _ in range(relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS)
-            )
-        )
+        opener = FakeOpener((FakeResponse(response),))
         provider = relay.DeepSeekProvider(
             relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
             api_key="sk-deepseek-test",
@@ -1493,66 +1833,9 @@ class ProviderTranslationTests(unittest.TestCase):
             1,
             [{"role": "user", "content": "read"}],
             model=relay.DEEPSEEK_DEFAULT_MODEL,
-            tools=[TOOL],
+            tools=[OTHER_TOOL, TOOL],
         )
         value["tool_choice"] = {"tool": "read_status"}
-
-        with self.assertRaises(relay.ProviderError) as raised:
-            provider.complete(
-                relay.validate_guest_request(value, max_output_tokens=256)
-            )
-
-        self.assertEqual(raised.exception.code, "TOOL_ARGUMENT_SCHEMA_MISMATCH")
-        self.assertTrue(raised.exception.retryable)
-        self.assertIn("read_status", raised.exception.public_message)
-        self.assertEqual(
-            len(opener.requests), relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS
-        )
-        request_bodies = [item[0].data for item in opener.requests]
-        self.assertNotEqual(request_bodies[0], request_bodies[1])
-        self.assertTrue(all(body == request_bodies[1] for body in request_bodies[1:]))
-
-    def test_deepseek_publish_retry_explains_that_call_requests_approval(self) -> None:
-        invalid = {
-            "choices": [
-                {
-                    "finish_reason": "stop",
-                    "message": {"role": "assistant", "content": "await approval"},
-                }
-            ]
-        }
-        valid = {
-            "choices": [
-                {
-                    "finish_reason": "tool_calls",
-                    "message": {
-                        "tool_calls": [
-                            {
-                                "id": "call_publish_after_repair",
-                                "type": "function",
-                                "function": {
-                                    "name": "publish_report",
-                                    "arguments": '{"handle":7}',
-                                },
-                            }
-                        ]
-                    },
-                }
-            ]
-        }
-        opener = FakeOpener((FakeResponse(invalid), FakeResponse(valid)))
-        provider = relay.DeepSeekProvider(
-            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
-            api_key="sk-deepseek-test",
-            model=relay.DEEPSEEK_DEFAULT_MODEL,
-        )
-        value = request(
-            1,
-            [{"role": "user", "content": "publish the verified report"}],
-            model=relay.DEEPSEEK_DEFAULT_MODEL,
-            tools=[OTHER_TOOL],
-        )
-        value["tool_choice"] = {"tool": "publish_report"}
 
         reply = provider.complete(
             relay.validate_guest_request(value, max_output_tokens=256)
@@ -1560,14 +1843,21 @@ class ProviderTranslationTests(unittest.TestCase):
 
         self.assertEqual(
             (reply.tool, reply.arguments, reply.provider_call_id),
-            ("publish_report", {"handle": 7}, "call_publish_after_repair"),
+            ("read_status", {"slot": 7}, "call_valid"),
         )
-        retry_body = json.loads(opener.requests[1][0].data)
-        repair = retry_body["messages"][0]["content"]
-        self.assertIn("Calling publish_report itself requests approval", repair)
-        self.assertIn("do not wait for approval before making the call", repair)
+        body = json.loads(opener.requests[0][0].data)
+        self.assertEqual(body["thinking"], {"type": "disabled"})
+        self.assertNotIn("reasoning_effort", body)
+        self.assertEqual(
+            body["tool_choice"],
+            {"type": "function", "function": {"name": "read_status"}},
+        )
+        self.assertEqual(
+            [item["function"]["name"] for item in body["tools"]],
+            ["read_status"],
+        )
 
-    def test_deepseek_exact_choice_retry_never_crosses_deadline(self) -> None:
+    def test_deepseek_legacy_exact_choice_retry_is_bounded(self) -> None:
         invalid = {
             "choices": [
                 {
@@ -1587,7 +1877,32 @@ class ProviderTranslationTests(unittest.TestCase):
                 }
             ]
         }
-        opener = FakeOpener((FakeResponse(invalid), FakeResponse(invalid)))
+        valid = {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call_valid_retry",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_status",
+                                    "arguments": '{"slot":7}',
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+        opener = FakeOpener(
+            tuple(
+                FakeResponse(invalid)
+                for _ in range(relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS - 1)
+            )
+            + (FakeResponse(valid),)
+        )
         provider = relay.DeepSeekProvider(
             relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
             api_key="sk-deepseek-test",
@@ -1600,18 +1915,29 @@ class ProviderTranslationTests(unittest.TestCase):
             tools=[TOOL],
         )
         value["tool_choice"] = {"tool": "read_status"}
+        ticks = iter(100.0 + index / 100 for index in range(100))
 
         with mock.patch.object(
-            relay.time, "monotonic", side_effect=(100.0, 100.0, 102.0)
+            relay.time, "monotonic", side_effect=lambda: next(ticks)
         ):
-            with self.assertRaises(relay.ProviderError) as raised:
-                provider.complete(
-                    relay.validate_guest_request(value, max_output_tokens=256),
-                    deadline_monotonic=101.0,
-                )
+            reply = provider.complete(
+                relay.validate_guest_request(value, max_output_tokens=256),
+                deadline_monotonic=130.0,
+            )
 
-        self.assertEqual(raised.exception.code, "SESSION_TIMEOUT")
-        self.assertEqual(len(opener.requests), 1)
+        self.assertEqual(reply.provider_call_id, "call_valid_retry")
+        self.assertEqual(
+            len(opener.requests), relay.DeepSeekProvider.EXACT_CHOICE_ATTEMPTS
+        )
+        bodies = [json.loads(item[0].data) for item in opener.requests]
+        self.assertEqual(bodies[0]["thinking"], {"type": "disabled"})
+        self.assertNotIn("reasoning_effort", bodies[0])
+        self.assertEqual(bodies[1]["tool_choice"], "required")
+        self.assertTrue(
+            all(body["thinking"] == {"type": "disabled"} for body in bodies)
+        )
+        self.assertTrue(all("reasoning_effort" not in body for body in bodies))
+
 
     def test_deepseek_non_exact_response_error_is_not_retried(self) -> None:
         malformed = {
@@ -1619,6 +1945,8 @@ class ProviderTranslationTests(unittest.TestCase):
                 {
                     "finish_reason": "tool_calls",
                     "message": {
+                        "content": "",
+                        "reasoning_content": "inspect the malformed arguments",
                         "tool_calls": [
                             {
                                 "id": "call_malformed",
@@ -1655,43 +1983,6 @@ class ProviderTranslationTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "BAD_PROVIDER_RESPONSE")
         self.assertEqual(len(opener.requests), 1)
 
-    def test_deepseek_exact_choice_network_error_is_not_retried(self) -> None:
-        opener = FakeOpener(
-            (
-                urllib.error.URLError("offline"),
-                FakeResponse(
-                    {
-                        "choices": [
-                            {
-                                "finish_reason": "stop",
-                                "message": {"role": "assistant", "content": "unused"},
-                            }
-                        ]
-                    }
-                ),
-            )
-        )
-        provider = relay.DeepSeekProvider(
-            relay.JsonHttpsClient(relay.DEEPSEEK_DEFAULT_ENDPOINT, opener=opener),
-            api_key="sk-deepseek-test",
-            model=relay.DEEPSEEK_DEFAULT_MODEL,
-        )
-        value = request(
-            1,
-            [{"role": "user", "content": "read"}],
-            model=relay.DEEPSEEK_DEFAULT_MODEL,
-            tools=[TOOL],
-        )
-        value["tool_choice"] = {"tool": "read_status"}
-
-        with self.assertRaises(relay.ProviderError) as raised:
-            provider.complete(
-                relay.validate_guest_request(value, max_output_tokens=256)
-            )
-
-        self.assertEqual(raised.exception.code, "PROVIDER_UNAVAILABLE")
-        self.assertTrue(raised.exception.retryable)
-        self.assertEqual(len(opener.requests), 1)
 
     def test_deepseek_schema_check_enforces_nexus_argument_constraints(self) -> None:
         schema = {
@@ -1737,6 +2028,43 @@ class ProviderTranslationTests(unittest.TestCase):
         ):
             with self.subTest(arguments=invalid):
                 self.assertFalse(relay._json_value_matches_schema(invalid, schema))
+
+    def test_schema_one_of_is_exact_and_unknown_keywords_fail_closed(self) -> None:
+        target_schema = {
+            "oneOf": [
+                {"type": "integer", "minimum": 1},
+                {"type": "string", "enum": ["$RELAY_PID"]},
+            ]
+        }
+        self.assertTrue(relay._json_value_matches_schema(1, target_schema))
+        self.assertTrue(
+            relay._json_value_matches_schema("$RELAY_PID", target_schema)
+        )
+        for rejected in (0, -1, "1", "$OTHER_PID", None):
+            with self.subTest(target=rejected):
+                self.assertFalse(
+                    relay._json_value_matches_schema(rejected, target_schema)
+                )
+
+        ambiguous = {
+            "oneOf": [
+                {"type": "integer"},
+                {"type": "integer", "minimum": 1},
+            ]
+        }
+        self.assertFalse(relay._json_value_matches_schema(7, ambiguous))
+        self.assertTrue(relay._json_value_matches_schema(0, ambiguous))
+        self.assertFalse(
+            relay._json_value_matches_schema(
+                {"target_pid": 7},
+                {
+                    "type": "object",
+                    "properties": {"target_pid": {"const": 7}},
+                    "required": ["target_pid"],
+                    "additionalProperties": False,
+                },
+            )
+        )
 
     def test_generic_multiple_tool_calls_fail_instead_of_host_selecting_one(self) -> None:
         response = {
@@ -1822,11 +2150,27 @@ class ProviderTranslationTests(unittest.TestCase):
         payload = relay.ModelReply("final", content=boundary).wire_payload(1)
         self.assertEqual(payload["content"], boundary)
         self.assertEqual(len(boundary.encode("utf-8")), relay.MAX_FINAL_BYTES)
-        for invalid in ("", "x" * (relay.MAX_FINAL_BYTES + 1), "\ud800"):
+        for invalid in ("", "x" * (relay.MAX_FINAL_BYTES + 1), "\ud800", "bad\0tail"):
             with self.subTest(invalid=repr(invalid[:8])):
                 with self.assertRaises(relay.ProviderError) as raised:
                     relay.ModelReply("final", content=invalid).wire_payload(1)
                 self.assertEqual(raised.exception.code, "BAD_PROVIDER_RESPONSE")
+                if "\0" in invalid:
+                    self.assertTrue(raised.exception.retryable)
+
+        with self.assertRaises(relay.ProviderError) as deepseek_nul:
+            relay.DeepSeekProvider._parse_response(
+                {
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"role": "assistant", "content": "bad\0tail"},
+                        }
+                    ]
+                }
+            )
+        self.assertEqual(deepseek_nul.exception.code, "BAD_PROVIDER_RESPONSE")
+        self.assertTrue(deepseek_nul.exception.retryable)
 
         with self.assertRaises(relay.ProviderError):
             relay.OpenAICompatibleProvider._parse_response(
@@ -1839,21 +2183,29 @@ class ProviderTranslationTests(unittest.TestCase):
                     ]
                 }
             )
+        extended = relay.AnthropicMessagesProvider._parse_response(
+            {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "x" * (relay.MAX_FINAL_BYTES + 1),
+                    }
+                ],
+                "stop_reason": "end_turn",
+            }
+        )
+        self.assertEqual(len(extended.content), relay.MAX_FINAL_BYTES + 1)
         with self.assertRaises(relay.ProviderError):
-            relay.AnthropicMessagesProvider._parse_response(
-                {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "x" * (relay.MAX_FINAL_BYTES + 1),
-                        }
-                    ],
-                    "stop_reason": "end_turn",
-                }
-            )
+            extended.wire_payload(1)
+        self.assertEqual(
+            extended.wire_payload(
+                1, max_final_bytes=relay.NEXUS_MAX_FINAL_BYTES
+            )["content"],
+            extended.content,
+        )
 
     def test_invalid_replay_final_becomes_correlated_error(self) -> None:
-        for content in ("", "x" * (relay.MAX_FINAL_BYTES + 1), "\ud800"):
+        for content in ("", "x" * (relay.MAX_FINAL_BYTES + 1), "\ud800", "bad\0tail"):
             with self.subTest(content=repr(content[:8])):
                 session = relay.RelaySession(
                     relay.ReplayProvider(
@@ -1876,21 +2228,70 @@ class ProviderTranslationTests(unittest.TestCase):
                 self.assertFalse(session.closed)
 
 
-class HttpsSecurityTests(unittest.TestCase):
-    def test_http_timeout_stays_below_guest_wait_budget(self) -> None:
-        guest_wait_seconds = 115.0
-        self.assertEqual(relay.MAX_HTTP_TIMEOUT_SECONDS, 100.0)
-        self.assertLess(relay.MAX_HTTP_TIMEOUT_SECONDS, guest_wait_seconds)
-        self.assertEqual(
-            guest_wait_seconds - relay.MAX_HTTP_TIMEOUT_SECONDS,
-            15.0,
+    def test_auto_tool_calls_are_bound_to_advertised_name_and_schema(self) -> None:
+        def response(name: str, arguments: str) -> dict[str, object]:
+            return {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "content": "",
+                            "reasoning_content": "validate the selected tool",
+                            "tool_calls": [
+                                {
+                                    "id": "call_auto",
+                                    "type": "function",
+                                    "function": {
+                                        "name": name,
+                                        "arguments": arguments,
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+
+        cases = (
+            ("not_advertised", '{"slot":1}', "TOOL_NOT_ADVERTISED"),
+            ("read_status", '{"slot":"wrong"}', "TOOL_ARGUMENT_SCHEMA_MISMATCH"),
         )
+        for name, arguments, code in cases:
+            with self.subTest(code=code):
+                opener = FakeOpener((FakeResponse(response(name, arguments)),))
+                provider = relay.DeepSeekProvider(
+                    relay.JsonHttpsClient(
+                        relay.DEEPSEEK_DEFAULT_ENDPOINT,
+                        opener=opener,
+                    ),
+                    api_key="test-secret",
+                    model=relay.DEEPSEEK_DEFAULT_MODEL,
+                )
+                value = relay.validate_guest_request(
+                    request(
+                        1,
+                        [{"role": "user", "content": "inspect"}],
+                        model=relay.DEEPSEEK_DEFAULT_MODEL,
+                        tools=[TOOL],
+                    ),
+                    max_output_tokens=256,
+                )
+                with self.assertRaises(relay.ProviderError) as caught:
+                    provider.complete(value)
+                self.assertEqual(caught.exception.code, code)
+                self.assertTrue(caught.exception.retryable)
+                self.assertEqual(len(opener.requests), 1)
+
+
+class HttpsSecurityTests(unittest.TestCase):
+    def test_http_timeout_has_bounded_deepseek_v4_ceiling(self) -> None:
+        self.assertEqual(relay.MAX_HTTP_TIMEOUT_SECONDS, 600.0)
         relay.JsonHttpsClient(
             "https://api.example/v1/messages",
             timeout_seconds=relay.MAX_HTTP_TIMEOUT_SECONDS,
             opener=FakeOpener(()),
         )
-        with self.assertRaisesRegex(ValueError, "100"):
+        with self.assertRaisesRegex(ValueError, "600"):
             relay.JsonHttpsClient(
                 "https://api.example/v1/messages",
                 timeout_seconds=relay.MAX_HTTP_TIMEOUT_SECONDS + 0.001,
@@ -1930,7 +2331,47 @@ class HttpsSecurityTests(unittest.TestCase):
         self.assertNotIn(secret, str(raised.exception))
         self.assertIn("[REDACTED]", str(raised.exception))
 
+    def test_http_protocol_exceptions_are_fixed_retryable_errors(self) -> None:
+        secret = "response-body-secret"
+        failures = (
+            http.client.IncompleteRead(secret.encode("utf-8"), 64),
+            http.client.BadStatusLine(f"bad status {secret}"),
+            http.client.LineTooLong(f"oversized header {secret}"),
+        )
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                opener = FakeOpener((failure,))
+                client = relay.JsonHttpsClient(
+                    "https://api.example/v1/chat/completions",
+                    opener=opener,
+                )
+                with self.assertRaises(relay.ProviderError) as raised:
+                    client.post({"model": "m"}, {})
+                self.assertEqual(raised.exception.code, "PROVIDER_UNAVAILABLE")
+                self.assertEqual(
+                    raised.exception.public_message,
+                    "provider HTTPS protocol exchange failed",
+                )
+                self.assertIs(raised.exception.retryable, True)
+                self.assertNotIn(secret, str(raised.exception))
+                self.assertEqual(len(opener.requests), 1)
+
     def test_http_response_is_size_and_json_bounded(self) -> None:
+        self.assertEqual(
+            relay.DEFAULT_MAX_HTTP_RESPONSE_BYTES, 1024 * 1024
+        )
+        self.assertEqual(relay.MAX_HTTP_RESPONSE_BYTES, 8 * 1024 * 1024)
+        relay.JsonHttpsClient(
+            "https://api.example/v1/messages",
+            max_response_bytes=relay.MAX_HTTP_RESPONSE_BYTES,
+            opener=FakeOpener(()),
+        )
+        with self.assertRaisesRegex(ValueError, "out of range"):
+            relay.JsonHttpsClient(
+                "https://api.example/v1/messages",
+                max_response_bytes=relay.MAX_HTTP_RESPONSE_BYTES + 1,
+                opener=FakeOpener(()),
+            )
         too_large = FakeResponse(
             b"{}", headers={"Content-Length": str(relay.DEFAULT_MAX_HTTP_RESPONSE_BYTES + 1)}
         )
@@ -2562,6 +3003,276 @@ class QemuSerialTests(unittest.TestCase):
 
 
 class ReplayFileTests(unittest.TestCase):
+    def test_replay_reply_obeys_round_schema_and_failure_does_not_consume(self) -> None:
+        provider = relay.ReplayProvider(
+            (
+                relay.ReplayRecord(
+                    {
+                        "type": "tool_use",
+                        "tool": "read_status",
+                        "arguments": {"slot": "$RELAY_PID"},
+                    }
+                ),
+            )
+        )
+
+        def tool_request(schema: dict[str, object]) -> dict[str, object]:
+            return relay.validate_guest_request(
+                request(
+                    1,
+                    [{"role": "user", "content": "inspect"}],
+                    tools=[
+                        {
+                            "name": "read_status",
+                            "description": "read",
+                            "input_schema": {
+                                "type": "object",
+                                "properties": {"slot": schema},
+                                "required": ["slot"],
+                                "additionalProperties": False,
+                            },
+                        }
+                    ],
+                ),
+                max_output_tokens=256,
+            )
+
+        with self.assertRaises(relay.ProviderError) as mismatch:
+            provider.complete(tool_request({"type": "integer", "minimum": 1}))
+        self.assertEqual(
+            mismatch.exception.code, "TOOL_ARGUMENT_SCHEMA_MISMATCH"
+        )
+        reply = provider.complete(
+            tool_request(
+                {"type": "string", "enum": ["$RELAY_PID"]}
+            )
+        )
+        self.assertEqual(reply.arguments, {"slot": "$RELAY_PID"})
+        provider.assert_exhausted()
+
+    def test_matching_retryable_error_consumes_exactly_one_record(self) -> None:
+        failed_request = relay.validate_guest_request(
+            request(1, [{"role": "user", "content": "inspect"}]),
+            max_output_tokens=256,
+        )
+        retry_request = relay.validate_guest_request(
+            request(
+                2,
+                [
+                    {"role": "user", "content": "inspect"},
+                    {
+                        "role": "user",
+                        "content": "retry after BAD_PROVIDER_RESPONSE",
+                    },
+                ],
+            ),
+            max_output_tokens=256,
+        )
+        failed_digest = hashlib.sha256(
+            relay.canonical_json_bytes(failed_request)
+        ).hexdigest()
+        retry_digest = hashlib.sha256(
+            relay.canonical_json_bytes(retry_request)
+        ).hexdigest()
+        provider = relay.ReplayProvider(
+            (
+                relay.ReplayRecord(
+                    {
+                        "type": "error",
+                        "code": "BAD_PROVIDER_RESPONSE",
+                        "message": "replayed provider error",
+                        "retryable": True,
+                    },
+                    failed_digest,
+                ),
+                relay.ReplayRecord(
+                    {"type": "final", "content": "recovered"}, retry_digest
+                ),
+            )
+        )
+
+        with self.assertRaises(relay.ProviderError) as mismatch:
+            provider.complete(retry_request)
+        self.assertEqual(mismatch.exception.code, "REPLAY_MISMATCH")
+        with self.assertRaises(relay.ProviderError) as replayed:
+            provider.complete(failed_request)
+        self.assertEqual(replayed.exception.code, "BAD_PROVIDER_RESPONSE")
+        self.assertEqual(
+            replayed.exception.public_message, "replayed provider error"
+        )
+        self.assertIs(replayed.exception.retryable, True)
+        with self.assertRaises(relay.ProviderError) as remaining:
+            provider.assert_exhausted()
+        self.assertEqual(remaining.exception.code, "REPLAY_NOT_EXHAUSTED")
+        self.assertEqual(provider.complete(retry_request).content, "recovered")
+        provider.assert_exhausted()
+        with self.assertRaises(relay.ProviderError) as exhausted:
+            provider.complete(retry_request)
+        self.assertEqual(exhausted.exception.code, "REPLAY_EXHAUSTED")
+
+    def test_canonical_replay_error_supports_fatal_utf8_boundary(self) -> None:
+        boundary = "\u754c" * (relay.MAX_REPLAY_ERROR_MESSAGE_BYTES // 3)
+        self.assertEqual(
+            len(boundary.encode("utf-8")), relay.MAX_REPLAY_ERROR_MESSAGE_BYTES
+        )
+        provider = relay.ReplayProvider(
+            (
+                relay.ReplayRecord(
+                    {
+                        "type": "error",
+                        "code": "PROVIDER_FAILURE",
+                        "message": boundary,
+                        "retryable": False,
+                    }
+                ),
+            )
+        )
+        value = relay.validate_guest_request(
+            request(1, [{"role": "user", "content": "inspect"}]),
+            max_output_tokens=256,
+        )
+        with self.assertRaises(relay.ProviderError) as replayed:
+            provider.complete(value)
+        self.assertEqual(replayed.exception.code, "PROVIDER_FAILURE")
+        self.assertEqual(replayed.exception.public_message, boundary)
+        self.assertIs(replayed.exception.retryable, False)
+        provider.assert_exhausted()
+
+    def test_replay_error_schema_rejects_unsafe_values_without_consuming(self) -> None:
+        canonical: dict[str, object] = {
+            "type": "error",
+            "code": "PROVIDER_FAILURE",
+            "message": "replayed provider error",
+            "retryable": True,
+        }
+        cases: list[tuple[str, dict[str, object]]] = [
+            ("missing_type", {key: value for key, value in canonical.items() if key != "type"}),
+            ("missing_code", {key: value for key, value in canonical.items() if key != "code"}),
+            (
+                "missing_message",
+                {key: value for key, value in canonical.items() if key != "message"},
+            ),
+            (
+                "missing_retryable",
+                {key: value for key, value in canonical.items() if key != "retryable"},
+            ),
+            ("extra", canonical | {"detail": "secret"}),
+            (
+                "public_message_alias",
+                {
+                    "type": "error",
+                    "code": "PROVIDER_FAILURE",
+                    "public_message": "replayed provider error",
+                    "retryable": True,
+                },
+            ),
+            (
+                "both_message_names",
+                canonical | {"public_message": "replayed provider error"},
+            ),
+            ("wrong_type", canonical | {"type": "provider_error"}),
+            ("empty_code", canonical | {"code": ""}),
+            ("lowercase_code", canonical | {"code": "provider_failure"}),
+            ("punctuated_code", canonical | {"code": "PROVIDER-FAILURE"}),
+            ("long_code", canonical | {"code": "P" * 65}),
+            ("non_string_code", canonical | {"code": 7}),
+            ("empty_message", canonical | {"message": ""}),
+            (
+                "oversized_message",
+                canonical
+                | {
+                    "message": "\u754c"
+                    * (relay.MAX_REPLAY_ERROR_MESSAGE_BYTES // 3 + 1)
+                },
+            ),
+            ("non_string_message", canonical | {"message": 7}),
+            ("surrogate_message", canonical | {"message": "bad\ud800text"}),
+            ("integer_retryable", canonical | {"retryable": 1}),
+            ("string_retryable", canonical | {"retryable": "true"}),
+            ("missing_retryability", canonical | {"retryable": None}),
+        ]
+        for codepoint in (*range(0x20), *range(0x7F, 0xA0)):
+            cases.append(
+                (
+                    f"control_{codepoint:02x}",
+                    canonical | {"message": f"bad{chr(codepoint)}text"},
+                )
+            )
+        value = relay.validate_guest_request(
+            request(1, [{"role": "user", "content": "inspect"}]),
+            max_output_tokens=256,
+        )
+        for label, response in cases:
+            with self.subTest(case=label):
+                provider = relay.ReplayProvider((relay.ReplayRecord(response),))
+                with self.assertRaises(relay.ProviderError) as malformed:
+                    provider.complete(value)
+                self.assertEqual(malformed.exception.code, "BAD_REPLAY")
+                with self.assertRaises(relay.ProviderError) as remaining:
+                    provider.assert_exhausted()
+                self.assertEqual(remaining.exception.code, "REPLAY_NOT_EXHAUSTED")
+
+    def test_jsonl_replay_error_schema_is_strict_at_load(self) -> None:
+        normalized = relay.validate_guest_request(
+            request(1, [{"role": "user", "content": "inspect"}]),
+            max_output_tokens=256,
+        )
+        digest = hashlib.sha256(relay.canonical_json_bytes(normalized)).hexdigest()
+        canonical: dict[str, object] = {
+            "type": "error",
+            "code": "BAD_PROVIDER_RESPONSE",
+            "message": "replayed provider error",
+            "retryable": True,
+        }
+        invalid_responses = (
+            canonical | {"detail": "must not be accepted"},
+            {
+                "type": "error",
+                "code": "BAD_PROVIDER_RESPONSE",
+                "public_message": "replayed provider error",
+                "retryable": True,
+            },
+            canonical | {"message": "unsafe\nmessage"},
+            canonical | {"retryable": 1},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "error-replay.jsonl"
+            path.write_text(
+                json.dumps(
+                    {"request_sha256": digest, "response": canonical},
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            provider = relay.ReplayProvider.from_jsonl(
+                path, require_request_digests=True
+            )
+            with self.assertRaises(relay.ProviderError) as replayed:
+                provider.complete(normalized)
+            self.assertEqual(replayed.exception.code, "BAD_PROVIDER_RESPONSE")
+            self.assertIs(replayed.exception.retryable, True)
+            provider.assert_exhausted()
+
+            for index, response in enumerate(invalid_responses):
+                with self.subTest(case=index):
+                    path.write_text(
+                        json.dumps({"response": response}, ensure_ascii=False) + "\n",
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(
+                        ValueError, "invalid replay response on line 1"
+                    ):
+                        relay.ReplayProvider.from_jsonl(path)
+
+            path.write_text(
+                '{"response":{"type":"error","code":"PROVIDER_FAILURE",'
+                '"message":"first","message":"second","retryable":true}}\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "invalid replay JSON on line 1"):
+                relay.ReplayProvider.from_jsonl(path)
+
     def test_jsonl_replay_is_deterministic(self) -> None:
         normalized = relay.validate_guest_request(
             request(1, [{"role": "user", "content": "hello"}]),

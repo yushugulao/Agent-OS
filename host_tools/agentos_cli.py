@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import socket
 import sys
@@ -301,25 +302,26 @@ def _capture_approval_binding(
 def _send_command(
     connection: ConsoleConnection, line: str, *, approval_pending: bool = False
 ) -> str:
-    stripped = line.strip()
-    if approval_pending and stripped.lower() in ("", "n", "no"):
+    approval_text = line.strip()
+    if approval_pending and approval_text.lower() in ("", "n", "no"):
         _send_approval(connection, "deny")
         return "approval"
-    if approval_pending and stripped.lower() in ("y", "yes"):
+    if approval_pending and approval_text.lower() in ("y", "yes"):
         _send_approval(connection, "once")
         return "approval"
-    if approval_pending and stripped.lower() in ("a", "always"):
+    if approval_pending and approval_text.lower() in ("a", "always"):
         _send_approval(connection, "session")
         return "approval"
-    if not stripped:
+    if line == "":
         return "idle"
-    if approval_pending and stripped not in ("/approve", "/approve session", "/deny", "/quit"):
+    command = line.lower()
+    if approval_pending and command not in (
+        "/approve",
+        "/approve session",
+        "/deny",
+        "/quit",
+    ):
         raise local.LocalProtocolError("answer approval with y, n, a, /approve or /deny")
-    if not stripped.startswith("/"):
-        connection.send({"type": "user_message", "content": stripped})
-        return "turn"
-    parts = stripped.split()
-    command = parts[0].lower()
     if command in (
         "/tools",
         "/context",
@@ -329,27 +331,21 @@ def _send_command(
         "/tasks",
         "/artifacts",
     ):
-        if len(parts) != 1:
-            raise local.LocalProtocolError(f"{command} takes no arguments")
         connection.send({"type": "command", "command": command[1:]})
         return "control"
-    if command == "/approve":
-        if len(parts) > 2 or (len(parts) == 2 and parts[1] != "session"):
-            raise local.LocalProtocolError("usage: /approve [session]")
-        _send_approval(connection, "session" if len(parts) == 2 else "once")
+    if command in ("/approve", "/approve session"):
+        _send_approval(connection, "session" if command.endswith(" session") else "once")
         return "approval"
     if command == "/deny":
-        if len(parts) != 1:
-            raise local.LocalProtocolError("/deny takes no arguments")
         _send_approval(connection, "deny")
         return "approval"
     if command == "/quit":
         connection.send({"type": "session_close"})
         return "quit"
-    raise local.LocalProtocolError(
-        "unknown command; use /tools /context /status /agents /tasks /artifacts "
-        "/approve /deny /reset /quit"
-    )
+    # Only an exact built-in command is control syntax.  Everything else is
+    # user content, including leading/trailing spaces and goals beginning '/'.
+    connection.send({"type": "user_message", "content": line})
+    return "turn"
 
 
 def _wait_gate(
@@ -398,7 +394,13 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Attach to the active AgentOS console.")
     parser.add_argument("--attach", choices=("latest",), default="latest")
     parser.add_argument("--state-file", type=Path)
-    parser.add_argument("--script", type=Path)
+    input_group = parser.add_mutually_exclusive_group()
+    input_group.add_argument("--script", type=Path)
+    input_group.add_argument(
+        "--task-file",
+        type=Path,
+        help="Submit the complete UTF-8 file as one exact task.",
+    )
     parser.add_argument("--json-events", action="store_true")
     parser.add_argument("--event-timeout", type=float, default=0.0)
     parser.add_argument(
@@ -427,7 +429,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         connection = ConsoleConnection(local.connect_from_state(state, role="controller"))
         connection.guest_profile = state_profile
-        source, scripted = _lines(args)
+        task_file_content: str | None = None
+        if args.task_file is not None:
+            with args.task_file.open("r", encoding="utf-8", newline="") as task_file:
+                task_file_content = task_file.read()
+            source, scripted = io.StringIO(""), True
+        else:
+            source, scripted = _lines(args)
         timeout = args.event_timeout or None
         first = connection.next(5.0)
         render_event(first, sys.stdout, json_events=args.json_events)
@@ -459,7 +467,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         while True:
             try:
                 if scripted:
-                    raw = source.readline()
+                    exact_task = task_file_content is not None
+                    if exact_task:
+                        line = task_file_content
+                        task_file_content = None
+                        raw = "<task-file>"
+                    else:
+                        raw = source.readline()
                     if not raw:
                         if approval_pending:
                             action = _send_command(
@@ -476,11 +490,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                             if approval_pending:
                                 continue
                         break
-                    line = raw.rstrip("\r\n")
-                    if (not line and not approval_pending) or line.lstrip().startswith("#"):
-                        continue
+                    if not exact_task:
+                        line = raw.rstrip("\r\n")
+                        if not line and not approval_pending:
+                            continue
                     if not args.json_events:
-                        print(f"agentos> {line}", flush=True)
+                        shown = "<task-file>" if exact_task else line
+                        print(f"agentos> {shown}", flush=True)
                 else:
                     prompt = "Approve? [y/N/a] " if approval_pending else "agentos> "
                     line = input(prompt)
@@ -500,9 +516,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     approval_pending = gate == "approval_request"
                 continue
             try:
-                action = _send_command(
-                    connection, line, approval_pending=approval_pending
-                )
+                if scripted and exact_task:
+                    connection.send({"type": "user_message", "content": line})
+                    action = "turn"
+                else:
+                    action = _send_command(
+                        connection, line, approval_pending=approval_pending
+                    )
                 gate = _wait_gate(
                     connection,
                     action,

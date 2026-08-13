@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+"""Cross-source and fail-closed tests for the Nexus autonomy contract."""
+
+from __future__ import annotations
+
+import ast
+import copy
+import hashlib
+import json
+import re
+import sys
+import unittest
+from pathlib import Path
+
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
+import agentos_nexus_contract as contract
+
+
+ROOT = Path(__file__).resolve().parents[1]
+GUEST_SOURCE = ROOT / "user" / "src" / "agentnexus_ucore.c"
+PROTOCOL_HEADER = ROOT / "user" / "include" / "agent_nexus_protocol.h"
+
+
+def _c_string(source: str, name: str) -> str:
+    match = re.search(
+        rf"static const char\s+{re.escape(name)}\[\]\s*=\s*"
+        rf"(?P<body>(?:\s*\"(?:\\.|[^\"\\])*\")+)\s*;",
+        source,
+        re.DOTALL,
+    )
+    if match is None:
+        raise AssertionError(f"missing C string {name}")
+    tokens = re.findall(r'"(?:\\.|[^"\\])*"', match.group("body"))
+    return "".join(ast.literal_eval(token) for token in tokens)
+
+
+def _header_macro(source: str, name: str) -> str:
+    match = re.search(
+        rf"^#define\s+{re.escape(name)}(?:\s+\\\n\s*)?\s+([^\n]+)$",
+        source,
+        re.MULTILINE,
+    )
+    if match is None:
+        raise AssertionError(f"missing {name}")
+    value = match.group(1).strip()
+    if value.endswith("U") and value[:-1].isdigit():
+        return value[:-1]
+    return ast.literal_eval(value)
+
+
+def _request(*, history: bool = False) -> dict[str, object]:
+    messages: list[dict[str, object]] = [
+        {"role": "user", "content": "an arbitrary current goal"},
+        {
+            "role": "user",
+            "content": contract.CONTROL_CONTEXT_PREFIX + "bounded observations",
+        },
+    ]
+    if history:
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "tool_use": {
+                        "corr_id": 7,
+                        "tool": "source_search",
+                        "arguments": {"query": "symbol"},
+                    },
+                },
+                {
+                    "role": "tool",
+                    "tool_corr_id": 7,
+                    "content": '{"status":0}',
+                    "is_error": False,
+                },
+            ]
+        )
+    return {
+        "corr_id": 9,
+        "contract_version": contract.CONTRACT_VERSION,
+        "policy_sha256": contract.SYSTEM_POLICY_SHA256,
+        "tool_catalog_sha256": contract.TOOL_CATALOG_SHA256,
+        "max_tokens": 512,
+        "system": contract.SYSTEM_PROMPT,
+        "messages": messages,
+        "tools": copy.deepcopy(list(contract.TOOLS)),
+    }
+
+
+class CrossSourceTests(unittest.TestCase):
+    def test_guest_literals_and_protocol_macros_match_host_anchor(self) -> None:
+        guest = GUEST_SOURCE.read_text(encoding="utf-8")
+        header = PROTOCOL_HEADER.read_text(encoding="utf-8")
+        guest_system = _c_string(guest, "live_system_prompt")
+        guest_tools_json = _c_string(guest, "live_tools_json")
+
+        self.assertEqual(guest_system, contract.SYSTEM_PROMPT)
+        self.assertEqual(json.loads(guest_tools_json), list(contract.TOOLS))
+        self.assertEqual(
+            hashlib.sha256(guest_system.encode()).hexdigest(),
+            contract.SYSTEM_POLICY_SHA256,
+        )
+        self.assertEqual(
+            hashlib.sha256(guest_tools_json.encode()).hexdigest(),
+            contract.TOOL_CATALOG_SHA256,
+        )
+        self.assertEqual(
+            int(_header_macro(header, "AGENT_NEXUS_AUTONOMY_CONTRACT_VERSION")),
+            contract.CONTRACT_VERSION,
+        )
+        self.assertEqual(
+            _header_macro(header, "AGENT_NEXUS_SYSTEM_POLICY_SHA256"),
+            contract.SYSTEM_POLICY_SHA256,
+        )
+        self.assertEqual(
+            _header_macro(header, "AGENT_NEXUS_TOOL_CATALOG_SHA256"),
+            contract.TOOL_CATALOG_SHA256,
+        )
+
+
+class ContractValidationTests(unittest.TestCase):
+    def assert_rejected(self, request: dict[str, object]) -> None:
+        with self.assertRaises(contract.NexusContractError):
+            contract.validate_request_contract(request)
+
+    def test_exact_five_tool_request_and_history_are_accepted(self) -> None:
+        request = _request(history=True)
+        contract.validate_request_contract(request)
+        self.assertEqual(
+            [tool["name"] for tool in request["tools"]],
+            [
+                "source_search",
+                "source_read",
+                "inspect_runtime",
+                "draft_report",
+                "read_artifact",
+            ],
+        )
+
+    def test_system_one_character_mutation_is_rejected(self) -> None:
+        request = _request()
+        request["system"] = str(request["system"])[:-1] + "?"
+        self.assert_rejected(request)
+
+    def test_tool_catalog_mutations_are_rejected(self) -> None:
+        mutations = []
+        request = _request()
+        request["tools"][0]["name"] = "source_seek"
+        mutations.append(request)
+        request = _request()
+        request["tools"][1]["description"] += "?"
+        mutations.append(request)
+        request = _request()
+        request["tools"][2]["input_schema"]["properties"]["operation"]["enum"].reverse()
+        mutations.append(request)
+        request = _request()
+        request["tools"][0], request["tools"][1] = (
+            request["tools"][1],
+            request["tools"][0],
+        )
+        mutations.append(request)
+        request = _request()
+        request["tools"].append(copy.deepcopy(request["tools"][0]))
+        mutations.append(request)
+        request = _request()
+        del request["tools"][-1]
+        mutations.append(request)
+        request = _request()
+        request["tools"][4]["name"] = request["tools"][0]["name"]
+        mutations.append(request)
+        for mutation in mutations:
+            with self.subTest(tools=mutation["tools"]):
+                self.assert_rejected(mutation)
+
+    def test_forced_choice_temperature_and_stop_are_rejected(self) -> None:
+        for key, value in (
+            ("tool_choice", {"tool": "source_search"}),
+            ("temperature", 0),
+            ("stop", "done"),
+        ):
+            request = _request()
+            request[key] = value
+            with self.subTest(field=key):
+                self.assert_rejected(request)
+
+    def test_contract_proof_mutations_and_missing_fields_are_rejected(self) -> None:
+        for key, value in (
+            ("contract_version", contract.CONTRACT_VERSION + 1),
+            ("policy_sha256", "0" * 64),
+            ("tool_catalog_sha256", "f" * 64),
+        ):
+            request = _request()
+            request[key] = value
+            self.assert_rejected(request)
+            del request[key]
+            self.assert_rejected(request)
+
+    def test_non_contract_message_shapes_are_rejected(self) -> None:
+        invalid_messages = (
+            [
+                {"role": "user", "content": "goal"},
+                {"role": "system", "content": "extra"},
+                {"role": "user", "content": contract.CONTROL_CONTEXT_PREFIX + "x"},
+            ],
+            [
+                {"role": "user", "content": "goal"},
+                {"role": "user", "content": contract.CONTROL_CONTEXT_PREFIX + "x"},
+                {"role": "assistant", "content": "plain answer"},
+            ],
+            [
+                {"role": "user", "content": "earlier turn summary"},
+                {"role": "user", "content": "current goal"},
+                {"role": "user", "content": contract.CONTROL_CONTEXT_PREFIX + "x"},
+            ],
+            [
+                {"role": "user", "content": "goal"},
+                {"role": "user", "content": "unlabelled context"},
+            ],
+        )
+        for messages in invalid_messages:
+            request = _request()
+            request["messages"] = messages
+            with self.subTest(messages=messages):
+                self.assert_rejected(request)
+
+    def test_invalid_history_paths_are_rejected(self) -> None:
+        request = _request(history=True)
+        request["messages"].pop()
+        self.assert_rejected(request)
+
+        request = _request(history=True)
+        request["messages"][3]["tool_corr_id"] = 8
+        self.assert_rejected(request)
+
+        request = _request(history=True)
+        request["messages"].extend(copy.deepcopy(request["messages"][2:]))
+        self.assert_rejected(request)
+
+        request = _request(history=True)
+        request["messages"][2]["tool_use"]["tool"] = "unknown_tool"
+        self.assert_rejected(request)
+
+    def test_model_type_and_unknown_request_field_are_rejected(self) -> None:
+        request = _request()
+        request["model"] = 17
+        self.assert_rejected(request)
+        request = _request()
+        request["summary"] = "previous turn"
+        self.assert_rejected(request)
+
+    def test_strip_removes_only_proofs_without_mutating_input(self) -> None:
+        request = _request(history=True)
+        original = copy.deepcopy(request)
+        stripped = contract.strip_internal_contract_fields(request)
+        self.assertEqual(request, original)
+        self.assertEqual(
+            set(request).difference(stripped), contract.INTERNAL_CONTRACT_FIELDS
+        )
+        self.assertEqual(
+            {key: value for key, value in request.items() if key in stripped},
+            stripped,
+        )
+        self.assertIsNot(stripped["messages"], request["messages"])
+        bad = _request()
+        bad["system"] += "!"
+        with self.assertRaises(contract.NexusContractError):
+            contract.strip_internal_contract_fields(bad)
+
+
+if __name__ == "__main__":
+    unittest.main()

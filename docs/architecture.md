@@ -159,7 +159,7 @@ Guest 提交请求
 
 内核 ABI 只传递结构化状态和系统操作，具体 Provider 协议由 Host 处理。`agentlive_ucore` 通过串口帧发送模型请求、接收工具调用，并把 terminal state 写入 Context。[`host_tools/agentos_relayd.py`](../host_tools/agentos_relayd.py) 负责 TLS、Provider JSON 和本地运行目录。更换模型 Provider 时无需修改内核 ABI。
 
-`agentnexus_ucore` 在一个工作流中创建协调、系统观察、资料检索和分析四个 Agent。它们拥有独立 PID、Agent identity 和 Context，通过内核 `MESSAGE`、类型化任务和工作流 artifact 协作。协调 Agent 读取各角色的 artifact 后再安排下一阶段；artifact 的正式路径由 VFS 一次接入，不会暴露只写了一部分的中间文件。Guest 主程序见 [`user/src/agentnexus_ucore.c`](../user/src/agentnexus_ucore.c)，运行流程与命令见 [Workflow Runtime](modules/workflow-runtime.md)和[运行指南](usage.md)。
+`agentnexus_ucore` 以任意非空用户输入建立每轮 root Task。模型自行决定是否使用工具，以及从 `source_search`、`source_read`、`inspect_runtime`、`draft_report` 和 `read_artifact` 中选择哪个工具、调用顺序和次数。需要 specialist 执行的工具才会通过内核 `MESSAGE` 和 `N1` 协议建立子 Task；Coordinator 重放计算 worker 结果并核对 digest 后才物化 brokered artifact。Host Task ledger 核对 root/child DAG、内核身份、状态迁移和 artifact/evidence 绑定；Host source attestation 还会将 `source_read` 的 citation 与 QEMU 启动前已验证的 `build_source_snapshot` 对照。`draft_report` 与 `read_artifact` 只进行本轮模型文本的保存和完整性回读，不执行外部发布。Guest 主程序见 [`user/src/agentnexus_ucore.c`](../user/src/agentnexus_ucore.c)，运行流程与命令见 [Workflow Runtime](modules/workflow-runtime.md)和[运行指南](usage.md)。
 
 ## 八、源码位置与检查方法
 

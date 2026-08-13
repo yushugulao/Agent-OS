@@ -13,6 +13,7 @@ import argparse
 import base64
 import hashlib
 import hmac
+import http.client
 import ipaddress
 import json
 import os
@@ -28,7 +29,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, Callable, Mapping, Protocol, Sequence
 
@@ -64,16 +65,21 @@ WIRE_SESSION_RE = re.compile(r"[0-9a-f]{32}\Z")
 WIRE_DIGEST_RE = re.compile(r"[0-9a-f]{64}\Z")
 WIRE_BASE64_RE = re.compile(rb"[A-Za-z0-9_-]*\Z")
 TOOL_NAME_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}\Z")
+REPLAY_ERROR_CODE_RE = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
 
-# This is also the Guest's compile-time protocol limit.  The 4 KiB decoded
-# budget accommodates rich tool schemas plus the bounded six-turn history;
-# the current SBI console input path remains polled, so frames stay compact.
+# AgentLive retains its original 4 KiB contract.  Nexus explicitly negotiates
+# a larger bounded frame; callers must opt in rather than silently widening a
+# legacy Guest's parser or stack exposure.
 PROTOCOL_MAX_PAYLOAD_BYTES = 4096
-PROTOCOL_MAX_WIRE_LINE_BYTES = 6144
+PROTOCOL_MAX_PAYLOAD_CEILING = 16384
+PROTOCOL_MAX_WIRE_LINE_BYTES = 24576
 # Matches the compact Guest parser's fixed goal buffer.  The limit is in UTF-8
 # bytes, not characters, and the relay never truncates it.
 MAX_GOAL_BYTES = 240
 MAX_FINAL_BYTES = 512
+NEXUS_MAX_GOAL_BYTES = 2048
+NEXUS_MAX_FINAL_BYTES = 2048
+PROVIDER_MAX_FINAL_BYTES = NEXUS_MAX_FINAL_BYTES
 MAX_APPROVED_TOOLS = 16
 MAX_REQUIRED_GUEST_MARKERS = 16
 MAX_GUEST_MARKER_BYTES = 256
@@ -81,19 +87,25 @@ GUEST_RELAY_READY_LINE = b"agentlive_ucore: relay_ready=1 live=1"
 DEFAULT_MAX_ROUNDS = 8
 DEFAULT_MAX_OUTPUT_TOKENS = 1024
 MAX_OUTPUT_TOKENS = 2048
+NEXUS_MAX_OUTPUT_TOKENS = 114514
 DEFAULT_HTTP_TIMEOUT_SECONDS = 45.0
-MAX_HTTP_TIMEOUT_SECONDS = 100.0
+MAX_HTTP_TIMEOUT_SECONDS = 600.0
 DEFAULT_SESSION_TIMEOUT_SECONDS = 600.0
 DEFAULT_BOOT_TIMEOUT_SECONDS = 120.0
 DEFAULT_IDLE_TIMEOUT_SECONDS = 120.0
 DEFAULT_MAX_HTTP_RESPONSE_BYTES = 1024 * 1024
+MAX_HTTP_RESPONSE_BYTES = 8 * 1024 * 1024
+MAX_PROVIDER_PRIVATE_TEXT_BYTES = MAX_HTTP_RESPONSE_BYTES
 MAX_API_KEY_BYTES = 4096
+MAX_REPLAY_ERROR_MESSAGE_BYTES = 240
 DEEPSEEK_DEFAULT_ENDPOINT = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
 MAX_MESSAGES = 64
 MAX_TOOLS = 32
 MAX_TOOL_ARGUMENTS = 3
 MAX_NEXUS_TOOL_ARGUMENTS = 5
+MAX_TOOL_ARGUMENT_STRING_BYTES = 512
+MAX_NEXUS_TOOL_ARGUMENT_STRING_BYTES = 3072
 MAX_CORRELATION_ID = (1 << 63) - 1
 MAX_SEQUENCE = (1 << 63) - 1
 
@@ -114,6 +126,34 @@ class WireProtocolError(RelayError):
 
 class ProviderError(RelayError):
     pass
+
+
+@dataclass(frozen=True)
+class HttpReceipt:
+    endpoint: str
+    http_status: int
+    request_sha256: str
+    response_sha256: str
+    provider_response_id: str = ""
+
+
+@dataclass(frozen=True)
+class ProviderReceipt:
+    adapter_success: bool
+    transport: str
+    endpoint: str
+    http_status: int
+    request_sha256: str
+    response_sha256: str
+    selected_reply_sha256: str
+    attempt_count: int
+    tool_choice_mode: str
+    raw_tool_call_count: int
+    selected_index: int = -1
+    adaptation: str = "none"
+    provider_response_id: str = ""
+    forced_tool: str | None = None
+    selected_tool_sha256: str = ""
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -174,9 +214,10 @@ class FrameCodec:
         wire_prefix: bytes = WIRE_PREFIX,
         wire_kinds: Sequence[str] = tuple(WIRE_KINDS),
     ) -> None:
-        if not 1 <= max_payload_bytes <= PROTOCOL_MAX_PAYLOAD_BYTES:
+        if not 1 <= max_payload_bytes <= PROTOCOL_MAX_PAYLOAD_CEILING:
             raise ValueError(
-                f"max_payload_bytes must be in 1..{PROTOCOL_MAX_PAYLOAD_BYTES}"
+                "max_payload_bytes must be in "
+                f"1..{PROTOCOL_MAX_PAYLOAD_CEILING}"
             )
         if (
             not isinstance(wire_prefix, bytes)
@@ -325,6 +366,7 @@ def _validate_tool_arguments(
     label: str,
     *,
     max_arguments: int = MAX_TOOL_ARGUMENTS,
+    max_string_bytes: int = MAX_TOOL_ARGUMENT_STRING_BYTES,
 ) -> dict[str, object]:
     if (
         not isinstance(max_arguments, int)
@@ -332,6 +374,12 @@ def _validate_tool_arguments(
         or not 0 <= max_arguments <= MAX_NEXUS_TOOL_ARGUMENTS
     ):
         raise ValueError("tool argument limit is outside the Host protocol ceiling")
+    if (
+        not isinstance(max_string_bytes, int)
+        or isinstance(max_string_bytes, bool)
+        or not 1 <= max_string_bytes <= MAX_NEXUS_TOOL_ARGUMENT_STRING_BYTES
+    ):
+        raise ValueError("tool string limit is outside the Host protocol ceiling")
     if not isinstance(value, dict):
         raise ProviderError("BAD_TOOL_ARGUMENTS", f"{label} must be an object")
     if len(value) > max_arguments:
@@ -344,7 +392,12 @@ def _validate_tool_arguments(
         if not isinstance(key, str) or not TOOL_NAME_RE.fullmatch(key):
             raise ProviderError("BAD_TOOL_ARGUMENTS", f"{label} has an invalid key")
         if isinstance(item, str):
-            _require_string(item, f"{label}.{key}", allow_empty=True, max_length=512)
+            _require_string(
+                item,
+                f"{label}.{key}",
+                allow_empty=True,
+                max_length=max_string_bytes,
+            )
         elif isinstance(item, int) and not isinstance(item, bool) and 0 <= item <= 0xFFFFFFFFFFFFFFFF:
             pass
         else:
@@ -361,6 +414,8 @@ def validate_guest_request(
     *,
     max_output_tokens: int,
     max_tool_arguments: int = MAX_TOOL_ARGUMENTS,
+    max_tool_argument_string_bytes: int = MAX_TOOL_ARGUMENT_STRING_BYTES,
+    expected_contract: tuple[int, str, str] | None = None,
 ) -> dict[str, object]:
     allowed = frozenset(
         (
@@ -375,9 +430,31 @@ def validate_guest_request(
             "stop",
         )
     )
+    contract_fields = frozenset(
+        ("contract_version", "policy_sha256", "tool_catalog_sha256")
+    )
+    if expected_contract is not None:
+        allowed = allowed | contract_fields
     unknown = set(value).difference(allowed)
     if unknown:
         raise WireProtocolError("BAD_REQUEST", "request contains unsupported fields")
+    if expected_contract is not None:
+        if not contract_fields.issubset(value):
+            raise WireProtocolError("BAD_REQUEST", "Nexus autonomy contract is missing")
+        version, policy_digest, catalog_digest = expected_contract
+        actual_version = value.get("contract_version")
+        actual_policy = value.get("policy_sha256")
+        actual_catalog = value.get("tool_catalog_sha256")
+        if (
+            not isinstance(actual_version, int)
+            or isinstance(actual_version, bool)
+            or actual_version != version
+            or not isinstance(actual_policy, str)
+            or not hmac.compare_digest(actual_policy, policy_digest)
+            or not isinstance(actual_catalog, str)
+            or not hmac.compare_digest(actual_catalog, catalog_digest)
+        ):
+            raise WireProtocolError("BAD_REQUEST", "Nexus autonomy contract is malformed")
     corr_id = _require_u64(value.get("corr_id"), "corr_id", positive=True)
     if corr_id > MAX_CORRELATION_ID:
         raise WireProtocolError("BAD_REQUEST", "corr_id is out of range")
@@ -386,13 +463,41 @@ def validate_guest_request(
         raise WireProtocolError("BAD_REQUEST", "messages must be a non-empty bounded array")
     for index, message in enumerate(messages):
         _validate_message(
-            message, index, max_tool_arguments=max_tool_arguments
+            message,
+            index,
+            max_tool_arguments=max_tool_arguments,
+            max_tool_argument_string_bytes=max_tool_argument_string_bytes,
         )
     tools = value.get("tools", [])
     if not isinstance(tools, list) or len(tools) > MAX_TOOLS:
         raise WireProtocolError("BAD_REQUEST", "tools must be a bounded array")
     for index, tool in enumerate(tools):
         _validate_tool(tool, index)
+    if expected_contract is not None:
+        _version, policy_digest, catalog_digest = expected_contract
+        system = value.get("system")
+        if not isinstance(system, str) or not hmac.compare_digest(
+            hashlib.sha256(system.encode("utf-8")).hexdigest(), policy_digest
+        ):
+            raise WireProtocolError("BAD_REQUEST", "Nexus system policy is not attested")
+        try:
+            catalog_bytes = json.dumps(
+                tools,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        except (TypeError, ValueError, UnicodeEncodeError, RecursionError):
+            raise WireProtocolError(
+                "BAD_REQUEST", "Nexus tool catalog is not canonical"
+            ) from None
+        if not hmac.compare_digest(
+            hashlib.sha256(catalog_bytes).hexdigest(), catalog_digest
+        ):
+            raise WireProtocolError("BAD_REQUEST", "Nexus tool catalog is not attested")
+    tool_names = [tool["name"] for tool in tools]
+    if len(set(tool_names)) != len(tool_names):
+        raise WireProtocolError("BAD_REQUEST", "tool names must be unique")
     max_tokens = value.get("max_tokens", max_output_tokens)
     max_tokens = _require_u64(max_tokens, "max_tokens", positive=True)
     if max_tokens > max_output_tokens:
@@ -420,14 +525,25 @@ def validate_guest_request(
             raise WireProtocolError("BAD_REQUEST", "stop must be a string or bounded array")
     if "tool_choice" in value:
         _validate_tool_choice(value["tool_choice"])
+        choice = value["tool_choice"]
+        if isinstance(choice, dict) and choice["tool"] not in tool_names:
+            raise WireProtocolError(
+                "BAD_REQUEST", "tool_choice must name an advertised tool"
+            )
     normalized = dict(value)
+    for key in contract_fields:
+        normalized.pop(key, None)
     normalized["max_tokens"] = max_tokens
     normalized.setdefault("tools", [])
     return normalized
 
 
 def _validate_message(
-    value: object, index: int, *, max_tool_arguments: int
+    value: object,
+    index: int,
+    *,
+    max_tool_arguments: int,
+    max_tool_argument_string_bytes: int,
 ) -> None:
     if not isinstance(value, dict):
         raise WireProtocolError("BAD_REQUEST", f"messages[{index}] must be an object")
@@ -463,6 +579,7 @@ def _validate_message(
             tool_use.get("arguments"),
             "tool_use.arguments",
             max_arguments=max_tool_arguments,
+            max_string_bytes=max_tool_argument_string_bytes,
         )
         return
     if role == "tool":
@@ -509,18 +626,28 @@ class ModelReply:
     tool: str = ""
     arguments: Mapping[str, object] | None = None
     provider_call_id: str = ""
+    receipt: ProviderReceipt | None = None
+    provider_content_present: bool = field(default=False, repr=False, compare=False)
+    provider_content: str | None = field(default=None, repr=False, compare=False)
+    provider_reasoning_content: str | None = field(
+        default=None, repr=False, compare=False
+    )
 
     def wire_payload(
         self,
         corr_id: int,
         *,
         max_tool_arguments: int = MAX_TOOL_ARGUMENTS,
+        max_tool_argument_string_bytes: int = MAX_TOOL_ARGUMENT_STRING_BYTES,
+        max_final_bytes: int = MAX_FINAL_BYTES,
     ) -> dict[str, object]:
         if self.type == "final":
             return {
                 "corr_id": corr_id,
                 "type": "final",
-                "content": _validate_final_content(self.content),
+                "content": _validate_final_content(
+                    self.content, max_bytes=max_final_bytes
+                ),
             }
         if self.type == "tool_use":
             if self.arguments is None:
@@ -535,15 +662,30 @@ class ModelReply:
                     self.arguments,
                     "model tool arguments",
                     max_arguments=max_tool_arguments,
+                    max_string_bytes=max_tool_argument_string_bytes,
                 ),
             }
         raise ProviderError("BAD_PROVIDER_RESPONSE", "provider returned an unknown response type")
 
 
-def _validate_final_content(value: object) -> str:
+def _validate_final_content(
+    value: object, *, max_bytes: int = MAX_FINAL_BYTES
+) -> str:
+    if (
+        not isinstance(max_bytes, int)
+        or isinstance(max_bytes, bool)
+        or not 1 <= max_bytes <= PROVIDER_MAX_FINAL_BYTES
+    ):
+        raise ValueError("final content limit is outside Host policy")
     if not isinstance(value, str) or not value:
         raise ProviderError(
             "BAD_PROVIDER_RESPONSE", "model final content must be non-empty text"
+        )
+    if "\0" in value:
+        raise ProviderError(
+            "BAD_PROVIDER_RESPONSE",
+            "model final content contains NUL",
+            retryable=True,
         )
     try:
         encoded = value.encode("utf-8")
@@ -551,12 +693,162 @@ def _validate_final_content(value: object) -> str:
         raise ProviderError(
             "BAD_PROVIDER_RESPONSE", "model final content is not Unicode scalar text"
         ) from None
-    if len(encoded) > MAX_FINAL_BYTES:
+    if len(encoded) > max_bytes:
         raise ProviderError(
             "BAD_PROVIDER_RESPONSE",
-            f"model final content exceeds {MAX_FINAL_BYTES} UTF-8 bytes",
+            f"model final content exceeds {max_bytes} UTF-8 bytes",
         )
     return value
+
+
+def _validate_provider_private_text(value: object, label: str) -> str:
+    if not isinstance(value, str):
+        raise ProviderError(
+            "BAD_PROVIDER_RESPONSE",
+            f"DeepSeek {label} must be text",
+            retryable=True,
+        )
+    if "\0" in value:
+        raise ProviderError(
+            "BAD_PROVIDER_RESPONSE",
+            f"DeepSeek {label} contains NUL",
+            retryable=True,
+        )
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ProviderError(
+            "BAD_PROVIDER_RESPONSE",
+            f"DeepSeek {label} is not Unicode scalar text",
+            retryable=True,
+        ) from None
+    if len(encoded) > MAX_PROVIDER_PRIVATE_TEXT_BYTES:
+        raise ProviderError(
+            "BAD_PROVIDER_RESPONSE",
+            f"DeepSeek {label} exceeds the provider-private text limit",
+            retryable=True,
+        )
+    return value
+
+
+def _raw_tool_call_count(response: Mapping[str, object]) -> int:
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
+        return 0
+    message = choices[0].get("message")
+    if not isinstance(message, Mapping):
+        return 0
+    calls = message.get("tool_calls", [])
+    return len(calls) if isinstance(calls, list) else 0
+
+
+def _reply_receipt_digest(reply: ModelReply) -> str:
+    if reply.type == "final":
+        value: dict[str, object] = {"type": "final", "content": reply.content}
+    else:
+        value = {
+            "type": "tool_use",
+            "tool": reply.tool,
+            "arguments": dict(reply.arguments or {}),
+            "provider_call_id": reply.provider_call_id,
+        }
+        if (
+            reply.provider_content_present
+            or reply.provider_reasoning_content is not None
+        ):
+            value["provider_content_present"] = reply.provider_content_present
+            value["provider_content"] = reply.provider_content
+            value["provider_reasoning_content"] = (
+                reply.provider_reasoning_content
+            )
+    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def _attach_receipt(
+    reply: ModelReply,
+    http: HttpReceipt,
+    *,
+    attempt_count: int,
+    tool_choice_mode: str,
+    raw_tool_call_count: int,
+    selected_index: int = -1,
+    adaptation: str = "none",
+    forced_tool: str | None = None,
+) -> ModelReply:
+    selected_tool_sha256 = (
+        hashlib.sha256(
+            canonical_json_bytes(
+                {"tool": reply.tool, "arguments": dict(reply.arguments or {})}
+            )
+        ).hexdigest()
+        if reply.type == "tool_use"
+        else ""
+    )
+    receipt = ProviderReceipt(
+        adapter_success=True,
+        transport="https",
+        endpoint=http.endpoint,
+        http_status=http.http_status,
+        request_sha256=http.request_sha256,
+        response_sha256=http.response_sha256,
+        selected_reply_sha256=_reply_receipt_digest(reply),
+        attempt_count=attempt_count,
+        tool_choice_mode=tool_choice_mode,
+        raw_tool_call_count=raw_tool_call_count,
+        selected_index=selected_index,
+        adaptation=adaptation,
+        provider_response_id=http.provider_response_id,
+        forced_tool=forced_tool,
+        selected_tool_sha256=selected_tool_sha256,
+    )
+    return ModelReply(
+        reply.type,
+        content=reply.content,
+        tool=reply.tool,
+        arguments=reply.arguments,
+        provider_call_id=reply.provider_call_id,
+        receipt=receipt,
+        provider_content_present=reply.provider_content_present,
+        provider_content=reply.provider_content,
+        provider_reasoning_content=reply.provider_reasoning_content,
+    )
+
+
+def _attach_error_receipt(
+    error: ProviderError,
+    http: HttpReceipt,
+    response: Mapping[str, object],
+    *,
+    attempt_count: int,
+    tool_choice_mode: str,
+    forced_tool: str | None,
+    raw_tool_call_count: int | None = None,
+) -> None:
+    setattr(
+        error,
+        "receipt",
+        ProviderReceipt(
+            adapter_success=False,
+            transport="https",
+            endpoint=http.endpoint,
+            http_status=http.http_status,
+            request_sha256=http.request_sha256,
+            response_sha256=http.response_sha256,
+            selected_reply_sha256="",
+            attempt_count=attempt_count,
+            tool_choice_mode=tool_choice_mode,
+            raw_tool_call_count=(
+                _raw_tool_call_count(response)
+                if raw_tool_call_count is None
+                else raw_tool_call_count
+            ),
+            selected_index=-1,
+            adaptation=f"rejected_{error.code.lower()}",
+            provider_response_id=http.provider_response_id,
+            forced_tool=forced_tool,
+            selected_tool_sha256="",
+        ),
+    )
 
 
 class ModelProvider(Protocol):
@@ -618,7 +910,7 @@ class JsonHttpsClient:
             raise ValueError(
                 f"HTTP timeout must be in (0, {MAX_HTTP_TIMEOUT_SECONDS:g}] seconds"
             )
-        if not 1024 <= max_response_bytes <= 8 * 1024 * 1024:
+        if not 1024 <= max_response_bytes <= MAX_HTTP_RESPONSE_BYTES:
             raise ValueError("HTTP response limit is out of range")
         self.timeout_seconds = timeout_seconds
         self.max_response_bytes = max_response_bytes
@@ -634,6 +926,18 @@ class JsonHttpsClient:
         *,
         deadline_monotonic: float | None = None,
     ) -> dict[str, object]:
+        value, _receipt = self.post_with_receipt(
+            body, headers, deadline_monotonic=deadline_monotonic
+        )
+        return value
+
+    def post_with_receipt(
+        self,
+        body: Mapping[str, object],
+        headers: Mapping[str, str],
+        *,
+        deadline_monotonic: float | None = None,
+    ) -> tuple[dict[str, object], HttpReceipt]:
         data = canonical_json_bytes(body)
         request = urllib.request.Request(
             self.endpoint,
@@ -694,6 +998,12 @@ class JsonHttpsClient:
                 f"provider returned HTTP {status}: {message}",
                 retryable=status == 429 or 500 <= status < 600,
             ) from None
+        except http.client.HTTPException:
+            raise ProviderError(
+                "PROVIDER_UNAVAILABLE",
+                "provider HTTPS protocol exchange failed",
+                retryable=True,
+            ) from None
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             message = self._redact(str(getattr(error, "reason", error)))
             raise ProviderError(
@@ -727,7 +1037,25 @@ class JsonHttpsClient:
             ) from None
         if not isinstance(value, dict):
             raise ProviderError("BAD_HTTP_RESPONSE", "provider JSON must be an object")
-        return value
+        provider_response_id = value.get("id", "")
+        if not isinstance(provider_response_id, str):
+            provider_response_id = ""
+        try:
+            provider_response_id = _require_string(
+                provider_response_id,
+                "provider response id",
+                allow_empty=True,
+                max_length=128,
+            )
+        except RelayError:
+            provider_response_id = ""
+        return value, HttpReceipt(
+            endpoint=self.endpoint,
+            http_status=status,
+            request_sha256=hashlib.sha256(data).hexdigest(),
+            response_sha256=hashlib.sha256(raw).hexdigest(),
+            provider_response_id=provider_response_id,
+        )
 
     def _redact(self, text: str) -> str:
         result = text
@@ -737,11 +1065,31 @@ class JsonHttpsClient:
         return result[:256]
 
 
+def _client_post_with_receipt(
+    client: object,
+    body: Mapping[str, object],
+    headers: Mapping[str, str],
+    *,
+    deadline_monotonic: float | None,
+) -> tuple[dict[str, object], HttpReceipt | None]:
+    method = getattr(client, "post_with_receipt", None)
+    if callable(method):
+        return method(body, headers, deadline_monotonic=deadline_monotonic)
+    fallback = getattr(client, "post", None)
+    if not callable(fallback):
+        raise ProviderError("PROVIDER_FAILURE", "provider HTTP client is unavailable")
+    return fallback(body, headers, deadline_monotonic=deadline_monotonic), None
+
+
 @dataclass(frozen=True)
 class _ProviderCallBinding:
     provider_call_id: str
     tool: str
-    canonical_arguments: str
+    canonical_arguments: bytes
+    provider_content_present: bool
+    provider_content: str | None = field(repr=False)
+    provider_reasoning_content: str | None = field(repr=False)
+    selected_reply_sha256: str
 
 
 class _ProtocolProvider:
@@ -773,11 +1121,27 @@ class _ProtocolProvider:
             raise ProviderError(
                 "BAD_PROVIDER_RESPONSE", "provider tool call arguments are missing"
             )
+        selected_reply_sha256 = _reply_receipt_digest(reply)
+        if reply.receipt is not None and not hmac.compare_digest(
+            reply.receipt.selected_reply_sha256, selected_reply_sha256
+        ):
+            raise ProviderError(
+                "BAD_PROVIDER_RESPONSE",
+                "selected provider reply digest does not match the delivered call",
+            )
         self._remember_call(
             corr_id,
             reply.provider_call_id,
             reply.tool,
             reply.arguments,
+            provider_content_present=reply.provider_content_present,
+            provider_content=reply.provider_content,
+            provider_reasoning_content=reply.provider_reasoning_content,
+            selected_reply_sha256=(
+                reply.receipt.selected_reply_sha256
+                if reply.receipt is not None
+                else selected_reply_sha256
+            ),
         )
 
     def _model(self, request: Mapping[str, object]) -> str:
@@ -798,6 +1162,17 @@ class _ProtocolProvider:
         tool: object | None = None,
         arguments: object | None = None,
     ) -> str:
+        return self._provider_call_binding(
+            corr_id, tool=tool, arguments=arguments
+        ).provider_call_id
+
+    def _provider_call_binding(
+        self,
+        corr_id: object,
+        *,
+        tool: object | None = None,
+        arguments: object | None = None,
+    ) -> _ProviderCallBinding:
         if not isinstance(corr_id, int) or isinstance(corr_id, bool):
             raise ProviderError("BAD_REQUEST", "tool correlation id is invalid")
         with self._provider_call_lock:
@@ -811,7 +1186,7 @@ class _ProtocolProvider:
                 raise ProviderError(
                     "TOOL_CALL_MISMATCH", "tool history binding is malformed"
                 )
-            canonical = canonical_json_bytes(arguments).decode("utf-8")
+            canonical = canonical_json_bytes(arguments)
             if tool != binding.tool or not hmac.compare_digest(
                 canonical, binding.canonical_arguments
             ):
@@ -819,7 +1194,7 @@ class _ProtocolProvider:
                     "TOOL_CALL_MISMATCH",
                     "tool history does not match the delivered model call",
                 )
-        return binding.provider_call_id
+        return binding
 
     def _remember_call(
         self,
@@ -827,6 +1202,11 @@ class _ProtocolProvider:
         provider_call_id: str,
         tool: str,
         arguments: Mapping[str, object],
+        *,
+        provider_content_present: bool,
+        provider_content: str | None,
+        provider_reasoning_content: str | None,
+        selected_reply_sha256: str,
     ) -> None:
         if not isinstance(corr_id, int) or isinstance(corr_id, bool):
             raise ProviderError("BAD_REQUEST", "corr_id is invalid")
@@ -839,8 +1219,39 @@ class _ProtocolProvider:
             raise ProviderError(
                 "BAD_PROVIDER_RESPONSE", "provider tool call identity is malformed"
             )
-        canonical = canonical_json_bytes(arguments).decode("utf-8")
-        binding = _ProviderCallBinding(provider_call_id, tool, canonical)
+        if (
+            not isinstance(selected_reply_sha256, str)
+            or WIRE_DIGEST_RE.fullmatch(selected_reply_sha256) is None
+        ):
+            raise ProviderError(
+                "BAD_PROVIDER_RESPONSE", "selected provider reply digest is malformed"
+            )
+        if not isinstance(provider_content_present, bool):
+            raise ProviderError(
+                "BAD_PROVIDER_RESPONSE", "provider content presence is malformed"
+            )
+        if provider_content_present and provider_content is not None:
+            provider_content = _validate_provider_private_text(
+                provider_content, "assistant content"
+            )
+        elif not provider_content_present and provider_content is not None:
+            raise ProviderError(
+                "BAD_PROVIDER_RESPONSE", "provider content binding is malformed"
+            )
+        if provider_reasoning_content is not None:
+            provider_reasoning_content = _validate_provider_private_text(
+                provider_reasoning_content, "reasoning_content"
+            )
+        canonical = canonical_json_bytes(arguments)
+        binding = _ProviderCallBinding(
+            provider_call_id,
+            tool,
+            canonical,
+            provider_content_present,
+            provider_content,
+            provider_reasoning_content,
+            selected_reply_sha256,
+        )
         with self._provider_call_lock:
             if corr_id in self._provider_call_ids:
                 raise ProviderError(
@@ -863,6 +1274,12 @@ class OpenAICompatibleProvider(_ProtocolProvider):
         if has_tools:
             return {"parallel_tool_calls": False}
         return {}
+
+    def _provider_options_for_request(
+        self, request: Mapping[str, object], *, has_tools: bool
+    ) -> dict[str, object]:
+        del request
+        return self._provider_options(has_tools=has_tools)
 
     def complete(
         self,
@@ -897,7 +1314,9 @@ class OpenAICompatibleProvider(_ProtocolProvider):
                 }
                 for tool in tools  # type: ignore[union-attr]
             ]
-        body.update(self._provider_options(has_tools=bool(tools)))
+        body.update(
+            self._provider_options_for_request(request, has_tools=bool(tools))
+        )
         if "tool_choice" in request:
             body["tool_choice"] = self._tool_choice(request["tool_choice"])
         for key in ("temperature", "stop"):
@@ -905,16 +1324,36 @@ class OpenAICompatibleProvider(_ProtocolProvider):
                 body[key] = request[key]
         attempt_limit = self._response_attempt_limit(request)
         attempt = 0
+        http_receipt: HttpReceipt | None = None
+        selected_index = -1
+        adaptation = "none"
+        forced_tool = (
+            self._forced_tool_name(request)
+            if isinstance(self, DeepSeekProvider)
+            else None
+        )
+        tool_choice_mode = "exact" if forced_tool is not None else "auto"
         while True:
             attempt += 1
-            response = self.client.post(
+            response, http_receipt = _client_post_with_receipt(
+                self.client,
                 body,
                 {"Authorization": f"Bearer {self._api_key}"},
                 deadline_monotonic=deadline_monotonic,
             )
             try:
                 reply = self._parse_response_for_request(response, request)
+                reply = _validate_model_reply_for_request(reply, request)
             except ProviderError as error:
+                if http_receipt is not None:
+                    _attach_error_receipt(
+                        error,
+                        http_receipt,
+                        response,
+                        attempt_count=attempt,
+                        tool_choice_mode=tool_choice_mode,
+                        forced_tool=forced_tool,
+                    )
                 if attempt >= attempt_limit or not self._retry_response_error(
                     request, error
                 ):
@@ -930,6 +1369,22 @@ class OpenAICompatibleProvider(_ProtocolProvider):
                 body = self._response_retry_body(request, body, error)
                 continue
             break
+        if forced_tool is not None:
+            selected_index = self._selected_tool_index(response, forced_tool, reply)
+            adaptation = "forced_schema_selection"
+        elif reply.type == "tool_use":
+            selected_index = 0
+        if http_receipt is not None:
+            reply = _attach_receipt(
+                reply,
+                http_receipt,
+                attempt_count=attempt,
+                tool_choice_mode=tool_choice_mode,
+                raw_tool_call_count=_raw_tool_call_count(response),
+                selected_index=selected_index,
+                adaptation=adaptation,
+                forced_tool=forced_tool,
+            )
         if reply.type == "tool_use":
             self._commit_immediately(request["corr_id"], reply)
         return reply
@@ -937,6 +1392,13 @@ class OpenAICompatibleProvider(_ProtocolProvider):
     def _response_attempt_limit(self, request: Mapping[str, object]) -> int:
         del request
         return 1
+
+    @staticmethod
+    def _selected_tool_index(
+        response: Mapping[str, object], forced_tool: str, reply: ModelReply
+    ) -> int:
+        del response, forced_tool, reply
+        return -1
 
     def _request_tools(self, request: Mapping[str, object]) -> Sequence[object]:
         tools = request.get("tools", [])
@@ -980,11 +1442,18 @@ class OpenAICompatibleProvider(_ProtocolProvider):
                 }
                 tool_use = message.get("tool_use")
                 if tool_use is not None:
-                    provider_id = self._provider_call_id(
+                    binding = self._provider_call_binding(
                         tool_use["corr_id"],
                         tool=tool_use["tool"],
                         arguments=tool_use["arguments"],
                     )
+                    provider_id = binding.provider_call_id
+                    if binding.provider_content_present:
+                        item["content"] = binding.provider_content
+                    if binding.provider_reasoning_content is not None:
+                        item["reasoning_content"] = (
+                            binding.provider_reasoning_content
+                        )
                     item["tool_calls"] = [
                         {
                             "id": provider_id,
@@ -1040,6 +1509,12 @@ class OpenAICompatibleProvider(_ProtocolProvider):
                 "MULTIPLE_TOOL_CALLS", "Guest protocol supports one tool call per model turn"
             )
         if tool_calls:
+            if _openai_content_text(message.get("content", "")):
+                raise ProviderError(
+                    "MIXED_MODEL_RESPONSE",
+                    "provider returned text together with a tool call",
+                    retryable=True,
+                )
             if finish_reason != "tool_calls":
                 raise ProviderError(
                     "INCOMPLETE_MODEL_RESPONSE",
@@ -1076,7 +1551,8 @@ class OpenAICompatibleProvider(_ProtocolProvider):
         return ModelReply(
             "final",
             content=_validate_final_content(
-                _openai_content_text(message.get("content", ""))
+                _openai_content_text(message.get("content", "")),
+                max_bytes=PROVIDER_MAX_FINAL_BYTES,
             ),
         )
 
@@ -1087,18 +1563,23 @@ class DeepSeekProvider(OpenAICompatibleProvider):
     EXACT_CHOICE_ATTEMPTS = 16
 
     def _provider_options(self, *, has_tools: bool) -> dict[str, object]:
-        # DeepSeek V4 defaults to thinking mode.  Thinking tool turns require
-        # reasoning_content to be replayed verbatim, but that provider-private
-        # chain of thought is intentionally absent from the Guest-owned wire.
-        # Select documented non-thinking mode rather than making the Host keep
-        # hidden semantic history.  Tool turns also opt out of parallel calls
-        # so the provider follows the Guest protocol's one-call-per-round
-        # contract.  Some DeepSeek models still return several calls, so the
-        # response adapter below serializes them at the protocol boundary.
-        options: dict[str, object] = {"thinking": {"type": "disabled"}}
+        options: dict[str, object] = {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "max",
+        }
         if has_tools:
             options["parallel_tool_calls"] = False
         return options
+
+    def _provider_options_for_request(
+        self, request: Mapping[str, object], *, has_tools: bool
+    ) -> dict[str, object]:
+        if "tool_choice" in request:
+            options: dict[str, object] = {"thinking": {"type": "disabled"}}
+            if has_tools:
+                options["parallel_tool_calls"] = False
+            return options
+        return self._provider_options(has_tools=has_tools)
 
     @staticmethod
     def _forced_tool_name(request: Mapping[str, object]) -> str | None:
@@ -1168,12 +1649,6 @@ class DeepSeekProvider(OpenAICompatibleProvider):
             f"{forced_tool} and no text. Its arguments must be one JSON object "
             f"matching this schema exactly: {schema_text}."
         )
-        if forced_tool == "publish_report":
-            instruction += (
-                " Calling publish_report itself requests approval; do not wait for "
-                "approval before making the call."
-            )
-
         retry_body = dict(body)
         retry_body["tool_choice"] = "required"
         messages_value = body.get("messages", [])
@@ -1229,6 +1704,33 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         return reply
 
     @staticmethod
+    def _selected_tool_index(
+        response: Mapping[str, object], forced_tool: str, reply: ModelReply
+    ) -> int:
+        choices = response.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
+            return -1
+        message = choices[0].get("message")
+        calls = message.get("tool_calls", []) if isinstance(message, Mapping) else []
+        if not isinstance(calls, list):
+            return -1
+        expected = canonical_json_bytes(dict(reply.arguments or {}))
+        for index, call in enumerate(calls):
+            function = call.get("function") if isinstance(call, Mapping) else None
+            if not isinstance(function, Mapping) or function.get("name") != forced_tool:
+                continue
+            arguments = function.get("arguments")
+            if not isinstance(arguments, str):
+                continue
+            try:
+                parsed = _parse_provider_arguments(arguments.encode("utf-8"))
+            except (ProviderError, UnicodeEncodeError):
+                continue
+            if hmac.compare_digest(canonical_json_bytes(parsed), expected):
+                return index
+        return -1
+
+    @staticmethod
     def _parse_response(
         response: Mapping[str, object],
         *,
@@ -1249,7 +1751,6 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         tool_calls = message.get("tool_calls", [])
         if not isinstance(tool_calls, list):
             return OpenAICompatibleProvider._parse_response(response)
-
         if forced_tool is not None and tool_calls:
             saw_matching_call = False
             saw_schema_mismatch = False
@@ -1260,9 +1761,12 @@ class DeepSeekProvider(OpenAICompatibleProvider):
                 if not isinstance(function, dict) or function.get("name") != forced_tool:
                     continue
                 saw_matching_call = True
-                serial_response = DeepSeekProvider._single_tool_response(
-                    response, choices, choice, message, call
-                )
+                serial_message = dict(message)
+                serial_message["tool_calls"] = [call]
+                serial_choice = dict(choice)
+                serial_choice["message"] = serial_message
+                serial_response = dict(response)
+                serial_response["choices"] = [serial_choice, *choices[1:]]
                 try:
                     reply = OpenAICompatibleProvider._parse_response(serial_response)
                 except ProviderError:
@@ -1294,40 +1798,94 @@ class DeepSeekProvider(OpenAICompatibleProvider):
                 ),
                 retryable=True,
             )
-
-        if len(tool_calls) <= 1:
+        if len(tool_calls) > 1:
+            raise ProviderError(
+                "MULTIPLE_TOOL_CALLS",
+                "DeepSeek returned multiple tool calls for one autonomous round",
+                retryable=True,
+            )
+        if not tool_calls:
             return OpenAICompatibleProvider._parse_response(response)
 
-        # DeepSeek may ignore parallel_tool_calls=false.  Give the Guest only
-        # the first call and let the next model round decide what to do after
-        # seeing its result.  Copy every edited container so callers retain the
-        # exact provider response for diagnostics.
-        serial_response = DeepSeekProvider._single_tool_response(
-            response, choices, choice, message, tool_calls[0]
+        if "content" not in message:
+            raise ProviderError(
+                "BAD_PROVIDER_RESPONSE",
+                "DeepSeek assistant content is missing",
+                retryable=True,
+            )
+        provider_content_value = message["content"]
+        provider_content = (
+            None
+            if provider_content_value is None
+            else _validate_provider_private_text(
+                provider_content_value, "assistant content"
+            )
         )
-        return OpenAICompatibleProvider._parse_response(serial_response)
-
-    @staticmethod
-    def _single_tool_response(
-        response: Mapping[str, object],
-        choices: list[object],
-        choice: Mapping[str, object],
-        message: Mapping[str, object],
-        tool_call: object,
-    ) -> dict[str, object]:
+        provider_reasoning_content = _validate_provider_private_text(
+            message.get("reasoning_content"), "reasoning_content"
+        )
+        # The generic adapter deliberately rejects public text mixed with a
+        # tool call. DeepSeek thinking mode documents such content as part of
+        # the assistant tool message, so validate the call through a private
+        # copy while retaining both text fields for exact provider replay.
         serial_message = dict(message)
-        serial_message["tool_calls"] = [tool_call]
+        serial_message["content"] = ""
         serial_choice = dict(choice)
         serial_choice["message"] = serial_message
         serial_response = dict(response)
         serial_response["choices"] = [serial_choice, *choices[1:]]
-        return serial_response
+        reply = OpenAICompatibleProvider._parse_response(serial_response)
+        return ModelReply(
+            reply.type,
+            content=reply.content,
+            tool=reply.tool,
+            arguments=reply.arguments,
+            provider_call_id=reply.provider_call_id,
+            receipt=reply.receipt,
+            provider_content_present=True,
+            provider_content=provider_content,
+            provider_reasoning_content=provider_reasoning_content,
+        )
 
 
 def _json_value_matches_schema(
     value: object, schema: Mapping[str, object]
 ) -> bool:
     """Validate the bounded JSON-Schema subset advertised by Guest tools."""
+
+    supported = {
+        "type",
+        "enum",
+        "oneOf",
+        "properties",
+        "required",
+        "additionalProperties",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+    }
+    if not isinstance(schema, Mapping) or any(
+        not isinstance(keyword, str) or keyword not in supported
+        for keyword in schema
+    ):
+        return False
+
+    one_of = schema.get("oneOf")
+    if one_of is not None:
+        if not isinstance(one_of, list) or not one_of:
+            return False
+        matches = 0
+        for branch in one_of:
+            if not isinstance(branch, Mapping):
+                return False
+            if _json_value_matches_schema(value, branch):
+                matches += 1
+        if matches != 1:
+            return False
 
     expected_type = schema.get("type")
     if expected_type is not None:
@@ -1418,6 +1976,74 @@ def _json_value_matches_schema(
     return True
 
 
+def _validate_model_reply_for_request(
+    reply: ModelReply, request: Mapping[str, object]
+) -> ModelReply:
+    """Bind a provider reply to the exact tools advertised for this round.
+
+    Provider-side tool forcing is only a hint.  This validation is the actual
+    protocol boundary and applies equally to automatic and exact tool choice.
+    Mismatches are retryable for the Guest, but never trigger hidden retries in
+    ordinary automatic mode.
+    """
+
+    if not isinstance(reply, ModelReply):
+        raise ProviderError(
+            "BAD_PROVIDER_RESPONSE", "provider returned an invalid reply"
+        )
+    choice = request.get("tool_choice", "auto")
+    forced = choice.get("tool") if isinstance(choice, Mapping) else None
+    requires_tool = choice == "required" or isinstance(forced, str)
+    forbids_tool = choice == "none"
+
+    if reply.type == "final":
+        if requires_tool:
+            raise ProviderError(
+                "TOOL_CHOICE_MISMATCH",
+                "provider returned final text when a tool call was required",
+                retryable=True,
+            )
+        return reply
+    if reply.type != "tool_use" or reply.arguments is None:
+        raise ProviderError(
+            "BAD_PROVIDER_RESPONSE", "provider returned an unknown response type"
+        )
+    if forbids_tool:
+        raise ProviderError(
+            "TOOL_CHOICE_MISMATCH",
+            "provider returned a tool call when tool use was disabled",
+            retryable=True,
+        )
+    if isinstance(forced, str) and reply.tool != forced:
+        raise ProviderError(
+            "TOOL_CHOICE_MISMATCH",
+            f"provider returned {reply.tool!r} instead of forced tool {forced!r}",
+            retryable=True,
+        )
+
+    matching = [
+        tool
+        for tool in request.get("tools", [])
+        if isinstance(tool, Mapping) and tool.get("name") == reply.tool
+    ]
+    if len(matching) != 1:
+        raise ProviderError(
+            "TOOL_NOT_ADVERTISED",
+            f"provider returned unadvertised tool {reply.tool!r}",
+            retryable=True,
+        )
+    schema = matching[0].get("input_schema")
+    if not isinstance(schema, Mapping) or not _json_value_matches_schema(
+        reply.arguments, schema
+    ):
+        raise ProviderError(
+            "TOOL_ARGUMENT_SCHEMA_MISMATCH",
+            f"provider arguments do not match schema for tool {reply.tool!r}",
+            retryable=True,
+        )
+    return reply
+
+
 def _openai_content_text(value: object) -> str:
     if value is None:
         return ""
@@ -1449,6 +2075,7 @@ def _parse_provider_arguments(raw: bytes) -> dict[str, object]:
         value,
         "model tool arguments",
         max_arguments=MAX_NEXUS_TOOL_ARGUMENTS,
+        max_string_bytes=MAX_NEXUS_TOOL_ARGUMENT_STRING_BYTES,
     )
 
 
@@ -1499,7 +2126,8 @@ class AnthropicMessagesProvider(_ProtocolProvider):
                 body["stop_sequences" if key == "stop" else key] = (
                     [request[key]] if key == "stop" and isinstance(request[key], str) else request[key]
                 )
-        response = self.client.post(
+        response, http_receipt = _client_post_with_receipt(
+            self.client,
             body,
             {
                 "x-api-key": self._api_key,
@@ -1507,7 +2135,40 @@ class AnthropicMessagesProvider(_ProtocolProvider):
             },
             deadline_monotonic=deadline_monotonic,
         )
-        reply = self._parse_response(response)
+        raw_calls = sum(
+            1
+            for item in response.get("content", [])
+            if isinstance(item, Mapping) and item.get("type") == "tool_use"
+        ) if isinstance(response.get("content"), list) else 0
+        choice = request.get("tool_choice", "auto")
+        forced_tool = choice.get("tool") if isinstance(choice, Mapping) else None
+        mode = "exact" if isinstance(forced_tool, str) else "auto"
+        try:
+            reply = _validate_model_reply_for_request(
+                self._parse_response(response), request
+            )
+        except ProviderError as error:
+            if http_receipt is not None:
+                _attach_error_receipt(
+                    error,
+                    http_receipt,
+                    response,
+                    attempt_count=1,
+                    tool_choice_mode=mode,
+                    forced_tool=(forced_tool if isinstance(forced_tool, str) else None),
+                    raw_tool_call_count=raw_calls,
+                )
+            raise
+        if http_receipt is not None:
+            reply = _attach_receipt(
+                reply,
+                http_receipt,
+                attempt_count=1,
+                tool_choice_mode=mode,
+                raw_tool_call_count=raw_calls,
+                selected_index=(0 if reply.type == "tool_use" else -1),
+                forced_tool=(forced_tool if isinstance(forced_tool, str) else None),
+            )
         if reply.type == "tool_use":
             self._commit_immediately(request["corr_id"], reply)
         return reply
@@ -1593,6 +2254,12 @@ class AnthropicMessagesProvider(_ProtocolProvider):
                 "MULTIPLE_TOOL_CALLS", "Guest protocol supports one tool call per model turn"
             )
         if calls:
+            if any(text_parts):
+                raise ProviderError(
+                    "MIXED_MODEL_RESPONSE",
+                    "Anthropic returned text together with a tool call",
+                    retryable=True,
+                )
             if stop_reason != "tool_use":
                 raise ProviderError(
                     "INCOMPLETE_MODEL_RESPONSE",
@@ -1609,6 +2276,7 @@ class AnthropicMessagesProvider(_ProtocolProvider):
                 call.get("input"),
                 "model tool arguments",
                 max_arguments=MAX_NEXUS_TOOL_ARGUMENTS,
+                max_string_bytes=MAX_NEXUS_TOOL_ARGUMENT_STRING_BYTES,
             )
             return ModelReply(
                 "tool_use", tool=name, arguments=arguments, provider_call_id=provider_id
@@ -1619,7 +2287,10 @@ class AnthropicMessagesProvider(_ProtocolProvider):
                 "Anthropic response did not terminate normally",
             )
         return ModelReply(
-            "final", content=_validate_final_content("".join(text_parts))
+            "final",
+            content=_validate_final_content(
+                "".join(text_parts), max_bytes=PROVIDER_MAX_FINAL_BYTES
+            ),
         )
 
 
@@ -1677,7 +2348,15 @@ class ReplayProvider:
                 raise ValueError(
                     f"interactive replay requires request_sha256 on line {line_number}"
                 )
-            records.append(ReplayRecord(value["response"], str(digest)))
+            response = value["response"]
+            if response.get("type") == "error":
+                try:
+                    _error_from_canonical(response)
+                except ProviderError as error:
+                    raise ValueError(
+                        f"invalid replay response on line {line_number}"
+                    ) from error
+            records.append(ReplayRecord(response, str(digest)))
         return cls(records)
 
     def complete(
@@ -1695,7 +2374,13 @@ class ReplayProvider:
                 digest, record.request_sha256
             ):
                 raise ProviderError("REPLAY_MISMATCH", "request does not match replay transcript")
-            reply = _reply_from_canonical(record.response)
+            if record.response.get("type") == "error":
+                error = _error_from_canonical(record.response)
+                self._index += 1
+                raise error
+            reply = _validate_model_reply_for_request(
+                _reply_from_canonical(record.response), request
+            )
             self._index += 1
             return reply
 
@@ -1708,11 +2393,41 @@ class ReplayProvider:
                 )
 
 
+def _error_from_canonical(value: Mapping[str, object]) -> ProviderError:
+    if set(value) != {"type", "code", "message", "retryable"}:
+        raise ProviderError("BAD_REPLAY", "replay error response is malformed")
+    code = value.get("code")
+    if not isinstance(code, str) or REPLAY_ERROR_CODE_RE.fullmatch(code) is None:
+        raise ProviderError("BAD_REPLAY", "replay error code is invalid")
+    message = value.get("message")
+    if not isinstance(message, str) or not message:
+        raise ProviderError("BAD_REPLAY", "replay error message is invalid")
+    try:
+        encoded = message.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ProviderError(
+            "BAD_REPLAY", "replay error message is not Unicode scalar text"
+        ) from None
+    if len(encoded) > MAX_REPLAY_ERROR_MESSAGE_BYTES:
+        raise ProviderError("BAD_REPLAY", "replay error message is oversized")
+    if any(ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F for char in message):
+        raise ProviderError(
+            "BAD_REPLAY", "replay error message contains control characters"
+        )
+    retryable = value.get("retryable")
+    if not isinstance(retryable, bool):
+        raise ProviderError("BAD_REPLAY", "replay error retryability is invalid")
+    return ProviderError(code, message, retryable=retryable)
+
+
 def _reply_from_canonical(value: Mapping[str, object]) -> ModelReply:
     kind = value.get("type")
     if kind == "final" and set(value).issubset(("type", "content")):
         return ModelReply(
-            "final", content=_validate_final_content(value.get("content", ""))
+            "final",
+            content=_validate_final_content(
+                value.get("content", ""), max_bytes=PROVIDER_MAX_FINAL_BYTES
+            ),
         )
     if kind == "tool_use" and set(value).issubset(("type", "tool", "arguments")):
         tool = value.get("tool")
@@ -1725,6 +2440,7 @@ def _reply_from_canonical(value: Mapping[str, object]) -> ModelReply:
                 value.get("arguments"),
                 "replay arguments",
                 max_arguments=MAX_NEXUS_TOOL_ARGUMENTS,
+                max_string_bytes=MAX_NEXUS_TOOL_ARGUMENT_STRING_BYTES,
             ),
         )
     raise ProviderError("BAD_REPLAY", "replay response is malformed")
@@ -1767,6 +2483,7 @@ class RelaySession:
         self._rounds = 0
         self._last_corr_id = 0
         self._final_sent = False
+        self._pending_model_delivery: tuple[bytes, int, ModelReply] | None = None
         self.closed = False
 
     def hello_line(self) -> bytes:
@@ -1788,6 +2505,13 @@ class RelaySession:
             raise WireProtocolError("SESSION_CLOSED", "relay session is already closed")
         frame = self.codec.decode(line)
         self._rx.accept(frame)
+        if self._pending_model_delivery is not None:
+            # A subsequent integrity-checked Guest frame is also proof that the
+            # preceding Host response crossed the serial boundary. Real QEMU
+            # transports confirm immediately after their bounded write; this
+            # fallback keeps the state machine usable with synchronous serial
+            # adapters without committing merely on response construction.
+            self.confirm_serial_delivery(self._pending_model_delivery[0])
         if frame.kind == "GOODBYE":
             if frame.json_object() != {"reason": "guest_complete"}:
                 raise WireProtocolError(
@@ -1833,8 +2557,8 @@ class RelaySession:
             commit_model_reply = getattr(
                 self.provider, "commit_model_reply", None
             )
-            if callable(commit_model_reply):
-                commit_model_reply(corr_id, reply)
+            if callable(commit_model_reply) and reply.type == "tool_use":
+                self._pending_model_delivery = (response, corr_id, reply)
             if reply.type == "final":
                 self._final_sent = True
             return response
@@ -1849,6 +2573,24 @@ class RelaySession:
                 "message": error.public_message,
             }
             return self._send_json("ERROR", payload)
+
+    def confirm_serial_delivery(self, line: bytes) -> None:
+        pending = self._pending_model_delivery
+        if pending is None:
+            return
+        expected, corr_id, reply = pending
+        if not isinstance(line, bytes) or not hmac.compare_digest(line, expected):
+            raise WireProtocolError(
+                "DELIVERY_MISMATCH",
+                "serial delivery acknowledgement does not match the pending response",
+            )
+        commit_model_reply = getattr(self.provider, "commit_model_reply", None)
+        if not callable(commit_model_reply):
+            raise ProviderError(
+                "PROVIDER_FAILURE", "provider call binding is unavailable"
+            )
+        commit_model_reply(corr_id, reply)
+        self._pending_model_delivery = None
 
     def _complete_provider(
         self,
@@ -2299,6 +3041,7 @@ def run_qemu_relay(
                             last_frame + idle_timeout_seconds,
                         ),
                     )
+                    session.confirm_serial_delivery(response)
         # The GOODBYE response was written by handle_line; shutdown is bounded.
     finally:
         process.stop()

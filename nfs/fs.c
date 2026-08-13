@@ -87,11 +87,13 @@ void iappend(uint inum, void *p, int n);
 void require_free_block(const char *context);
 void install_file(uint rootino, const char *host_path, const char *image,
 		  uint flags, uint role_mask, uint vfs_profile,
-		  const struct host_image *host_image);
+		  const struct host_image *host_image, int system_data);
 struct host_image read_host_image(const char *host_path);
+struct host_image read_host_data(const char *host_path);
 void validate_exec_policy(void);
 void label_inode(uint inum, uint flags, uint scope_id, uint policy,
 		 uint exec_profile);
+static int valid_policy_name(const char *name);
 static int vfs_exec_profile_valid(uint profile);
 uint vfs_label_checksum(uint inum, uint magic, uint version, uint flags,
 			uint scope_id, uint policy, uint exec_profile,
@@ -178,6 +180,8 @@ static void validate_storage_guarantees(void)
 int main(int argc, char *argv[])
 {
 	int i;
+	int system_data_mode = 0;
+	unsigned int system_data_count = 0;
 	uint rootino, off;
 	char buf[BSIZE];
 	struct dinode din;
@@ -253,9 +257,33 @@ int main(int argc, char *argv[])
 	label_inode(rootino, VFS_LABEL_F_ROOT, VFS_SCOPE_NONE,
 		    VFS_POLICY_ROOT, VFS_EXEC_PROFILE_NONE);
 	for (i = 2; i < argc; i++) {
+		if (strcmp(argv[i], "--system-data") == 0) {
+			if (system_data_mode) {
+				fprintf(stderr, "mkfs: duplicate --system-data marker\n");
+				exit(1);
+			}
+			system_data_mode = 1;
+			continue;
+		}
 		char *shortname = basename(argv[i]);
 		const struct exec_policy_entry *primary = 0;
-		struct host_image host_image = read_host_image(argv[i]);
+		struct host_image host_image = system_data_mode ?
+			read_host_data(argv[i]) : read_host_image(argv[i]);
+
+		if (system_data_mode) {
+			if (!valid_policy_name(shortname) ||
+			    strlen(shortname) > DIRSIZ) {
+				fprintf(stderr,
+					"mkfs: invalid SYSTEM data name %s\n",
+					shortname);
+				exit(1);
+			}
+			install_file(rootino, argv[i], shortname, 0, 0,
+				     VFS_EXEC_PROFILE_NONE, &host_image, 1);
+			free(host_image.data);
+			system_data_count++;
+			continue;
+		}
 
 		for (uint p = 0; p < sizeof(exec_policy) / sizeof(exec_policy[0]);
 		     p++) {
@@ -275,7 +303,7 @@ int main(int argc, char *argv[])
 			     primary ? primary->role_mask : 0,
 			     primary ? primary->vfs_profile :
 				       VFS_EXEC_PROFILE_NONE,
-			     &host_image);
+			     &host_image, 0);
 
 		for (uint p = 0; p < sizeof(exec_policy) / sizeof(exec_policy[0]);
 		     p++) {
@@ -285,7 +313,7 @@ int main(int argc, char *argv[])
 			install_file(rootino, argv[i], exec_policy[p].image,
 				     exec_policy[p].flags,
 				     exec_policy[p].role_mask,
-				     exec_policy[p].vfs_profile, &host_image);
+				     exec_policy[p].vfs_profile, &host_image, 0);
 		}
 		if (host_image.layout.version == EXEC_LAYOUT_VERSION) {
 			char worker_image[11];
@@ -295,9 +323,13 @@ int main(int argc, char *argv[])
 				     EXEC_FLAG_IMMUTABLE |
 					     EXEC_FLAG_DOMAIN_SAFE,
 				     0, VFS_EXEC_PROFILE_WORKFLOW,
-				     &host_image);
+				     &host_image, 0);
 		}
 		free(host_image.data);
+	}
+	if (system_data_mode && system_data_count == 0) {
+		fprintf(stderr, "mkfs: --system-data requires at least one file\n");
+		exit(1);
 	}
 	// Root directory blocks are fixed SYSTEM metadata. Preallocate one slot for
 	// every non-root inode so runtime namespace churn can only reuse directory
@@ -551,6 +583,31 @@ struct host_image read_host_image(const char *host_path)
 	return image;
 }
 
+struct host_image read_host_data(const char *host_path)
+{
+	int host_error;
+	enum host_snapshot_status status;
+	struct host_file_snapshot snapshot = { 0 };
+	struct host_image image = { 0 };
+
+	status = host_snapshot_read(host_path, (size_t)MAXFILE * BSIZE,
+				    &snapshot, &host_error);
+	if (status != HOST_SNAPSHOT_OK)
+		host_snapshot_error(host_path, status, &snapshot,
+				    (size_t)MAXFILE * BSIZE, host_error);
+	status = host_snapshot_validate_path(host_path, &snapshot, &host_error);
+	if (status != HOST_SNAPSHOT_OK)
+		host_snapshot_error(host_path, status, &snapshot, 0, host_error);
+	if (snapshot.size == 0) {
+		fprintf(stderr, "mkfs: empty system data file %s\n", host_path);
+		exit(1);
+	}
+	image.data = snapshot.data;
+	image.size = snapshot.size;
+	snapshot.data = 0;
+	return image;
+}
+
 static void reserve_image_name(const char *name)
 {
 	if (!valid_policy_name(name)) {
@@ -574,7 +631,7 @@ static void reserve_image_name(const char *name)
 
 void install_file(uint rootino, const char *host_path, const char *image,
 		  uint flags, uint role_mask, uint vfs_profile,
-		  const struct host_image *host_image)
+		  const struct host_image *host_image, int system_data)
 {
 	uint inum;
 	uint vfs_scope_id;
@@ -598,17 +655,27 @@ void install_file(uint rootino, const char *host_path, const char *image,
 		exit(1);
 	}
 	layout = &host_image->layout;
-	vfs_flags = flags == 0 && vfs_profile == VFS_EXEC_PROFILE_NONE ?
+	if (system_data && (flags != 0 || role_mask != 0 ||
+			    vfs_profile != VFS_EXEC_PROFILE_NONE ||
+			    layout->version != 0 || layout->rw_offset != 0)) {
+		fprintf(stderr, "mkfs: invalid SYSTEM data shape for %s\n",
+			host_path);
+		exit(1);
+	}
+	vfs_flags = !system_data && flags == 0 &&
+		vfs_profile == VFS_EXEC_PROFILE_NONE ?
 		VFS_LABEL_F_PUBLIC : VFS_LABEL_F_PROTECTED;
-	vfs_scope_id = flags == 0 && vfs_profile == VFS_EXEC_PROFILE_NONE ?
+	vfs_scope_id = !system_data && flags == 0 &&
+		vfs_profile == VFS_EXEC_PROFILE_NONE ?
 		VFS_SCOPE_NONE : VFS_SCOPE_SYSTEM;
-	vfs_policy = flags == 0 && vfs_profile == VFS_EXEC_PROFILE_NONE ?
+	vfs_policy = !system_data && flags == 0 &&
+		vfs_profile == VFS_EXEC_PROFILE_NONE ?
 		VFS_POLICY_PUBLIC : VFS_POLICY_WORKFLOW;
 	if ((layout->version != 0 &&
 	     (layout->version != EXEC_LAYOUT_VERSION ||
 	      layout->rw_offset == 0)) ||
 	    !vfs_exec_profile_valid(vfs_profile) ||
-	    (vfs_policy == VFS_POLICY_WORKFLOW &&
+	    (vfs_policy == VFS_POLICY_WORKFLOW && !system_data &&
 	     !exec_image_protected_shape_valid(
 		     1, host_image->size, flags, EXEC_MANIFEST_VERSION,
 		     role_mask, layout->version, layout->rw_offset,
@@ -652,7 +719,7 @@ void install_file(uint rootino, const char *host_path, const char *image,
 		FS_OWNER_VERSION));
 	winode(inum, &din);
 	rinode(inum, &din);
-	if (vfs_policy == VFS_POLICY_WORKFLOW &&
+	if (vfs_policy == VFS_POLICY_WORKFLOW && !system_data &&
 	    !exec_image_protected_shape_valid(
 		    xshort(din.type) == T_FILE, xint(din.size),
 		    xint(din.exec_flags), xint(din.exec_generation),
@@ -660,6 +727,20 @@ void install_file(uint rootino, const char *host_path, const char *image,
 		    xint(din.exec_rw_offset), xint(din.vfs_exec_profile),
 		    USER_PAGE_SIZE)) {
 		fprintf(stderr, "mkfs: installed executable policy drift for %s\n",
+			image);
+		exit(1);
+	}
+	if (system_data &&
+	    (xshort(din.type) != T_FILE || xint(din.exec_flags) != 0 ||
+	     xint(din.exec_generation) != 0 ||
+	     xint(din.exec_role_mask) != 0 ||
+	     xint(din.exec_layout_version) != 0 ||
+	     xint(din.exec_rw_offset) != 0 ||
+	     xint(din.vfs_flags) != VFS_LABEL_F_PROTECTED ||
+	     xint(din.vfs_scope_id) != VFS_SCOPE_SYSTEM ||
+	     xint(din.vfs_policy) != VFS_POLICY_WORKFLOW ||
+	     xint(din.vfs_exec_profile) != VFS_EXEC_PROFILE_NONE)) {
+		fprintf(stderr, "mkfs: installed SYSTEM data policy drift for %s\n",
 			image);
 		exit(1);
 	}

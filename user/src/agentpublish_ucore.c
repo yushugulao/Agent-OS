@@ -337,7 +337,7 @@ static void exercise_nexus_convergence(void)
 	nexus_manifest.owner = nexus_actor;
 	nexus_manifest.materializer = nexus_actor;
 	nexus_manifest.task_id = 31001;
-	nexus_manifest.kind = AGENT_NEXUS_ARTIFACT_SEED;
+	nexus_manifest.kind = AGENT_NEXUS_ARTIFACT_TOOL_INPUT;
 	nexus_manifest.source = AGENT_NEXUS_SOURCE_USER;
 	nexus_manifest.provenance_labels =
 		AGENT_PROVENANCE_TRUSTED_USER_CONTROL;
@@ -358,7 +358,7 @@ static void exercise_nexus_convergence(void)
 	      "different Nexus bytes do not converge");
 	check(agent_nexus_artifact_read_verify(
 		      handle, &lifecycle.key, &nexus_actor,
-		      AGENT_NEXUS_ARTIFACT_SEED, &nexus_read_header,
+		      AGENT_NEXUS_ARTIFACT_TOOL_INPUT, &nexus_read_header,
 		      nexus_read_payload, sizeof(nexus_read_payload),
 		      &read_size) == 0 &&
 	      read_size == sizeof(nexus_payload) &&

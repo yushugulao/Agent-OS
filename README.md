@@ -23,7 +23,7 @@
 
 内核用生命周期键 `{id, generation}` 区分每次运行。创建 Agent 时，系统会分配角色、能力位和文件访问范围。Context 记录每一步的起因、调用跨度、分支和 provenance（来源追溯）。Execution Contract 列出工具、前置任务、输入指纹、截止时间和资源上限。Live Query 借助 Metadata Catalog 与 Typed Watch，及时报告文件集合变化。Workflow Credit Domain 和 EEVDF 调度器分别管理跨进程资源与 CPU 时间。Agent Live 控制台和 Nexus 把这些功能组合成可在 QEMU RISC-V64 Guest（客户机）中直接运行的应用。
 
-以下性能结果来自冻结在源码提交 `2b14fb` 的可复现测量批次；当前版本后续功能改动另由功能回归验证，未重新计入这组性能数据。该批次共完成 30 次独立的 QEMU 启动，保存 33 份原始输出、19 个 CSV 数据表和 7,498 条结构化记录。在 96 条文件记录上的 16 组配对测试中，索引查询的核心阶段每次都快于逐项扫描，中位加速比为 3.118 倍；完整流程中索引路径仅在 3/16 组配对中更快，其耗时减去遍历路径的中位差值为 +13.452 毫秒。504 次工作流唤醒从进入可运行状态到真正获得 CPU，等待时间均为 `0–1 tick`。
+性能测量共完成 30 次独立的 QEMU 启动，保存 33 份原始输出、19 个 CSV 数据表和 7,498 条结构化记录。在 96 条文件记录上的 16 组配对测试中，索引查询的核心阶段每次都快于逐项扫描，中位加速比为 3.118 倍；完整流程中索引路径仅在 3/16 组配对中更快，其耗时减去遍历路径的中位差值为 +13.452 毫秒。504 次工作流唤醒从进入可运行状态到真正获得 CPU，等待时间均为 `0–1 tick`。
 
 ### 1.3 系统能力概览
 
@@ -36,7 +36,7 @@
 | 延续多轮推理 | 上下文路径管理 | Context 保存请求、结果、起因、调用跨度和分支；支持直接读取、快照查询、回滚和 128 条 FIFO 淘汰 | [Context 设计](docs/modules/identity-context.md#五context-commit读取与回滚) |
 | 按属性和内容特征查找文件 | 面向 Agent 查询优化的文件系统扩展 | Metadata Catalog 组合匹配业务字段，索引缩小候选集合，查询结果进入用户管理的 Context 缓存，Typed Watch 报告结果集合变化 | [Live Query](docs/modules/live-query.md) |
 | 等待下一轮输入并协调多个 Agent | Agent Loop 内核运行机制 | Agent 无事件时在等待队列中休眠，由心跳、文件变化、IPC 或模型响应唤醒；工作流 EEVDF 按工作流结算 CPU 服务量 | [Workflow Runtime](docs/modules/workflow-runtime.md) |
-| 运行完整场景 | Agent Live 与 Nexus | 单 Agent 连续处理模型回复与工具请求；四个 Agent 在同一生命周期内分工、交接 artifact、失败后重新安排并生成报告 | [运行指南](docs/usage.md) |
+| 运行完整场景 | Agent Live 与 Nexus | 单 Agent 连续处理模型回复与工具请求；Nexus 接收任意用户任务，由模型自主选择是否以及如何调用五个工具，并结算 Task、artifact 与源码证据 | [运行指南](docs/usage.md) |
 
 ### 1.4 主要创新
 
@@ -226,7 +226,7 @@ Workflow EEVDF 把同一工作流中的进程合成一个外层调度对象。�
 
 `agentlive_ucore` 运行一个常驻 Agent 循环。Guest 保存轮次、关联编号、Tool Registry、Context 和审批状态。Host 中继负责转发串口帧、建立 TLS 连接，并与模型 Provider 交换 JSON。固定 Replay 与真实 Provider 使用同一套串口协议，便于用固定输入检查多轮工具调用。
 
-`agentnexus_ucore` 在同一工作流中创建协调、系统观察、资料检索和分析四个 Agent。协调 Agent 建立任务并分派工作，各工作进程通过内核 `MESSAGE` 和工作流内的 artifact 传递信息。节点失败时重新规划，分析 Agent 负责汇总最终报告。artifact 的 header 与 payload 通过 `agent_file_publish()` 一次交给内核；VFS 先在未命名 inode 中写完整内容，再把正式文件名接入目录。因此，正式路径要么不存在，要么能够读到完整文件；同名并发发布至多一个成功，已有内容不会被覆盖。核心应用代码位于 [`user/src/agentlive_ucore.c`](user/src/agentlive_ucore.c)、[`user/src/agentnexus_ucore.c`](user/src/agentnexus_ucore.c) 和 [`user/lib/agent_nexus.c`](user/lib/agent_nexus.c)，Host 接入代码位于 [`host_tools/agentos_console.py`](host_tools/agentos_console.py) 与 [`host_tools/agentos_relayd.py`](host_tools/agentos_relayd.py)。
+`agentnexus_ucore` 以任意非空用户输入建立本轮 root Task。每个决策轮次由模型选择直接回答，或调用 `source_search`、`source_read`、`inspect_runtime`、`draft_report` 和 `read_artifact` 之一；工具可以跳过、重复或重排，Guest 不强制固定阶段。需要 specialist 的工具会通过内核 `MESSAGE` 和 `N1` 子 Task 执行；Coordinator 在 broker 中重放计算 worker 结果并核对 digest 后才物化 artifact。Host Task ledger 核对 root/child DAG、内核身份、状态迁移和 artifact/evidence 绑定；`source_read` 还会与启动 QEMU 前已验证的 `build_source_snapshot` 重放结果对照。`draft_report` 只原样保存模型文本，`read_artifact` 只回读本轮报告，两者都不执行外部发布。核心应用代码位于 [`user/src/agentlive_ucore.c`](user/src/agentlive_ucore.c)、[`user/src/agentnexus_ucore.c`](user/src/agentnexus_ucore.c) 和 [`user/lib/agent_nexus.c`](user/lib/agent_nexus.c)，Host 接入与证明结算位于 [`host_tools/agentos_relayd.py`](host_tools/agentos_relayd.py)、[`host_tools/agentos_nexus_task_ledger.py`](host_tools/agentos_nexus_task_ledger.py) 和 [`host_tools/agentos_source_attestation.py`](host_tools/agentos_source_attestation.py)。
 
 ## 四、测试结果
 
@@ -239,7 +239,7 @@ Workflow EEVDF 把同一工作流中的进程合成一个外层调度对象。�
 | ABI 与模块契约 | `agent-uapi-check`、`agent-module-check` | 系统调用号、结构大小与字段偏移、模块依赖和状态转换 |
 | Host 自测 | `local-host-selftests` | Context、Execution Contract、资源、查询、调度、串口协议和校验器 |
 | QEMU Guest | `agentos-test` | Agent identity、VFS、工具、事件、调度、内存、故障和生命周期 |
-| 常驻应用 | 控制台与 Nexus Replay | 多轮工具、审批、任务分派、重新规划、artifact 和会话关闭 |
+| 常驻应用 | 控制台与 Nexus Replay | Console 的多轮工具/审批；Nexus 的自主直接回答或五工具选择、Task ledger、source attestation、report readback 和会话关闭 |
 | 系统对照 | `dual-platform-run` | 普通 uCore 与 AgentOS-uCore 的业务结果和端到端耗时 |
 
 五项赛题能力另由 `agenteval_ucore` 在同一个 RISC-V64 Guest 程序中串联验收，Host 再核对负载指纹、结果指纹和固定输出字段：
@@ -256,7 +256,7 @@ AGENT_TEST_CASE=agentpublish_ucore \
   make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-本节复现的是冻结在源码提交 `2b14fb1f74b9bd093e6de939a16554620835699e` 的性能批次；当前版本后续功能改动由独立功能回归覆盖，以下数字仍按该批次原样报告。性能测试在 WSL2 Host 上运行，Guest 为 QEMU RISC-V64 `virt` 单 Hart，使用 `riscv64-linux-gnu-gcc 15.2.0` 编译，QEMU 版本为 `10.2.1`。30 次独立启动覆盖 Live Query、Agent Task 和工作流 EEVDF。测试清单、校验结果、原始串口输出和逐样本 CSV 均保存在 [`one_shot_metrics/data/20260811`](one_shot_metrics/data/20260811/)。测试入口和故障检查项见[测试文档](docs/testing.md)。
+性能测试在 WSL2 Host 上运行，Guest 为 QEMU RISC-V64 `virt` 单 Hart，使用 `riscv64-linux-gnu-gcc 15.2.0` 编译，QEMU 版本为 `10.2.1`。30 次独立启动覆盖 Live Query、Agent Task 和工作流 EEVDF。测试清单、校验结果、原始串口输出和逐样本 CSV 均保存在 [`one_shot_metrics/data/20260811`](one_shot_metrics/data/20260811/)。测试入口和故障检查项见[测试文档](docs/testing.md)。
 
 ### 4.2 Live Query 性能
 
@@ -302,7 +302,7 @@ AgentOS-uCore 已经把 Agent 从创建、交互、记录 Context、查询文件
 
 ### 5.3 后续工作
 
-下一阶段将为 Live Query 增加分页与复合索引，并补充多 Hart 下的工作流调度和资源记账测试。Task Channel 将继续验证长 Provider 延迟、异步积压和队列饱和时的 backpressure。Nexus 也会增加新的角色分工模板，延长真实 Provider 会话时间。新负载仍按现有方法保存逐样本数据。
+下一阶段将为 Live Query 增加分页与复合索引，并补充多 Hart 下的工作流调度和资源记账测试。Task Channel 将继续验证长 Provider 延迟、异步积压和队列饱和时的 backpressure。Nexus 将补充更多任务类型和更长真实 Provider 会话的自主决策、证据结算与取消测试。新负载仍按现有方法保存逐样本数据。
 
 ## 六、运行与文档
 

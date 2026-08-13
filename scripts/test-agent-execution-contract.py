@@ -102,8 +102,8 @@ def validate_llm_correlation(core: str) -> None:
     )
     require(
         core,
-        "#define AGENT_LLM_PENDING_TTL_TICKS (120ULL * TICKS_PER_SEC)",
-        "LLM pending expiry must use an explicit kernel-tick TTL",
+        "#define AGENT_LLM_PENDING_TTL_TICKS (660ULL * TICKS_PER_SEC)",
+        "LLM response authority must cover the 600-second Host deadline plus slack",
     )
     require(
         core,
@@ -1934,6 +1934,13 @@ class ExecutionContractTests(unittest.TestCase):
             "os/agent_core.c",
             "pending->active = 1;",
             "pending->active = 0;",
+        )
+
+    def test_llm_pending_ttl_regression_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_core.c",
+            "#define AGENT_LLM_PENDING_TTL_TICKS (660ULL * TICKS_PER_SEC)",
+            "#define AGENT_LLM_PENDING_TTL_TICKS (120ULL * TICKS_PER_SEC)",
         )
 
     def test_llm_wrong_relay_match_mutation_is_rejected(self) -> None:

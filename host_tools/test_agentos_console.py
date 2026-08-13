@@ -620,6 +620,152 @@ class InteractiveSessionTests(unittest.TestCase):
 
 
 class LocalEndpointAndRenderingTests(unittest.TestCase):
+    @staticmethod
+    def _bare_endpoints() -> daemon.LocalEndpoints:
+        endpoints = daemon.LocalEndpoints.__new__(daemon.LocalEndpoints)
+        endpoints.stopping = threading.Event()
+        endpoints._lock = threading.RLock()
+        endpoints._controller = None
+        endpoints._observers = set()
+        endpoints.controller_initial = None
+        endpoints.observer_initial = None
+        return endpoints
+
+    def test_endpoint_admission_preserves_controller_and_observer_prefixes(self) -> None:
+        class AdmissionPeer:
+            def __init__(self, role, endpoints) -> None:
+                self.role = role
+                self.endpoints = endpoints
+                self.closed = threading.Event()
+                self.sent = []
+
+            def send(self, value):
+                self.sent.append(dict(value))
+                return True
+
+            def close(self):
+                if not self.closed.is_set():
+                    self.closed.set()
+                    self.endpoints._remove(self)
+
+        for role in ("observer", "controller"):
+            with self.subTest(role=role):
+                endpoints = self._bare_endpoints()
+                snapshot_entered = threading.Event()
+                release_snapshot = threading.Event()
+                delivery_started = threading.Event()
+                delivery_done = threading.Event()
+                lock_was_held = []
+
+                def initial():
+                    snapshot_entered.set()
+                    self.assertTrue(release_snapshot.wait(1))
+                    return {"type": "role_initial", "role": role}
+
+                if role == "observer":
+                    endpoints.observer_initial = initial
+                else:
+                    endpoints.controller_initial = initial
+                peer = AdmissionPeer(role, endpoints)
+                admission = []
+                admit_thread = threading.Thread(
+                    target=lambda: admission.append(endpoints._admit_peer(peer))
+                )
+                admit_thread.start()
+                self.assertTrue(snapshot_entered.wait(1))
+
+                live = {"type": "live_event", "role": role}
+
+                def deliver() -> None:
+                    acquired = endpoints._lock.acquire(blocking=False)
+                    lock_was_held.append(not acquired)
+                    if acquired:
+                        endpoints._lock.release()
+                    delivery_started.set()
+                    if role == "observer":
+                        endpoints.broadcast(live)
+                    else:
+                        endpoints.send_controller(live)
+                    delivery_done.set()
+
+                delivery_thread = threading.Thread(target=deliver)
+                delivery_thread.start()
+                self.assertTrue(delivery_started.wait(1))
+                self.assertEqual(lock_was_held, [True])
+                self.assertFalse(delivery_done.wait(0.02))
+                release_snapshot.set()
+                admit_thread.join(1)
+                delivery_thread.join(1)
+
+                self.assertFalse(admit_thread.is_alive())
+                self.assertFalse(delivery_thread.is_alive())
+                self.assertEqual(admission, [(True, None)])
+                self.assertEqual(
+                    peer.sent,
+                    [
+                        {"type": "welcome", "role": role},
+                        {"type": "role_initial", "role": role},
+                        live,
+                    ],
+                )
+                if role == "observer":
+                    self.assertIn(peer, endpoints._observers)
+                else:
+                    self.assertIs(endpoints._controller, peer)
+
+    def test_endpoint_admission_send_failure_and_stop_never_publish(self) -> None:
+        class AdmissionPeer:
+            def __init__(self, role, endpoints, fail_at) -> None:
+                self.role = role
+                self.endpoints = endpoints
+                self.fail_at = fail_at
+                self.closed = threading.Event()
+                self.sent = []
+
+            def send(self, value):
+                self.sent.append(dict(value))
+                if len(self.sent) == self.fail_at:
+                    self.close()
+                    return False
+                return True
+
+            def close(self):
+                if not self.closed.is_set():
+                    self.closed.set()
+                    self.endpoints._remove(self)
+
+        for role in ("observer", "controller"):
+            for fail_at in (1, 2):
+                with self.subTest(role=role, fail_at=fail_at):
+                    endpoints = self._bare_endpoints()
+                    setattr(
+                        endpoints,
+                        f"{role}_initial",
+                        lambda: {"type": "role_initial", "role": role},
+                    )
+                    peer = AdmissionPeer(role, endpoints, fail_at)
+                    result = []
+                    worker = threading.Thread(
+                        target=lambda: result.append(endpoints._admit_peer(peer))
+                    )
+                    worker.start()
+                    worker.join(1)
+                    self.assertFalse(worker.is_alive(), "send failure deadlocked admission")
+                    self.assertEqual(result, [(False, None)])
+                    self.assertTrue(peer.closed.is_set())
+                    self.assertIsNone(endpoints._controller)
+                    self.assertNotIn(peer, endpoints._observers)
+
+            with self.subTest(role=role, stopping=True):
+                endpoints = self._bare_endpoints()
+                endpoints.stopping.set()
+                peer = AdmissionPeer(role, endpoints, fail_at=99)
+                self.assertEqual(endpoints._admit_peer(peer), (False, None))
+                self.assertEqual(peer.sent, [])
+                self.assertTrue(peer.closed.is_set())
+                self.assertIsNone(endpoints._controller)
+                self.assertNotIn(peer, endpoints._observers)
+
     def test_stale_controller_queue_is_dropped_in_memory(self) -> None:
         class FakePeer:
             role = "controller"
@@ -823,6 +969,76 @@ class LocalEndpointAndRenderingTests(unittest.TestCase):
                     result = cli.main(["--state-file", "unused"])
                 self.assertEqual(result, 1)
                 self.assertEqual(connection.values[-1], {"type": "session_close"})
+
+    def test_cli_script_keeps_hash_tasks_and_task_file_is_one_exact_turn(self) -> None:
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.events = [
+                    {"type": "welcome", "role": "controller", "guest_profile": "nexus"},
+                    {"type": "session_ready", "session_id": SESSION, "guest_profile": "nexus"},
+                    {"type": "turn_complete", "turn_id": 1, "status": "completed"},
+                    {"type": "session_closed"},
+                ]
+                self.values = []
+                self.approval_binding = None
+
+            def next(self, _timeout=None):
+                return self.events.pop(0)
+
+            def send(self, value):
+                self.values.append(value)
+
+            def close(self):
+                pass
+
+        def run(connection: FakeConnection, argv: list[str], source=None) -> int:
+            patches = [
+                mock.patch.object(
+                    cli.local,
+                    "load_state",
+                    return_value={"provider": "replay", "guest_profile": "nexus"},
+                ),
+                mock.patch.object(cli.local, "connect_from_state", return_value=object()),
+                mock.patch.object(cli, "ConsoleConnection", return_value=connection),
+                mock.patch.object(cli.sys, "stdout", io.StringIO()),
+                mock.patch.object(cli.sys, "stderr", io.StringIO()),
+            ]
+            if source is not None:
+                patches.append(
+                    mock.patch.object(cli, "_lines", return_value=(source, True))
+                )
+            with patches[0], patches[1], patches[2], patches[3], patches[4]:
+                if source is not None:
+                    with patches[5]:
+                        return cli.main(argv)
+                return cli.main(argv)
+
+        script = FakeConnection()
+        self.assertEqual(
+            run(script, ["--state-file", "unused"], io.StringIO("# exact task\n")),
+            0,
+        )
+        self.assertEqual(
+            script.values[0],
+            {"type": "user_message", "content": "# exact task"},
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "task.txt"
+            content = "  # first line\r\nsecond line\rtrailing spaces  "
+            path.write_bytes(content.encode("utf-8"))
+            task_file = FakeConnection()
+            self.assertEqual(
+                run(
+                    task_file,
+                    ["--state-file", "unused", "--task-file", str(path)],
+                ),
+                0,
+            )
+        self.assertEqual(
+            task_file.values[0],
+            {"type": "user_message", "content": content},
+        )
 
     def test_cli_ctrl_c_at_approval_cancels_the_turn(self) -> None:
         binding = {
@@ -1224,7 +1440,7 @@ class LocalEndpointAndRenderingTests(unittest.TestCase):
         self.assertFalse(writing_peer.output_idle())
 
         endpoints = daemon.LocalEndpoints.__new__(daemon.LocalEndpoints)
-        endpoints._lock = threading.Lock()
+        endpoints._lock = threading.RLock()
         endpoints._controller = None
         endpoints._observers = {writing_peer}
         settled = threading.Event()
@@ -1298,6 +1514,9 @@ class LocalEndpointAndRenderingTests(unittest.TestCase):
             **connection.approval_binding,
         }
         self.assertEqual(cli._send_command(connection, "hello"), "turn")  # type: ignore[arg-type]
+        self.assertEqual(cli._send_command(connection, "  exact goal  "), "turn")  # type: ignore[arg-type]
+        self.assertEqual(cli._send_command(connection, "/kernel review"), "turn")  # type: ignore[arg-type]
+        self.assertEqual(cli._send_command(connection, "/status "), "turn")  # type: ignore[arg-type]
         self.assertEqual(cli._send_command(connection, "/approve session"), "approval")  # type: ignore[arg-type]
         self.assertEqual(cli._send_command(connection, "/deny"), "approval")  # type: ignore[arg-type]
         self.assertEqual(cli._send_command(connection, "/status"), "control")  # type: ignore[arg-type]
@@ -1310,6 +1529,9 @@ class LocalEndpointAndRenderingTests(unittest.TestCase):
             connection.values,
             [
                 {"type": "user_message", "content": "hello"},
+                {"type": "user_message", "content": "  exact goal  "},
+                {"type": "user_message", "content": "/kernel review"},
+                {"type": "user_message", "content": "/status "},
                 bound_once,
                 bound_deny,
                 {"type": "command", "command": "status"},

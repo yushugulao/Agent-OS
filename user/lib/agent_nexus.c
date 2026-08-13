@@ -484,9 +484,12 @@ static int nexus_base64_decode(const char *input, unsigned int length,
 static int nexus_task_type_valid(int task_type)
 {
 	switch (task_type) {
-	case AGENT_NEXUS_TASK_SYSTEM_SNAPSHOT:
-	case AGENT_NEXUS_TASK_LOCAL_RESEARCH:
-	case AGENT_NEXUS_TASK_COMPOSE_REPORT:
+	case AGENT_NEXUS_TASK_INSPECT_RUNTIME:
+	case AGENT_NEXUS_TASK_INSPECT_PROCESSES:
+	case AGENT_NEXUS_TASK_INSPECT_CONTEXT:
+	case AGENT_NEXUS_TASK_SOURCE_SEARCH:
+	case AGENT_NEXUS_TASK_SOURCE_READ:
+	case AGENT_NEXUS_TASK_DRAFT_REPORT:
 	case AGENT_NEXUS_TASK_USER_TURN:
 	case AGENT_NEXUS_TASK_MODEL_REQUEST:
 	case AGENT_NEXUS_TASK_APPROVAL:
@@ -496,6 +499,13 @@ static int nexus_task_type_valid(int task_type)
 	default:
 		return 0;
 	}
+}
+
+static int nexus_system_task_type(int task_type)
+{
+	return task_type == AGENT_NEXUS_TASK_INSPECT_RUNTIME ||
+	       task_type == AGENT_NEXUS_TASK_INSPECT_PROCESSES ||
+	       task_type == AGENT_NEXUS_TASK_INSPECT_CONTEXT;
 }
 
 int agent_nexus_task_validate(const struct agent_nexus_task *task)
@@ -508,7 +518,13 @@ int agent_nexus_task_validate(const struct agent_nexus_task *task)
 	    task->reserved != 0 || task->lifecycle_id == 0 ||
 	    task->lifecycle_generation == 0 || task->deadline_tick == 0)
 		return 0;
-	if (task->kind != AGENT_NEXUS_TASK_PROGRESS) {
+	if (task->kind == AGENT_NEXUS_TASK_ASSIGN &&
+	    nexus_system_task_type(task->status)) {
+		if (task->flags != (AGENT_NEXUS_TASK_F_HAS_INPUT |
+				    AGENT_NEXUS_TASK_F_HAS_SECONDARY) ||
+		    (task->value0 == 0 && task->value1 == 0))
+			return 0;
+	} else if (task->kind != AGENT_NEXUS_TASK_PROGRESS) {
 		unsigned int value1_flags = task->flags &
 			(AGENT_NEXUS_TASK_F_HAS_SECONDARY |
 			 AGENT_NEXUS_TASK_F_HAS_RESULT);
@@ -1285,7 +1301,7 @@ int agent_nexus_artifact_actor_current(
 
 static int nexus_artifact_kind_valid(unsigned int kind)
 {
-	return kind >= AGENT_NEXUS_ARTIFACT_SEED &&
+	return kind >= AGENT_NEXUS_ARTIFACT_TOOL_INPUT &&
 	       kind <= AGENT_NEXUS_ARTIFACT_APPROVAL;
 }
 
@@ -1393,7 +1409,7 @@ static int nexus_owned_manifest_valid(
 	if (manifest->materializer.product_role == AGENT_NEXUS_ROLE_ANALYST)
 		return manifest->kind == AGENT_NEXUS_ARTIFACT_REPORT;
 	if (manifest->materializer.product_role == AGENT_NEXUS_ROLE_COORDINATOR)
-		return manifest->kind == AGENT_NEXUS_ARTIFACT_SEED ||
+		return manifest->kind == AGENT_NEXUS_ARTIFACT_TOOL_INPUT ||
 		       manifest->kind == AGENT_NEXUS_ARTIFACT_MODEL_REQUEST ||
 		       manifest->kind == AGENT_NEXUS_ARTIFACT_TASK_CAPSULE ||
 		       manifest->kind == AGENT_NEXUS_ARTIFACT_APPROVAL;
@@ -1446,7 +1462,7 @@ static int nexus_manifest_relationship_valid(
 	if (manifest->materializer.product_role == AGENT_NEXUS_ROLE_ANALYST)
 		return manifest->kind == AGENT_NEXUS_ARTIFACT_REPORT;
 	if (manifest->materializer.product_role == AGENT_NEXUS_ROLE_COORDINATOR)
-		return manifest->kind == AGENT_NEXUS_ARTIFACT_SEED ||
+		return manifest->kind == AGENT_NEXUS_ARTIFACT_TOOL_INPUT ||
 		       manifest->kind == AGENT_NEXUS_ARTIFACT_MODEL_REQUEST ||
 		       manifest->kind == AGENT_NEXUS_ARTIFACT_TASK_CAPSULE ||
 		       manifest->kind == AGENT_NEXUS_ARTIFACT_APPROVAL;

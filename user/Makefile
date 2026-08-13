@@ -56,7 +56,8 @@ LIB_OBJS := $(patsubst %.c,$(obj_dir)/%.o,$(LIB_C))
 CRT_OBJ := $(obj_dir)/$(arch_dir)/crt.o
 SRCS := $(wildcard $(app_dir)/*.c)
 APPS := $(patsubst $(app_dir)/%.c,%,$(SRCS))
-GENERATED_HEADERS := $(generated_dir)/rp_host_action_seed.h
+NEXUS_SOURCE_ANCHOR_HEADER := $(generated_dir)/agent_nexus_source_anchor.h
+GENERATED_HEADERS := $(generated_dir)/rp_host_action_seed.h $(NEXUS_SOURCE_ANCHOR_HEADER)
 EVALUATION_HEADER := $(generated_dir)/agenteval_seed.h
 AGENT_EVAL_CHALLENGE_HEX ?= 0000000000000001
 USER_BUILD_CONFIG := $(build_dir)/.user-build-config
@@ -77,6 +78,12 @@ USER_STACK_CONTRACT_CHECKER := ../scripts/check-user-stack-contract.py
 WORKER_BATCH_CHECKER := ../scripts/check-rp-worker-batches.py
 WORKER_BATCH_SELFTEST := ../scripts/test-rp-worker-batches.py
 STACK_USAGE_DIR ?= $(build_dir)/stack-usage
+# The Nexus source scanner runs below the Agent worker and builder frames on a
+# single-page uCore stack.  Keep every actual RISC-V frame comfortably bounded.
+override NEXUS_SOURCE_STACK_FRAME_MAX := 512
+override NEXUS_SOURCE_STACK_HOT_FRAME_MAX := 192
+override NEXUS_SOURCE_STACK_GUARD := \
+	-Werror=frame-larger-than=$(NEXUS_SOURCE_STACK_FRAME_MAX)
 
 CH2_BASE_TESTS := ch2b_
 CH3_BASE_TESTS := ch3b_ $(CH2_BASE_TESTS)
@@ -194,9 +201,23 @@ STACK_USAGE_CFLAGS += $(USER_EXTRA_CFLAGS)
 
 .PHONY: binary target clean stack-usage-build user-stack-check worker-batch-check worker-batch-selftest .FORCE
 
-$(GENERATED_HEADERS):
+$(generated_dir)/rp_host_action_seed.h:
 	@mkdir -p $(@D)
 	@printf '%s\n' '#ifndef __RP_HOST_ACTION_SEED_H__' '#define __RP_HOST_ACTION_SEED_H__' '#define RP_HOST_ACTION_SEED ""' '#define RP_HOST_ACTION_BOOTSTRAP_SEED ""' '#endif' > $@
+
+$(NEXUS_SOURCE_ANCHOR_HEADER):
+	@mkdir -p $(@D)
+	@printf '%s\n' \
+		'#ifndef USER_AGENT_NEXUS_SOURCE_ANCHOR_H' \
+		'#define USER_AGENT_NEXUS_SOURCE_ANCHOR_H' \
+		'#define AGENT_NEXUS_SOURCE_ANCHOR_SCOPE "build_source_snapshot"' \
+		'#define AGENT_NEXUS_SOURCE_ANCHOR_ALLOWLIST "os/,include/,user/lib/,user/include/"' \
+		'#define AGENT_NEXUS_SOURCE_ANCHOR_REVISION ""' \
+		'#define AGENT_NEXUS_SOURCE_ANCHOR_MANIFEST_SHA256 ""' \
+		'#define AGENT_NEXUS_SOURCE_ANCHOR_SOURCE_COUNT 0U' \
+		'#define AGENT_NEXUS_SOURCE_ANCHOR_VOLUME_COUNT 0U' \
+		'#define AGENT_NEXUS_SOURCE_ANCHOR_SOURCE_BYTES 0ULL' \
+		'#endif' > $@
 
 $(EVALUATION_HEADER): .FORCE
 	@mkdir -p $(@D)
@@ -223,6 +244,8 @@ $(obj_dir)/%.o: %.c $(GENERATED_HEADERS)
 	@mkdir -p $(@D)
 	$(CC_CMD) $(CFLAGS) -c $< -o $@
 
+$(obj_dir)/lib/agent_nexus_source.o: CFLAGS += $(NEXUS_SOURCE_STACK_GUARD)
+
 $(obj_dir)/worker_batch/%.o: $(app_dir)/%.c $(GENERATED_HEADERS)
 	@mkdir -p $(@D)
 	$(CC_CMD) $(CFLAGS) -Dmain=$*_worker_entry -c $< -o $@
@@ -232,6 +255,9 @@ $(STACK_USAGE_DIR)/user/%.o: %.c $(GENERATED_HEADERS)
 	@cd .. && $(CC_CMD) $(STACK_USAGE_CFLAGS) $(STACK_USAGE_PROFILE_CFLAGS) \
 		-fstack-usage -fcallgraph-info=su -c user/$< \
 		-o $(call shell_quote,$(abspath $@))
+
+$(STACK_USAGE_DIR)/user/lib/agent_nexus_source.o: \
+	STACK_USAGE_PROFILE_CFLAGS += $(NEXUS_SOURCE_STACK_GUARD)
 
 $(STACK_USAGE_DIR)/data-only/user/%.o: %.c $(GENERATED_HEADERS)
 	@mkdir -p $(@D)

@@ -26,7 +26,8 @@ static long agent_sched_score_at(struct thread *t, uint64 now,
 
 #define AGENT_LLM_PENDING_MAX NPROC
 #define AGENT_LLM_PENDING_PER_REQUESTER AGENT_EVENT_QUEUE_CAP
-#define AGENT_LLM_PENDING_TTL_TICKS (120ULL * TICKS_PER_SEC)
+/* Preserve response authority through the 600 s Host deadline plus 60 s slack. */
+#define AGENT_LLM_PENDING_TTL_TICKS (660ULL * TICKS_PER_SEC)
 #define AGENT_LLM_TERMINAL_HISTORY_MAX NPROC
 
 struct agent_llm_pending {
