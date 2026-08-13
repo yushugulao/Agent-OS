@@ -244,7 +244,7 @@ DeepSeek V4 provider 请求显式设置 `thinking.type=enabled` 和 `reasoning_e
 
 | 公开工具 | 执行路径 | 结果边界 |
 | --- | --- | --- |
-| `source_search` | broker 将子 Task 交给 Research specialist | 对受限 `build_source_snapshot` 执行单个不区分大小写的字面子串搜索；结果是发现线索，不是最终引用证明 |
+| `source_search` | broker 将子 Task 交给 Research specialist | 对构建时生成并经 Host 验证的 `build_source_snapshot` 执行单个不区分大小写的字面子串搜索；结果是发现线索，不是最终引用证明 |
 | `source_read` | broker 将子 Task 交给 Research specialist | 读取候选 `source_id` 的精确行，返回可由 Host 重放验证的 citation |
 | `inspect_runtime` | broker 将子 Task 交给 System specialist | 只返回当前 Guest boot 的 `system_status`、`processes` 或 `context` 观察；不具有 source attestation |
 | `draft_report` | broker 将子 Task 交给 Analyst specialist | 原样保存模型给定的内容；Analyst 不进行第二次分析，也不添加结论 |
@@ -258,7 +258,7 @@ DeepSeek V4 provider 请求显式设置 `thinking.type=enabled` 和 `reasoning_e
 
 Guest 为每轮 root Task 和每个 brokered child Task 发出 `TASK_EVENT`。Host 的 [`agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py) 不保存任务正文或工具参数原文，而是保存有界元数据与哈希。它重放 lifecycle/turn 绑定、root-child DAG、内核认证的 PID/agent/control identity、任务状态迁移、工具参数 digest、artifact/evidence 绑定和 terminal 根哈希。未结算的子任务、不匹配的 worker 身份、被替换的 handle 或最终冻结后到达的事件都不能通过结算。
 
-源码证据不信任 Guest 自行声明的 digest。构建阶段把 `os/`、`include/`、`user/lib/` 和 `user/include/` 收录为有界 `build_source_snapshot`；Host 在 QEMU 启动前，用独立的 revision 和 manifest digest 加载并完整验证 corpus。`source_search` 的匹配只是 discovery projection。`source_read` 成功后，Host 从已验证的不可变内存副本中重建精确行、citation、chunk/artifact/projection digest，再将该证明绑定到工具与 Task ledger。源码正文作为不可信数据交给模型，不会进入 observer telemetry。最终回答中的 source-backed claim 只能使用 `source_read` 实际返回且被 Host 重放验证的 citation token。
+源码证据不信任 Guest 自行声明的 digest。构建阶段将 `os/`、`include/`、`user/lib/` 和 `user/include/` 生成 `build_source_snapshot`；Host 在 QEMU 启动前，用独立的 revision 和 manifest digest 加载并完整验证 corpus。`source_search` 的匹配只是 discovery projection。`source_read` 成功后，Host 从已验证的不可变内存副本中重建精确行、citation、chunk/artifact/projection digest，再将该证明绑定到工具与 Task ledger。源码正文作为不可信数据交给模型，不会进入 observer telemetry。最终回答中的 source-backed claim 只能使用 `source_read` 实际返回且被 Host 重放验证的 citation token。
 
 Guest 主程序位于 [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)，共用协议见 [`user/include/agent_nexus_protocol.h`](../../user/include/agent_nexus_protocol.h)，Host 自主合约、Task ledger 和 source attestation 分别位于 [`host_tools/agentos_nexus_contract.py`](../../host_tools/agentos_nexus_contract.py)、[`host_tools/agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py) 和 [`host_tools/agentos_source_attestation.py`](../../host_tools/agentos_source_attestation.py)。运行方法见[运行指南](../usage.md#4-使用-nexus-自主任务工作流)。
 
@@ -291,6 +291,6 @@ make agentos-nexus-check
 make agentos-nexus-replay TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-Guest 日志校验器检查 `broadcast_slow_watcher_isolated=1`、心跳动态调整、合并与停止、28 次没有惊群的事件交接、EEVDF 拓扑和唤醒分组等标记。固定性能数据由 [`one_shot_metrics/validate.py`](../../one_shot_metrics/validate.py) 校验。绘图数据检查覆盖 504 次准确唤醒和 6 次公平性测试启动。
+Guest 日志校验器检查 `broadcast_slow_watcher_isolated=1`、心跳动态调整、合并与停止、28 次没有惊群的事件交接、EEVDF 拓扑和唤醒分组等标记。性能数据由 [`one_shot_metrics/validate.py`](../../one_shot_metrics/validate.py) 校验。绘图数据检查覆盖 504 次准确唤醒和 6 次公平性测试启动。
 
 Agent Loop 使用[Agent 进程、地址空间与上下文路径](identity-context.md)提供的身份键，并处理[结构化交互与工具调用协议](tool-execution.md)和[文件系统查询扩展](live-query.md)产生的 terminal state 与事件。

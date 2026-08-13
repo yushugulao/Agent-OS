@@ -36,7 +36,7 @@
         <mxCell id="tool_label" value="&lt;b&gt;五个公开工具（每轮最多一个 call）&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=21;fontColor=#315F91;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="95" y="410" width="610" height="34" as="geometry"/>
         </mxCell>
-        <mxCell id="source_search" value="&lt;b&gt;source_search&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:15px&quot;&gt;受限源码快照&lt;br&gt;发现候选位置&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8F8;strokeColor=#8D66A0;strokeWidth=1.9;align=center;verticalAlign=middle;fontSize=18;fontColor=#684078;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
+        <mxCell id="source_search" value="&lt;b&gt;source_search&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:15px&quot;&gt;已验证源码快照&lt;br&gt;发现候选位置&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8F8;strokeColor=#8D66A0;strokeWidth=1.9;align=center;verticalAlign=middle;fontSize=18;fontColor=#684078;fontFamily=Microsoft YaHei;" vertex="1" parent="1">
           <mxGeometry x="95" y="465" width="185" height="100" as="geometry"/>
         </mxCell>
         <mxCell id="source_read" value="&lt;b&gt;source_read&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:15px&quot;&gt;精确行读取&lt;br&gt;Host-attested citation&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEE4F6;strokeColor=#8D66A0;strokeWidth=1.9;align=center;verticalAlign=middle;fontSize=18;fontColor=#684078;fontFamily=Microsoft YaHei;" vertex="1" parent="1">

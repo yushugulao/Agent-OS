@@ -170,7 +170,7 @@ Guest 提交请求
 | [`user/`](../user/) | Guest 封装、回归程序、Agent Loop 和 Nexus 应用 |
 | [`host_tools/`](../host_tools/) | 串口协议、模型中继、控制台和 Host 测试 |
 | [`scripts/`](../scripts/) | 静态结构检查、QEMU 回归、故障测试和日志校验 |
-| [`one_shot_metrics/`](../one_shot_metrics/) | 固定性能测量的逐样本数据、提取器、校验器和绘图入口 |
+| [`one_shot_metrics/`](../one_shot_metrics/) | 性能测量的逐样本数据、提取器、校验器和绘图入口 |
 
 模块依赖、UAPI 布局和完整 Guest 回归分别由以下命令检查：
 

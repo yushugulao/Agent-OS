@@ -25,7 +25,7 @@
 | 权限与恢复 | 越权输入、容量耗尽、故障注入和重启 | 非法请求被拒绝；恢复后状态一致，资源能够回收 | 各专项 Guest 测试和故障测试 |
 | 长时间会话 | controller、observer 和固定 provider 回复配合运行 | Console 的工具/审批路径与 Nexus 的自主决策、brokered Task、证据结算、报告回读和关闭顺序正确 | Console、Nexus replay |
 | 业务结果 | 两套镜像使用同一输入和同一结果判定程序 | 普通 uCore 与 AgentOS-uCore 得到相同结果 | `make dual-platform-run` |
-| 性能测试 | 多次独立启动；在同一测试批次内配对；遍历参数组合 | 保存每个样本的用时、I/O、唤醒等待和公平性 | `one_shot_metrics/data/20260811` |
+| 性能测试 | 多次独立启动；在同一次 QEMU 启动内配对；遍历参数组合 | 保存每个样本的用时、I/O、唤醒等待和公平性 | `one_shot_metrics/data/20260811` |
 
 普通 Guest 测试由 [`scripts/agent_test_runner.py`](../scripts/agent_test_runner.py) 监视。程序会检查完成标志、退出状态、`panic`、意外错误、输出大小、空闲时间和总超时。每个测试场景还会核对指定的标志行，确认相关内核代码确实执行。Console 和 Nexus 的固定 replay 则由各自的 Make 命令启动 Host daemon、QEMU 和检查程序。
 
@@ -214,7 +214,7 @@ make agentos-platform-build TOOLPREFIX=riscv64-linux-gnu-
 make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-普通 uCore 和 AgentOS-uCore 使用相同的输入文件，按相同顺序运行程序，并采用同一套结果判定程序。Host 从两套 Guest 镜像中提取状态，比较各阶段、文件内容、摘要、行数、程序顺序和退出状态。两边全部通过后输出：
+普通 uCore 和 AgentOS-uCore 使用相同的输入文件，按相同顺序运行程序，并采用同一套结果判定程序。Host 从两套 Guest 镜像中提取状态，比较各阶段、文件内容、摘要、输出记录数、程序顺序和退出状态。两边全部通过后输出：
 
 ```text
 [dual-platform] plain and AgentOS platforms both passed
@@ -224,7 +224,7 @@ make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 
 ## 8. 专项性能结果与数据
 
-本节汇总 Live Query、Task Channel 和 Agent Loop 三类机制的测量结果与数据入口。性能数据共独立启动 QEMU 30 次。串口原始输出、逐样本表、数据清单和检查结果保存在 [`one_shot_metrics/data/20260811`](../one_shot_metrics/data/20260811/)；[`COMPLETED`](../one_shot_metrics/data/20260811/COMPLETED) 表示本轮采集已经结束。
+本节汇总 Live Query、Task Channel 和 Agent Loop 三类机制的测量结果与数据入口。性能数据来自 30 次 QEMU 独立启动，串口原始输出、逐样本表、数据清单和检查结果保存在 [`one_shot_metrics/data/20260811`](../one_shot_metrics/data/20260811/)。
 
 | 对应机制 | 主要结果 | 对系统设计的评价 |
 | --- | --- | --- |
@@ -240,7 +240,7 @@ python3 one_shot_metrics/validate.py \
   --output ../agentos-validation.json
 ```
 
-`manifest.json` 记录了 19 个 CSV 文件，共 7,498 行。`validation.json` 检查 10 类绘图输入，包括字段格式、`AB/BA` 顺序是否平衡、配对指纹、参数组合、逐操作数据是否齐全、唤醒采样和 I/O 计数范围。采集方法、统计单位和七张图表见[性能测试](performance.md)。
+`manifest.json` 记录了 19 个 CSV 文件，共 7,498 条数据记录。`validation.json` 检查 10 类绘图输入，包括字段格式、`AB/BA` 顺序是否平衡、配对指纹、参数组合、逐操作数据是否齐全、唤醒采样和 I/O 计数范围。采集方法、统计单位和七张图表见[性能测试](performance.md)。
 
 ## 9. 运行全部检查
 

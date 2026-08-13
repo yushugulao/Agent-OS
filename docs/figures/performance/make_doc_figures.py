@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Build publication figures from the frozen 20260811 one-shot campaign.
+"""Build publication figures from the 20260811 measurement tables.
 
 The script reads CSV tables only. It refuses to place outputs inside the
-campaign directory and verifies that every input hash is unchanged after
+measurement input directory and verifies that every input hash is unchanged after
 rendering.
 """
 
@@ -918,7 +918,7 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         type=Path,
         default=script.parent,
-        help="Figure output directory; must be outside the frozen campaign.",
+        help="Figure output directory; must be outside the measurement input directory.",
     )
     parser.add_argument(
         "--formats",
@@ -948,7 +948,7 @@ def main() -> int:
     output_dir = args.output_dir.expanduser().resolve()
     campaign_root = tables.parent
     if is_within(output_dir, campaign_root):
-        raise SystemExit(f"Refusing to write inside frozen campaign: {output_dir}")
+        raise SystemExit(f"Refusing to write inside measurement input directory: {output_dir}")
     formats = [value.strip().lower() for value in args.formats.split(",") if value.strip()]
     invalid_formats = sorted(set(formats) - {"png", "pdf", "svg"})
     if invalid_formats:
@@ -982,7 +982,7 @@ def main() -> int:
 
     after = {path.name: sha256(path) for path in input_paths}
     if before != after:
-        raise RuntimeError("Frozen campaign input changed while rendering")
+        raise RuntimeError("Measurement input changed while rendering")
     manifest_path = output_dir / "figure_manifest.json"
     with manifest_path.open("w", encoding="utf-8", newline="\n") as stream:
         stream.write(

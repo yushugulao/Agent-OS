@@ -298,7 +298,7 @@ AgentOS-uCore 已经把 Agent 从创建、交互、记录 Context、查询文件
 
 ### 5.2 当前技术限制
 
-当前测试环境为 RISC-V64 QEMU 单 Hart，工作流 EEVDF 只覆盖 1 至 4 个并发工作流；多 Hart 下的调度对象迁移和并行记账还没有纳入本轮数据。Metadata Catalog 最多保存 512 条记录，单次 Live Query 最多返回 8 项且没有分页游标。Context、事件队列、Task Channel 和 Evidence Ring 都采用固定容量；现有性能数据来自短时负载，尚未覆盖长时间 Provider 延迟和大规模异步积压。调度与等待时间以 10 ms tick 为主要粒度，短于一个 tick 的差异需要借助周期计数器进一步区分。
+性能测试采用 RISC-V64 QEMU 单 Hart，工作流 EEVDF 场景覆盖 1 至 4 个并发工作流。Metadata Catalog 最多保存 512 条记录，单次 Live Query 最多返回 8 项且没有分页游标。Context、事件队列、Task Channel 和 Evidence Ring 都采用固定容量。多 Hart 调度、长 Provider 延迟和大规模异步积压仍需进一步测试；调度与等待时间以 10 ms tick 为主要粒度，短于一个 tick 的差异需要借助周期计数器进一步区分。
 
 ### 5.3 后续工作
 
@@ -369,7 +369,7 @@ AgentOS-uCore 基于 LearningOS 的 [uCore-Tutorial-Code-2025S](https://github.c
 ├── host_tools/              # 控制台、模型中继、观察器与 Host 校验器
 ├── include/                 # 内核和 Guest 共用的 ABI 与资源策略头文件
 ├── nfs/                     # uCore 文件系统镜像生成工具
-├── one_shot_metrics/        # 固定性能测量、原始数据、表格与图表
+├── one_shot_metrics/        # 性能测量数据、原始输出、表格与图表
 ├── os/                      # uCore 基础内核与 AgentOS 功能模块
 ├── scripts/                 # 构建检查、Guest 运行器与故障测试脚本
 ├── user/                    # Guest Runtime、Agent 应用与产品测试

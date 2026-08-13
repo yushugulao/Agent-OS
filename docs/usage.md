@@ -136,7 +136,7 @@ Nexus 接收任意非空用户任务。每个决策轮次由模型自行返回�
 
 | 工具 | 边界 |
 | --- | --- |
-| `source_search` | 在受限的 `build_source_snapshot` 中搜索一个字面子串；结果只用于发现候选源码 |
+| `source_search` | 在构建时生成并经 Host 验证的 `build_source_snapshot` 中搜索一个字面子串；结果只用于发现候选源码 |
 | `source_read` | 读取搜索结果的精确行并返回可由 Host 重放验证的 citation |
 | `inspect_runtime` | 通过 System specialist 读取当前 Guest boot 的状态；它是本次运行观察，不是源码证明 |
 | `draft_report` | 通过 Analyst specialist 原样保存模型自己的报告文本；worker 不添加结论 |
