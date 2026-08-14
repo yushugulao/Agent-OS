@@ -384,6 +384,20 @@ int agent_task_channel_resource(
 	return syscall(SYS_agent_task_channel_resource, request, result);
 }
 
+int agent_task_delegate_claim(
+	const struct agent_task_delegate_claim *request,
+	struct agent_task_delegate_claim_result *result)
+{
+	return syscall(SYS_agent_task_delegate_claim, request, result);
+}
+
+int agent_task_delegate_complete(
+	const struct agent_task_delegate_complete *request,
+	struct agent_task_delegate_complete_result *result)
+{
+	return syscall(SYS_agent_task_delegate_complete, request, result);
+}
+
 int agent_resource_snapshot(struct agent_resource_snapshot *snapshot)
 {
 	return syscall(SYS_agent_resource_snapshot, snapshot,

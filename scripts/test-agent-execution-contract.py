@@ -377,6 +377,12 @@ def validate_agent_loop_provenance(protocol: str, provenance: str) -> None:
             "PROV_TOOL",
             "AGENT_SIDE_EFFECT_IPC",
         ),
+        "AGENT_TOOL_DELEGATE_TASK": (
+            "AGENT_CAP_ORCHESTRATE",
+            "PROV_ACCEPT_AGENT_LOOP",
+            "PROV_DERIVED",
+            "AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA | AGENT_SIDE_EFFECT_IPC | AGENT_SIDE_EFFECT_PROCESS | AGENT_SIDE_EFFECT_PERMISSION | AGENT_SIDE_EFFECT_ARTIFACT",
+        ),
     }
     for tool_id, expected in expected_loop_tools.items():
         if security.get(tool_id) != expected:
@@ -974,6 +980,44 @@ def validate_execution_contract(sources: dict[str, str]) -> None:
         ),
         "only an identical frozen CREATE request may recover its result",
     )
+    require_regex(
+        create,
+        r"if\s*\(record->state\s*==\s*"
+        r"AGENT_EXECUTION_CONTRACT_RECLAIMED\)\s*\{\s*"
+        r"memset\(record,\s*0,\s*sizeof\(\*record\)\);\s*"
+        r"record->lifecycle\s*=\s*lifecycle;\s*\}",
+        "CREATE must recycle only a quiescent RECLAIMED record",
+    )
+    require_regex(
+        create,
+        r"else\s+if\s*\(control\.operation\s*==\s*"
+        r"AGENT_EXECUTION_CONTRACT_RETIRE\)\s*\{.*?"
+        r"record->state\s*==\s*AGENT_EXECUTION_CONTRACT_RECLAIMED\)\s*"
+        r"status\s*=\s*AGENT_STATUS_OK;.*?"
+        r"record->state\s*=\s*AGENT_EXECUTION_CONTRACT_RETIRING;.*?"
+        r"record->bare_inflight\s*!=\s*0\s*\|\|\s*"
+        r"record->running_count\s*!=\s*0\)\s*"
+        r"status\s*=\s*AGENT_STATUS_RETRY;.*?"
+        r"record->state\s*=\s*"
+        r"AGENT_EXECUTION_CONTRACT_RECLAIMED;\s*\}",
+        "RETIRE must close admission, wait for exact refs, and publish RECLAIMED",
+    )
+    require_regex(
+        create,
+        r"else\s+if\s*\(record->state\s*==\s*"
+        r"AGENT_EXECUTION_CONTRACT_RECLAIMED\)\s*\{\s*"
+        r"(?:/\*.*?\*/\s*)?status\s*=\s*AGENT_STATUS_OK;\s*\}",
+        "QUERY must retain the exact RECLAIMED snapshot until the next CREATE",
+    )
+    require_regex(
+        create,
+        r"control\.operation\s*==\s*AGENT_EXECUTION_CONTRACT_QUERY\s*&&\s*"
+        r"control\.nodes\s*!=\s*0\).*?"
+        r"record->bare_inflight\+\+;\s*query_pinned\s*=\s*1;.*?"
+        r"agent_execution_contract_node_export\(record,\s*i,\s*&node\);.*?"
+        r"if\s*\(query_pinned\).*?record->bare_inflight--;",
+        "QUERY node export must pin the record against RECLAIMED generation reuse",
+    )
 
     effects = function_body(syscall, "syscall_direct_agent_side_effects")
     for syscall_id in (
@@ -994,6 +1038,11 @@ def validate_execution_contract(sources: dict[str, str]) -> None:
         slow_path,
         (
             "syscall_transaction_prepare(",
+            "transaction->file->type == FD_INODE",
+            "agent_execution_contract_file_pin_enter(",
+            "curr_proc(), file_pin_guard",
+            "if (ret != AGENT_STATUS_OK)",
+            "goto finish",
             "direct_side_effects = syscall_direct_agent_side_effects(",
             "agent_execution_contract_gate_direct_syscall(",
             "if (ret != AGENT_STATUS_OK)",
@@ -1010,31 +1059,35 @@ def validate_execution_contract(sources: dict[str, str]) -> None:
         "\t\t\tcurr_proc(), id, direct_side_effects, direct_guard)",
         "write effect authority no longer uses its independent direct guard",
     )
-    forbid(slow_path, "file_pin_guard", "slow path owns the outer file-pin cut")
+    require(
+        slow_path,
+        "id == SYS_read || id == SYS_write || id == SYS_fstat ||\n"
+        "\t     id == SYS_agent_task_channel_resource",
+        "inode publication cut no longer covers the exact descriptor calls",
+    )
+    if slow_path.count("agent_execution_contract_file_pin_enter(") != 1:
+        raise ContractError("inode publication cut is not uniquely acquired")
     fstat = function_body(syscall, "sys_fstat")
     require_order(
         fstat,
         (
-            "f = fdget(fd)",
+            "if (f == 0)",
             "agent_provenance_merge_current(",
             "copyout(p->pagetable, stataddr",
-            "fileclose(f)",
         ),
-        "fstat no longer settles its pinned identity before returning",
+        "fstat no longer consumes the transaction-pinned identity",
     )
+    forbid(fstat, "fdget(fd)", "fstat repins a racy descriptor identity")
+    forbid(fstat, "fileclose(f)", "fstat releases the transaction-owned pin")
     forbid(fstat, "file_pin_guard", "fstat owns a nested file-pin cut")
     dispatch = function_body(syscall, "syscall")
     require_order(
         dispatch,
         (
-            "id == SYS_read || id == SYS_write || id == SYS_fstat",
-            "agent_execution_contract_file_pin_enter(",
-            "curr_proc(), &file_pin_guard",
-            "if (ret != AGENT_STATUS_OK)",
-            "operation_denied = 1",
-            "goto operation_done",
             "if (syscall_needs_transaction(class))",
             "syscall_slow_path(",
+            "&direct_guard",
+            "&file_pin_guard",
             "&operation_denied",
             "direct_side_effects = syscall_direct_agent_side_effects(",
             "agent_execution_contract_gate_direct_syscall(",
@@ -1053,7 +1106,7 @@ def validate_execution_contract(sources: dict[str, str]) -> None:
         ),
         "file/direct guards do not cover dispatch, settlement, and background work",
     )
-    if dispatch.count("agent_execution_contract_file_pin_enter(") != 1 or (
+    if dispatch.count("agent_execution_contract_file_pin_enter(") != 0 or (
         dispatch.count("agent_execution_contract_file_pin_leave(") != 1
     ):
         raise ContractError("outer file-pin cut is not exactly balanced")
@@ -1067,7 +1120,8 @@ def validate_execution_contract(sources: dict[str, str]) -> None:
     require_order(
         direct_gate,
         (
-            "agent_execution_contract_direct_enter(p, guard)",
+            "agent_execution_contract_direct_enter(",
+            "side_effect_mask, guard)",
             "agent_provenance_prepare_denial(",
             "agent_provenance_append_security_denial(",
             "status != AGENT_STATUS_DENIED || ticket == 0",
@@ -1504,6 +1558,23 @@ def mutated(path: str, old: str, new: str, *, count: int = 1) -> dict[str, str]:
     return sources
 
 
+def mutated_occurrence(
+    path: str, old: str, new: str, occurrence: int
+) -> dict[str, str]:
+    sources = dict(SOURCES)
+    parts = sources[path].split(old)
+    if occurrence <= 0 or occurrence >= len(parts):
+        raise AssertionError(
+            f"mutation occurrence missing in {path}: {old!r} #{occurrence}"
+        )
+    sources[path] = (
+        old.join(parts[:occurrence])
+        + new
+        + old.join(parts[occurrence:])
+    )
+    return sources
+
+
 @dataclass
 class DagNode:
     predecessors: int
@@ -1835,6 +1906,39 @@ class FilePinCutModel:
         operation_denied: bool, direct_active: bool, file_pin_active: bool
     ) -> bool:
         return not operation_denied or direct_active or file_pin_active
+
+
+@dataclass
+class ContractRetireModel:
+    generation: int = 0
+    state: str = "EMPTY"
+    bare_inflight: int = 0
+    running_count: int = 0
+
+    def create(self) -> int:
+        if self.bare_inflight != 0 or self.running_count != 0:
+            raise BlockingIOError("contract references are live")
+        if self.state not in ("EMPTY", "RECLAIMED"):
+            raise FileExistsError("contract generation is still authoritative")
+        self.generation += 1
+        self.state = "FROZEN"
+        return self.generation
+
+    def retire(self, generation: int) -> tuple[str, str]:
+        if generation != self.generation:
+            return "STALE", self.state
+        if self.state == "RECLAIMED":
+            return "OK", self.state
+        if self.state not in ("FROZEN", "RETIRING"):
+            return "NOT_FOUND", self.state
+        self.state = "RETIRING"
+        if self.bare_inflight != 0 or self.running_count != 0:
+            return "RETRY", self.state
+        self.state = "RECLAIMED"
+        return "OK", self.state
+
+    def direct_allowed(self) -> bool:
+        return self.state not in ("FROZEN", "RETIRING")
 
 
 @dataclass(frozen=True)
@@ -2293,15 +2397,22 @@ class ExecutionContractTests(unittest.TestCase):
     def test_file_pin_building_retry_cannot_dispatch(self) -> None:
         self.assert_mutation_rejected(
             "os/syscall.c",
-            "\t\t\t\toperation_denied = 1;\n"
-            "\t\t\t\tgoto operation_done;\n"
-            "\t\t\t}\n"
+            "\t\t\t*operation_denied = 1;\n"
+            "\t\t\tgoto finish;\n"
             "\t\t}\n"
-            "\t\tif (syscall_needs_transaction(class)) {",
-            "\t\t\t\toperation_denied = 1;\n"
-            "\t\t\t}\n"
+            "\t}\n"
+            "\tdirect_side_effects = syscall_direct_agent_side_effects(",
+            "\t\t\t*operation_denied = 1;\n"
             "\t\t}\n"
-            "\t\tif (syscall_needs_transaction(class)) {",
+            "\t}\n"
+            "\tdirect_side_effects = syscall_direct_agent_side_effects(",
+        )
+
+    def test_pipe_read_cannot_pin_contract_publication_cut(self) -> None:
+        self.assert_mutation_rejected(
+            "os/syscall.c",
+            "transaction->file->type == FD_INODE",
+            "transaction->file->type == FD_PIPE",
         )
 
     def test_frozen_file_pin_denial_mutation_is_rejected(self) -> None:
@@ -2314,6 +2425,27 @@ class ExecutionContractTests(unittest.TestCase):
         new = old.replace("AGENT_STATUS_OK", "AGENT_STATUS_DENIED")
         self.assert_mutation_rejected(
             "os/agent_execution_contract.c", old, new
+        )
+
+    def test_retire_reclaimed_transition_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_execution_contract.c",
+            "record->state =\n\t\t\t\t\tAGENT_EXECUTION_CONTRACT_RECLAIMED;",
+            "record->state = AGENT_EXECUTION_CONTRACT_RETIRING;",
+        )
+
+    def test_reclaimed_create_recycle_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_execution_contract.c",
+            "record->state == AGENT_EXECUTION_CONTRACT_RECLAIMED",
+            "record->state == AGENT_EXECUTION_CONTRACT_RETIRING",
+        )
+
+    def test_reclaimed_query_pin_mutation_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            "os/agent_execution_contract.c",
+            "query_pinned = 1;",
+            "query_pinned = 0;",
         )
 
     def test_fstat_removed_from_outer_pin_cut_is_rejected(self) -> None:
@@ -2438,11 +2570,15 @@ class ExecutionContractTests(unittest.TestCase):
         )
 
     def test_v3_denial_without_ticket_mutation_is_rejected(self) -> None:
-        self.assert_mutation_rejected(
-            "os/agent_core.c",
-            "status != AGENT_STATUS_STALE) || ticket == 0",
-            "status != AGENT_STATUS_STALE)",
-        )
+        with self.assertRaises(ContractError):
+            validate_execution_contract(
+                mutated_occurrence(
+                    "os/agent_core.c",
+                    "status != AGENT_STATUS_STALE) || ticket == 0",
+                    "status != AGENT_STATUS_STALE)",
+                    2,
+                )
+            )
 
     def test_v3_zero_request_id_denial_bypass_is_rejected(self) -> None:
         self.assert_mutation_rejected(
@@ -2487,11 +2623,15 @@ class ExecutionContractTests(unittest.TestCase):
         )
 
     def test_timeout_sync_terminal_tick_substitution_is_rejected(self) -> None:
-        self.assert_mutation_rejected(
-            "os/agent_core.c",
-            "outcome->terminal_tick = now;",
-            "outcome->terminal_tick = request_deadline_tick;",
-        )
+        with self.assertRaises(ContractError):
+            validate_execution_contract(
+                mutated_occurrence(
+                    "os/agent_core.c",
+                    "outcome->terminal_tick = now;",
+                    "outcome->terminal_tick = request_deadline_tick;",
+                    4,
+                )
+            )
 
     def test_post_effect_deadline_uses_terminal_tick(self) -> None:
         self.assert_mutation_rejected(
@@ -2575,8 +2715,10 @@ class ExecutionContractTests(unittest.TestCase):
     def test_retiring_task_validate_must_remain_pending(self) -> None:
         self.assert_mutation_rejected(
             "os/agent_task_bridge.c",
-            "return AGENT_TASK_HOOK_PENDING;",
-            "return AGENT_TASK_HOOK_DENIED;",
+            "validation->output_provenance_labels = 0;\n"
+            "\treturn AGENT_TASK_HOOK_PENDING;",
+            "validation->output_provenance_labels = 0;\n"
+            "\treturn AGENT_TASK_HOOK_DENIED;",
         )
 
     def test_retiring_task_admit_status_swap_is_rejected(self) -> None:
@@ -2813,6 +2955,28 @@ class ExecutionContractTests(unittest.TestCase):
         self.assertTrue(allowed(True, True, False))
         self.assertTrue(allowed(True, False, True))
         self.assertTrue(allowed(False, False, False))
+
+    def test_contract_retire_model_drains_replays_and_recycles_generation(self) -> None:
+        model = ContractRetireModel()
+        first = model.create()
+        model.running_count = 1
+        self.assertEqual(model.retire(first), ("RETRY", "RETIRING"))
+        self.assertFalse(model.direct_allowed())
+        model.running_count = 0
+        self.assertEqual(model.retire(first), ("OK", "RECLAIMED"))
+        self.assertEqual(model.retire(first), ("OK", "RECLAIMED"))
+        self.assertTrue(model.direct_allowed())
+        second = model.create()
+        self.assertGreater(second, first)
+        self.assertEqual(model.retire(first)[0], "STALE")
+
+    def test_contract_retire_model_waits_for_direct_cut(self) -> None:
+        model = ContractRetireModel()
+        generation = model.create()
+        model.bare_inflight = 1
+        self.assertEqual(model.retire(generation), ("RETRY", "RETIRING"))
+        model.bare_inflight = 0
+        self.assertEqual(model.retire(generation), ("OK", "RECLAIMED"))
 
     def test_fail_closed_denial_model_requires_ticket(self) -> None:
         def direct_effect(enforced: bool, ticket: int) -> str:

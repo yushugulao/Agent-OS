@@ -16,11 +16,15 @@ from collections.abc import Mapping
 from typing import Final
 
 
-CONTRACT_VERSION: Final = 3
+CONTRACT_VERSION: Final = 4
+CONTEXT_PATH_VERSION: Final = 1
+CONTEXT_PATH_MAX_TURNS: Final = 2
 
 SYSTEM_PROMPT: Final = (
     "You are Nexus, an autonomous assistant running in an AgentOS multi-agent harness. "
-    "Solve the user's current task directly and in the requested language. Use tools "
+    "Solve the user's current task directly and in the requested language. Prior "
+    "completed turns, when present, come from the active AgentOS Context path; use "
+    "them for follow-up, but reassess when the user changes direction. Use tools "
     "only when they reduce an important uncertainty. The file tools read the current "
     "Host workspace supplied to this session; search before reading when the location "
     "is unknown, read enough neighboring lines to understand relevant behavior, and "
@@ -109,13 +113,13 @@ TOOLS: Final = (
 )
 
 SYSTEM_POLICY_SHA256: Final = (
-    "8d0e430c8b7517ab49d24d7bc0f726bfb9d5ef031cecbca9fbc507076ba1a3ce"
+    "395eb2871e978672c6a6a8d1485327310545e02132f39a24c5f1dec6a808d6c8"
 )
 TOOL_CATALOG_SHA256: Final = (
     "b59a831f6b1337393319c2d3e2af0d3b463ffac50447c11351226dd2989c999b"
 )
 INTERNAL_CONTRACT_FIELDS: Final = frozenset(
-    ("contract_version", "policy_sha256", "tool_catalog_sha256")
+    ("contract_version", "policy_sha256", "tool_catalog_sha256", "context_path")
 )
 CONTROL_CONTEXT_PREFIX: Final = "Nexus control: "
 
@@ -134,6 +138,25 @@ _FORBIDDEN_PROVIDER_CONTROLS: Final = frozenset(
     ("tool_choice", "temperature", "stop")
 )
 _TOOL_NAMES: Final = frozenset(tool["name"] for tool in TOOLS)
+_CONTEXT_PATH_FIELDS: Final = frozenset(
+    (
+        "version",
+        "branch_generation",
+        "visible_head_sequence",
+        "current_user_sequence",
+        "turns",
+    )
+)
+_CONTEXT_TURN_FIELDS: Final = frozenset(
+    (
+        "turn_id",
+        "request_id",
+        "user_sequence",
+        "final_sequence",
+        "sha256",
+    )
+)
+_MAX_U64: Final = (1 << 64) - 1
 _SYSTEM_PROMPT_BYTES: Final = SYSTEM_PROMPT.encode("utf-8")
 _TOOL_CATALOG_BYTES: Final = json.dumps(
     list(TOOLS),
@@ -177,11 +200,116 @@ def _fail(message: str) -> None:
     raise NexusContractError(message)
 
 
-def _validate_tool_history(messages: object) -> None:
-    if not isinstance(messages, list) or len(messages) < 2:
-        _fail("messages must begin with the current goal and Guest context")
+def _positive_u64(value: object, label: str) -> int:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 1 <= value <= _MAX_U64
+    ):
+        _fail(f"{label} must be positive u64")
+    return value
 
-    goal, context = messages[0], messages[1]
+
+def _pair_sha256(user: str, assistant: str) -> str:
+    try:
+        value = user.encode("utf-8") + b"\0" + assistant.encode("utf-8")
+    except UnicodeEncodeError:
+        _fail("Context path messages must be valid UTF-8 text")
+    return _digest(value)
+
+
+def _validate_context_path(context_path: object, messages: object) -> None:
+    if not isinstance(context_path, dict) or set(context_path) != _CONTEXT_PATH_FIELDS:
+        _fail("context_path fields are malformed")
+    version = context_path.get("version")
+    if (
+        not isinstance(version, int)
+        or isinstance(version, bool)
+        or version != CONTEXT_PATH_VERSION
+    ):
+        _fail("context_path version is unsupported")
+    _positive_u64(context_path.get("branch_generation"), "branch_generation")
+    visible_head_sequence = _positive_u64(
+        context_path.get("visible_head_sequence"), "visible_head_sequence"
+    )
+    current_user_sequence = _positive_u64(
+        context_path.get("current_user_sequence"), "current_user_sequence"
+    )
+    if current_user_sequence > visible_head_sequence:
+        _fail("current user is outside the visible Context path")
+    turns = context_path.get("turns")
+    if (
+        not isinstance(turns, list)
+        or len(turns) > CONTEXT_PATH_MAX_TURNS
+    ):
+        _fail("context_path turns must be a bounded list")
+    if not isinstance(messages, list) or len(messages) < 2 * len(turns) + 2:
+        _fail("messages do not contain the active Context path")
+
+    previous_turn_id = 0
+    previous_request_id = 0
+    previous_final_sequence = 0
+    for index, context_turn in enumerate(turns):
+        if (
+            not isinstance(context_turn, dict)
+            or set(context_turn) != _CONTEXT_TURN_FIELDS
+        ):
+            _fail("context_path turn fields are malformed")
+        turn_id = _positive_u64(context_turn.get("turn_id"), "context turn_id")
+        request_id = _positive_u64(
+            context_turn.get("request_id"), "context request_id"
+        )
+        user_sequence = _positive_u64(
+            context_turn.get("user_sequence"), "context user_sequence"
+        )
+        final_sequence = _positive_u64(
+            context_turn.get("final_sequence"), "context final_sequence"
+        )
+        sha256 = context_turn.get("sha256")
+        if (
+            not isinstance(sha256, str)
+            or len(sha256) != 64
+            or any(char not in "0123456789abcdef" for char in sha256)
+        ):
+            _fail("context_path turn sha256 must be lowercase hexadecimal")
+        if turn_id <= previous_turn_id or request_id <= previous_request_id:
+            _fail("context_path turn bindings must increase")
+        if (
+            user_sequence <= previous_final_sequence
+            or final_sequence <= user_sequence
+            or final_sequence >= current_user_sequence
+        ):
+            _fail("context_path sequences must increase before the current user")
+
+        user_message = messages[index * 2]
+        assistant_message = messages[index * 2 + 1]
+        if (
+            not isinstance(user_message, dict)
+            or set(user_message) != {"role", "content"}
+            or user_message.get("role") != "user"
+            or not isinstance(user_message.get("content"), str)
+            or not user_message["content"]
+            or "\0" in user_message["content"]
+            or not isinstance(assistant_message, dict)
+            or set(assistant_message) != {"role", "content"}
+            or assistant_message.get("role") != "assistant"
+            or not isinstance(assistant_message.get("content"), str)
+            or not assistant_message["content"]
+            or "\0" in assistant_message["content"]
+        ):
+            _fail("messages prior turns do not match the active Context path")
+        if not hmac.compare_digest(
+            _pair_sha256(user_message["content"], assistant_message["content"]),
+            sha256,
+        ):
+            _fail("messages prior turn digest does not match context_path")
+        previous_turn_id = turn_id
+        previous_request_id = request_id
+        previous_final_sequence = final_sequence
+
+    goal_index = 2 * len(turns)
+    context_index = goal_index + 1
+    goal, context = messages[goal_index], messages[context_index]
     if (
         not isinstance(goal, dict)
         or set(goal) != {"role", "content"}
@@ -189,7 +317,7 @@ def _validate_tool_history(messages: object) -> None:
         or not isinstance(goal.get("content"), str)
         or not goal["content"]
     ):
-        _fail("messages[0] must be the non-empty current user goal")
+        _fail("messages must contain the non-empty current user goal")
     if (
         not isinstance(context, dict)
         or set(context) != {"role", "content"}
@@ -197,11 +325,11 @@ def _validate_tool_history(messages: object) -> None:
         or not isinstance(context.get("content"), str)
         or not context["content"].startswith(CONTROL_CONTEXT_PREFIX)
     ):
-        _fail("messages[1] must be the Guest-observed context")
+        _fail("messages must contain the Guest-observed runtime context")
 
     seen_corr_ids: set[int] = set()
     previous_corr_id = 0
-    for index in range(2, len(messages), 2):
+    for index in range(context_index + 1, len(messages), 2):
         if index + 1 >= len(messages):
             _fail("tool history must contain complete assistant/result pairs")
         assistant = messages[index]
@@ -309,15 +437,15 @@ def validate_request_contract(request: Mapping[str, object]) -> None:
 
     if "model" in request and not isinstance(request["model"], str):
         _fail("model must be text when present")
-    _validate_tool_history(request.get("messages"))
+    _validate_context_path(request.get("context_path"), request.get("messages"))
 
 
 def strip_internal_contract_fields(request: Mapping[str, object]) -> dict[str, object]:
     """Validate and copy a request without Host-only proof fields.
 
     A copy is returned so validation cannot accidentally authorize later
-    mutation of the original mapping.  The three proof fields never reach a
-    provider; all other request data is preserved unchanged.
+    mutation of the original mapping. Host-only contract and Context-path
+    fields never reach a provider; all other request data is preserved unchanged.
     """
 
     provider_request = copy.deepcopy(dict(request))
@@ -329,6 +457,8 @@ def strip_internal_contract_fields(request: Mapping[str, object]) -> dict[str, o
 
 __all__ = [
     "CONTRACT_VERSION",
+    "CONTEXT_PATH_MAX_TURNS",
+    "CONTEXT_PATH_VERSION",
     "CONTROL_CONTEXT_PREFIX",
     "INTERNAL_CONTRACT_FIELDS",
     "NexusContractError",

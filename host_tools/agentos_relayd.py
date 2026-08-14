@@ -64,7 +64,6 @@ NEXUS_MAX_RETRIES = 32
 NEXUS_MAX_PROVIDER_INFLIGHT = 2
 NEXUS_HISTORY_TURNS = 4
 NEXUS_MAX_HISTORY_PROJECTIONS = NEXUS_HISTORY_TURNS
-NEXUS_DIALOGUE_HISTORY_TURNS = 2
 NEXUS_AUTONOMY_CONTRACT = (
     nexus_contract.CONTRACT_VERSION,
     nexus_contract.SYSTEM_POLICY_SHA256,
@@ -92,14 +91,15 @@ NEXUS_SUCCESS_PROVENANCE = {
     "inspect_system": 53,
 }
 NEXUS_WORKSPACE_TOOLS = frozenset(("search_files", "read_file"))
-NEXUS_WORKSPACE_REQUEST_RESULT = "workspace_request_ready;provided_by_host=1"
-NEXUS_WORKSPACE_RESULT_TRUST = "host_workspace_untrusted"
-NEXUS_WORKSPACE_PLACEHOLDER_TRUST = "host_workspace_placeholder"
+NEXUS_WORKSPACE_OBSERVATION_RESULT = (
+    "workspace_observation_ready;agentos_catalog=1;task_channel=1"
+)
+NEXUS_SYSTEM_OBSERVATION_RESULT = "system_observation_ready;task_channel=1"
 NEXUS_WORKSPACE_RESULT_MAX_BYTES = 2800
+NEXUS_WORKSPACE_MANIFEST_MAX_BYTES = 12_000
 NEXUS_FILE_READ_MAX_LINES = 64
-NEXUS_RESULT_VALUE_METRIC_FIRST = 140
-NEXUS_RESULT_VALUE_METRIC_LAST = 145
-NEXUS_FEATURES = ("task_event_v1",)
+NEXUS_WORKSPACE_RESTART_MAX = 2
+NEXUS_FEATURES = ("task_event_v1", "workspace_roundtrip_v1")
 NEXUS_FINAL_PROOF_FIELDS = (
     "version",
     "turn_id",
@@ -123,12 +123,33 @@ NEXUS_TOOL_EVENT_FIELDS = frozenset(
         "value1",
         "value2",
         "result",
+        "model_projection",
         "context_seq",
         "provenance",
         "projection_sha256",
         "result_sha256",
+        "data_trust",
+        "artifact_sha256",
+        "workspace_source_sha256",
     )
 )
+NEXUS_WORKSPACE_REQUEST_FIELDS = frozenset(
+    (
+        "version",
+        "turn_id",
+        "request_id",
+        "corr_id",
+        "task_id",
+        "tool",
+        "operation",
+        "attempt",
+        "workspace_generation",
+        "arguments_sha256",
+        "arguments",
+    )
+)
+NEXUS_WORKSPACE_OPERATIONS = frozenset(("manifest", "search", "read"))
+NEXUS_WORKSPACE_STATUSES = frozenset(("ok", "stale", "error"))
 NEXUS_GUEST_KINDS = relay.WIRE_V2_GUEST_KINDS | frozenset(("TASK_EVENT",))
 NEXUS_WIRE_KINDS = relay.WIRE_V2_HOST_KINDS | NEXUS_GUEST_KINDS
 TASK_EVENT_REQUIRED_FIELDS = frozenset(
@@ -303,11 +324,22 @@ OBSERVER_TELEMETRY_FIELDS = frozenset(
         "rounds",
         "attempt",
         "attempts",
+        "operation",
+        "workspace_generation",
+        "arguments_sha256",
+        "objects_sha256",
+        "manifest_cursor",
+        "manifest_next_cursor",
+        "manifest_eof",
+        "workspace_source_sha256",
+        "content_bytes",
+        "content_sha256",
         "retries",
         "max_retries",
         "request_sha256",
         "raw_guest_request_sha256",
         "history_bindings",
+        "context_path",
         "projection_sha256",
         "result_sha256",
         "request_contains_user",
@@ -359,6 +391,91 @@ def _positive_u64(value: object, label: str) -> int:
     return value
 
 
+def _context_path_metadata(value: object) -> dict[str, object] | None:
+    """Copy only the body-free metadata authorized by the Nexus V4 contract."""
+
+    root_fields = {
+        "version",
+        "branch_generation",
+        "visible_head_sequence",
+        "current_user_sequence",
+        "turns",
+    }
+    turn_fields = {
+        "turn_id",
+        "request_id",
+        "user_sequence",
+        "final_sequence",
+        "sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != root_fields:
+        return None
+    version = value.get("version")
+    if (
+        not isinstance(version, int)
+        or isinstance(version, bool)
+        or version != nexus_contract.CONTEXT_PATH_VERSION
+    ):
+        return None
+    for field_name in (
+        "branch_generation",
+        "visible_head_sequence",
+        "current_user_sequence",
+    ):
+        item = value.get(field_name)
+        if (
+            not isinstance(item, int)
+            or isinstance(item, bool)
+            or not 1 <= item <= NEXUS_FULL_U64_MAX
+        ):
+            return None
+    turns = value.get("turns")
+    if (
+        not isinstance(turns, list)
+        or len(turns) > nexus_contract.CONTEXT_PATH_MAX_TURNS
+    ):
+        return None
+    copied_turns: list[dict[str, object]] = []
+    for turn in turns:
+        if not isinstance(turn, Mapping) or set(turn) != turn_fields:
+            return None
+        for field_name in (
+            "turn_id",
+            "request_id",
+            "user_sequence",
+            "final_sequence",
+        ):
+            item = turn.get(field_name)
+            if (
+                not isinstance(item, int)
+                or isinstance(item, bool)
+                or not 1 <= item <= NEXUS_FULL_U64_MAX
+            ):
+                return None
+        digest = turn.get("sha256")
+        if (
+            not isinstance(digest, str)
+            or relay.WIRE_DIGEST_RE.fullmatch(digest) is None
+        ):
+            return None
+        copied_turns.append(
+            {
+                "turn_id": turn["turn_id"],
+                "request_id": turn["request_id"],
+                "user_sequence": turn["user_sequence"],
+                "final_sequence": turn["final_sequence"],
+                "sha256": turn["sha256"],
+            }
+        )
+    return {
+        "version": value["version"],
+        "branch_generation": value["branch_generation"],
+        "visible_head_sequence": value["visible_head_sequence"],
+        "current_user_sequence": value["current_user_sequence"],
+        "turns": copied_turns,
+    }
+
+
 def _nexus_ledger_wire_error(
     error: nexus_task_ledger.NexusTaskLedgerError,
 ) -> relay.WireProtocolError:
@@ -382,6 +499,16 @@ def _positive_full_u64(value: object, label: str, *, code: str) -> int:
         or not 1 <= value <= NEXUS_FULL_U64_MAX
     ):
         raise relay.WireProtocolError(code, f"{label} must be positive full u64")
+    return value
+
+
+def _full_u64(value: object, label: str, *, code: str) -> int:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 0 <= value <= NEXUS_FULL_U64_MAX
+    ):
+        raise relay.WireProtocolError(code, f"{label} must be full u64")
     return value
 
 
@@ -509,7 +636,11 @@ def _nexus_tool_text(
     maximum_codepoints: int,
     empty: bool = False,
 ) -> str:
-    if not isinstance(value, str) or (not empty and not value) or "\0" in value:
+    if (
+        not isinstance(value, str)
+        or (not empty and not value)
+        or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+    ):
         raise relay.ProviderError(
             "BAD_TOOL_ARGUMENTS",
             f"{label} is not valid bounded text",
@@ -577,19 +708,43 @@ def _validate_nexus_tool_arguments(
                 "search_files arguments do not match the Nexus contract",
                 retryable=True,
             )
-        _nexus_tool_text(
+        query = _nexus_tool_text(
             arguments["query"],
             "search_files.query",
             maximum_codepoints=95,
             empty=True,
         )
+        try:
+            workspace._validate_text(
+                query, "query", workspace.MAX_QUERY_BYTES, empty=True
+            )
+        except workspace._WorkspaceInputError as error:
+            raise relay.ProviderError(
+                "BAD_TOOL_ARGUMENTS",
+                "search_files.query is not workspace-safe text",
+                retryable=True,
+            ) from error
         if "path_prefix" in arguments:
-            _nexus_tool_text(
+            path_prefix = _nexus_tool_text(
                 arguments["path_prefix"],
                 "search_files.path_prefix",
                 maximum_codepoints=111,
                 empty=True,
             )
+            try:
+                workspace._validate_relative_path(
+                    path_prefix,
+                    "path_prefix",
+                    workspace.MAX_PREFIX_BYTES,
+                    empty=True,
+                    trailing_slash=True,
+                )
+            except workspace._WorkspaceInputError as error:
+                raise relay.ProviderError(
+                    "BAD_TOOL_ARGUMENTS",
+                    "search_files.path_prefix is not a safe relative path",
+                    retryable=True,
+                ) from error
     elif tool == "read_file":
         if keys != {"path", "start_line", "max_lines"}:
             raise relay.ProviderError(
@@ -597,9 +752,23 @@ def _validate_nexus_tool_arguments(
                 "read_file arguments do not match the Nexus contract",
                 retryable=True,
             )
-        _nexus_tool_text(
+        path = _nexus_tool_text(
             arguments["path"], "read_file.path", maximum_codepoints=255
         )
+        try:
+            workspace._validate_relative_path(
+                path,
+                "path",
+                workspace.MAX_PATH_BYTES,
+                empty=False,
+                trailing_slash=False,
+            )
+        except workspace._WorkspaceInputError as error:
+            raise relay.ProviderError(
+                "BAD_TOOL_ARGUMENTS",
+                "read_file.path is not a safe relative path",
+                retryable=True,
+            ) from error
         _nexus_tool_u32(arguments["start_line"], "read_file.start_line", minimum=1)
         _nexus_tool_u32(
             arguments["max_lines"], "read_file.max_lines", minimum=1,
@@ -764,19 +933,17 @@ def _history_records(request: Mapping[str, object]) -> dict[int, dict[str, objec
                 "BAD_REQUEST", "tool history has no adjacent unique assistant binding"
             )
         wrapper = _strict_json_object(content, "tool history wrapper")
-        projection_keys = tuple(
-            key
-            for key in (
-                "workspace_request",
-                "runtime_observation",
-            )
-            if key in wrapper
-        )
-        if len(projection_keys) > 1:
+        model_projection = wrapper.get("model_projection")
+        runtime_observation = wrapper.get("runtime_observation")
+        if model_projection is not None and runtime_observation is not None:
             raise relay.WireProtocolError(
-                "BAD_REQUEST", "tool history has ambiguous data projections"
+                "BAD_REQUEST", "tool history repeats its data projection"
             )
-        projection = wrapper.get(projection_keys[0]) if projection_keys else None
+        projection = (
+            runtime_observation
+            if runtime_observation is not None
+            else model_projection
+        )
         if projection is not None and not isinstance(projection, str):
             raise relay.WireProtocolError(
                 "BAD_REQUEST", "tool data projection must be text"
@@ -798,6 +965,12 @@ def _history_records(request: Mapping[str, object]) -> dict[int, dict[str, objec
                 if projection is not None
                 else ""
             ),
+            "projection_field": (
+                "runtime_observation"
+                if runtime_observation is not None
+                else "model_projection" if model_projection is not None else ""
+            ),
+            "data_trust": wrapper.get("data_trust", ""),
         }
     return records
 
@@ -810,6 +983,8 @@ def _history_bindings(
             "tool_corr_id": corr_id,
             "tool": str(record["tool"]),
             "projection_sha256": str(record["projection_sha256"]),
+            "projection_field": str(record["projection_field"]),
+            "data_trust": str(record["data_trust"]),
         }
         for corr_id, record in records.items()
         if record.get("projection_sha256")
@@ -817,17 +992,9 @@ def _history_bindings(
     return tuple(values[-NEXUS_MAX_HISTORY_PROJECTIONS:])
 
 
-def _workspace_request_projection(tool: str) -> str:
-    return (
-        f"workspace_request={tool}\n"
-        "result_delivery=host_provider_context\n"
-        "content_untrusted=1\n"
-    )
-
-
-def _inspect_system_projection(
-    operation: object, result_metrics: Mapping[int, object]
-) -> str:
+def _inspect_system_projection_values(
+    operation: object, projection: object
+) -> tuple[int, int]:
     specifications = {
         "status": (
             "get_system_status",
@@ -849,47 +1016,58 @@ def _inspect_system_projection(
         ),
     }
     specification = specifications.get(operation)
-    expected_codes = set(
-        range(NEXUS_RESULT_VALUE_METRIC_FIRST, NEXUS_RESULT_VALUE_METRIC_LAST + 1)
-    )
-    if specification is None or set(result_metrics) != expected_codes:
+    if specification is None or not isinstance(projection, str):
         raise relay.WireProtocolError(
-            "BAD_TOOL_EVENT", "system observation result metrics are incomplete"
+            "BAD_TOOL_EVENT", "system observation projection is malformed"
         )
-    values: list[int] = []
-    for low_code in range(
-        NEXUS_RESULT_VALUE_METRIC_FIRST,
-        NEXUS_RESULT_VALUE_METRIC_LAST + 1,
-        2,
-    ):
-        low = result_metrics[low_code]
-        high = result_metrics[low_code + 1]
-        if (
-            not isinstance(low, int)
-            or isinstance(low, bool)
-            or not 0 <= low <= 0xFFFFFFFF
-            or not isinstance(high, int)
-            or isinstance(high, bool)
-            or not 0 <= high <= 0xFFFFFFFF
-        ):
-            raise relay.WireProtocolError(
-                "BAD_TOOL_EVENT", "system observation result metric is malformed"
-            )
-        values.append(low | (high << 32))
+    try:
+        raw = projection.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise relay.WireProtocolError(
+            "BAD_TOOL_EVENT", "system observation projection is not UTF-8"
+        ) from error
+    if not projection.endswith("\n") or len(raw) > NEXUS_WORKSPACE_RESULT_MAX_BYTES:
+        raise relay.WireProtocolError(
+            "BAD_TOOL_EVENT", "system observation projection is outside bounds"
+        )
     tool, first_label, second_label, omitted = specification
-    return (
+    prefix = (
         "scope=this_boot_guest_runtime\n"
         "content_untrusted=1\n"
         f"operation={operation}\n"
         f"tool={tool}\n"
         "status=0\n"
-        f"{first_label}={values[0]}\n"
-        f"{second_label}={values[1]}\n"
-        f"volatile_fields_omitted={omitted}\n"
     )
+    suffix = f"volatile_fields_omitted={omitted}\n"
+    if not projection.startswith(prefix) or not projection.endswith(suffix):
+        raise relay.WireProtocolError(
+            "BAD_TOOL_EVENT", "system observation projection shape is malformed"
+        )
+    value_lines = projection[len(prefix) : -len(suffix)].split("\n")
+    if len(value_lines) != 3 or value_lines[-1] != "":
+        raise relay.WireProtocolError(
+            "BAD_TOOL_EVENT", "system observation values are malformed"
+        )
+    values: list[int] = []
+    for line, label in zip(value_lines[:2], (first_label, second_label)):
+        marker = f"{label}="
+        text = line[len(marker) :] if line.startswith(marker) else ""
+        if not text or (len(text) > 1 and text.startswith("0")) or not text.isascii() or not text.isdecimal():
+            raise relay.WireProtocolError(
+                "BAD_TOOL_EVENT", "system observation value is malformed"
+            )
+        value = int(text, 10)
+        if value > (1 << 64) - 1:
+            raise relay.WireProtocolError(
+                "BAD_TOOL_EVENT", "system observation value is outside bounds"
+            )
+        values.append(value)
+    return values[0], values[1]
 
 
-def _bounded_workspace_result(value: object) -> str:
+def _bounded_workspace_result(
+    value: object, *, maximum: int = NEXUS_WORKSPACE_RESULT_MAX_BYTES
+) -> str:
     if not isinstance(value, str):
         return "workspace_error=invalid_host_result"
     value = value.replace("\0", "[NUL]")
@@ -897,9 +1075,230 @@ def _bounded_workspace_result(value: object) -> str:
         encoded = value.encode("utf-8")
     except UnicodeEncodeError:
         return "workspace_error=invalid_host_result"
-    if len(encoded) > NEXUS_WORKSPACE_RESULT_MAX_BYTES:
+    if len(encoded) > maximum:
         return "workspace_error=host_result_too_large"
     return value
+
+
+def _workspace_objects_sha256(arguments: Mapping[str, object]) -> str:
+    candidates: object
+    if "candidates" in arguments:
+        candidates = arguments["candidates"]
+    elif all(key in arguments for key in ("object_id", "path", "revision")):
+        candidates = [
+            {
+                "object_id": arguments["object_id"],
+                "path": arguments["path"],
+                "revision": arguments["revision"],
+            }
+        ]
+    else:
+        candidates = []
+    return hashlib.sha256(relay.canonical_json_bytes(candidates)).hexdigest()
+
+
+def _workspace_content_fields(content: str) -> list[tuple[str, str]]:
+    fields: list[tuple[str, str]] = []
+    for line in content.split("\n"):
+        key, separator, value = line.partition("=")
+        if not separator or not key:
+            raise ValueError("workspace content field is malformed")
+        fields.append((key, value))
+    return fields
+
+
+def _parse_workspace_manifest_content(
+    content: str,
+) -> tuple[int, int, bool, list[dict[str, str]]]:
+    lines = content.split("\n")
+    if not lines or lines[0] != "workspace_manifest_v1":
+        raise ValueError("workspace manifest marker is malformed")
+    fields = _workspace_content_fields("\n".join(lines[1:]))
+    if len(fields) < 4 or [item[0] for item in fields[:4]] != [
+        "cursor",
+        "next_cursor",
+        "entry_count",
+        "eof",
+    ]:
+        raise ValueError("workspace manifest header is malformed")
+    cursor = int(fields[0][1], 10)
+    next_cursor = int(fields[1][1], 10)
+    count = int(fields[2][1], 10)
+    eof_value = int(fields[3][1], 10)
+    if (
+        cursor < 0
+        or next_cursor != cursor + count
+        or count < 0
+        or eof_value not in (0, 1)
+        or len(fields) != 4 + 5 * count
+    ):
+        raise ValueError("workspace manifest bounds are malformed")
+    entries: list[dict[str, str]] = []
+    for index in range(1, count + 1):
+        offset = 4 + (index - 1) * 5
+        expected = [
+            f"entry[{index}].object_id",
+            f"entry[{index}].path",
+            f"entry[{index}].revision",
+            f"entry[{index}].size",
+            f"entry[{index}].kind",
+        ]
+        group = fields[offset : offset + 5]
+        if [item[0] for item in group] != expected:
+            raise ValueError("workspace manifest entry is malformed")
+        object_id, path, revision, size_text, kind = [item[1] for item in group]
+        if (
+            relay.WIRE_DIGEST_RE.fullmatch(object_id) is None
+            or relay.WIRE_DIGEST_RE.fullmatch(revision) is None
+            or kind != "file"
+            or int(size_text, 10) < 0
+        ):
+            raise ValueError("workspace manifest identity is malformed")
+        workspace._validate_relative_path(
+            path,
+            "path",
+            workspace.MAX_PATH_BYTES,
+            empty=False,
+            trailing_slash=False,
+        )
+        entries.append(
+            {"object_id": object_id, "path": path, "revision": revision}
+        )
+    return cursor, next_cursor, bool(eof_value), entries
+
+
+def _parse_workspace_search_content(
+    content: str,
+) -> tuple[str, int, bool, list[dict[str, object]]]:
+    lines = content.split("\n")
+    if not lines or lines[0] != "workspace_search_v1":
+        raise ValueError("workspace search marker is malformed")
+    fields = _workspace_content_fields("\n".join(lines[1:]))
+    if len(fields) < 5 or [item[0] for item in fields[:5]] != [
+        "content_untrusted",
+        "query",
+        "candidate_count",
+        "match_count",
+        "truncated",
+    ]:
+        raise ValueError("workspace search header is malformed")
+    if fields[0][1] != "1":
+        raise ValueError("workspace search trust marker is malformed")
+    query = fields[1][1]
+    candidate_count = int(fields[2][1], 10)
+    match_count = int(fields[3][1], 10)
+    truncated_value = int(fields[4][1], 10)
+    if (
+        not 0 <= candidate_count <= workspace.MAX_CANDIDATES
+        or not 0 <= match_count <= workspace.MAX_RESULTS
+        or truncated_value not in (0, 1)
+        or len(fields) != 5 + 6 * match_count
+    ):
+        raise ValueError("workspace search bounds are malformed")
+    matches: list[dict[str, object]] = []
+    for index in range(1, match_count + 1):
+        offset = 5 + (index - 1) * 6
+        expected = [
+            f"match[{index}].object_id",
+            f"match[{index}].path",
+            f"match[{index}].revision",
+            f"match[{index}].kind",
+            f"match[{index}].line",
+            f"match[{index}].snippet",
+        ]
+        group = fields[offset : offset + 6]
+        if [item[0] for item in group] != expected:
+            raise ValueError("workspace search match is malformed")
+        object_id, path, revision, kind, line_text, snippet = [
+            item[1] for item in group
+        ]
+        if (
+            relay.WIRE_DIGEST_RE.fullmatch(object_id) is None
+            or relay.WIRE_DIGEST_RE.fullmatch(revision) is None
+            or kind not in ("content", "path", "file")
+        ):
+            raise ValueError("workspace search match identity is malformed")
+        line = int(line_text, 10)
+        if line < 0 or (kind == "content" and line == 0):
+            raise ValueError("workspace search line is malformed")
+        workspace._validate_relative_path(
+            path,
+            "path",
+            workspace.MAX_PATH_BYTES,
+            empty=False,
+            trailing_slash=False,
+        )
+        matches.append(
+            {
+                "object_id": object_id,
+                "kind": kind,
+                "path": path,
+                "revision": revision,
+                "line": line,
+                "snippet": snippet,
+            }
+        )
+    return query, candidate_count, bool(truncated_value), matches
+
+
+def _render_workspace_search_aggregate(
+    query: str,
+    path_prefix: str,
+    matches: Sequence[Mapping[str, object]],
+    truncated: bool,
+) -> str:
+    retained = list(matches[: workspace.MAX_RESULTS])
+    clipped = bool(truncated or len(matches) > len(retained))
+    while True:
+        lines = [
+            "workspace_search",
+            "content_untrusted=1",
+            f"query={query}",
+            f"path_prefix={path_prefix}",
+            f"match_count={len(retained)}",
+            f"truncated={int(clipped)}",
+        ]
+        for index, match in enumerate(retained, 1):
+            lines.extend(
+                (
+                    f"match[{index}].kind={match['kind']}",
+                    f"match[{index}].path={match['path']}",
+                    f"match[{index}].line={match['line']}",
+                    f"match[{index}].snippet={match['snippet']}",
+                )
+            )
+        value = "\n".join(lines)
+        if len(value.encode("utf-8")) <= NEXUS_WORKSPACE_RESULT_MAX_BYTES:
+            return value
+        if not retained:
+            raise ValueError("workspace search header is too large")
+        retained.pop()
+        clipped = True
+
+
+def _workspace_source_record(
+    *,
+    operation: str,
+    attempt: int,
+    request_generation: str,
+    result_generation: str,
+    arguments_sha256: str,
+    objects_sha256: str,
+    content_bytes: int,
+    content_sha256: str,
+) -> str:
+    return (
+        "workspace_source_attempt_v1\n"
+        f"operation={operation}\n"
+        f"attempt={attempt}\n"
+        f"request_generation={request_generation or ('0' * 64)}\n"
+        f"result_generation={result_generation}\n"
+        f"arguments_sha256={arguments_sha256}\n"
+        f"objects_sha256={objects_sha256}\n"
+        "status=ok\n"
+        f"content_bytes={content_bytes}\n"
+        f"content_sha256={content_sha256}\n"
+    )
 
 
 @dataclass
@@ -910,6 +1309,11 @@ class ActiveTurn:
     user_content_sha256: str
     user_bytes: int
     user_content: str = field(repr=False)
+    context_branch_generation: int = 0
+    context_start_sequence: int = 0
+    context_start_known: bool = False
+    context_user_sequence: int = 0
+    context_visible_head_sequence: int = 0
     rounds: int = 0
     retries: int = 0
     attempts: int = 0
@@ -1120,7 +1524,11 @@ class InteractiveSession:
         self._last_model_response_corr = 0
         self._last_final_response: tuple[int, str] | None = None
         self._nexus_tool_ledger: dict[int, dict[str, object]] = {}
-        self._nexus_dialogue_history: list[tuple[str, str]] = []
+        self._nexus_completed_turn_bindings: list[
+            tuple[int, int, int, int, str]
+        ] = []
+        self._nexus_context_head_sequence = 0
+        self._nexus_context_head_known = False
         self._last_final_request_sha256 = ""
         self._nexus_final_frozen = False
         self._approval_bindings: set[tuple[int, int, int, str, str]] = set()
@@ -1193,6 +1601,10 @@ class InteractiveSession:
             raise relay.WireProtocolError("NOT_READY", "Guest is still booting")
         if self.active is not None:
             raise relay.WireProtocolError("TURN_ACTIVE", "a user turn is already active")
+        if self._controls:
+            raise relay.WireProtocolError(
+                "CONTROL_BUSY", "a Guest control request is still pending"
+            )
         if (
             self.guest_profile == "nexus"
             and len(self._provider_inflight) >= NEXUS_MAX_PROVIDER_INFLIGHT
@@ -1225,6 +1637,8 @@ class InteractiveSession:
             user_content_sha256,
             len(message_bytes),
             message,
+            context_start_sequence=self._nexus_context_head_sequence,
+            context_start_known=self._nexus_context_head_known,
         )
         if self._nexus_task_ledger is not None:
             try:
@@ -1275,6 +1689,10 @@ class InteractiveSession:
         if self.active is not None:
             raise relay.WireProtocolError(
                 "TURN_ACTIVE", "Guest control commands require an idle session"
+            )
+        if self._controls:
+            raise relay.WireProtocolError(
+                "CONTROL_BUSY", "another Guest control request is still pending"
             )
         request_id = self._allocate_request()
         self._controls[request_id] = name
@@ -1443,7 +1861,9 @@ class InteractiveSession:
     def close(self, reason: str = "user_requested") -> None:
         if self.closed or self.closing:
             return
-        self._nexus_dialogue_history.clear()
+        self._nexus_completed_turn_bindings.clear()
+        self._nexus_context_head_sequence = 0
+        self._nexus_context_head_known = False
         self.closing = True
         self._close_reason = reason
         self._generation += 1
@@ -1486,6 +1906,7 @@ class InteractiveSession:
             "CONTROL_RESULT": self._control_result,
             "TELEMETRY": self._guest_telemetry,
             "SESSION_CLOSED": self._session_closed,
+            "WORKSPACE_REQUEST": self._workspace_request,
             **(
                 {
                     "TASK_EVENT": self._task_event,
@@ -1720,10 +2141,6 @@ class InteractiveSession:
                         str(completion.reply.tool),
                         arguments_canonical=arguments_canonical,
                     )
-                    if turn.rounds == self.max_rounds:
-                        self._nexus_task_ledger.begin_termination(
-                            completion.corr_id, "round_limit"
-                        )
                 except nexus_task_ledger.NexusTaskLedgerError as error:
                     raise _nexus_ledger_wire_error(error) from None
                 self._nexus_tool_ledger[completion.corr_id] = {
@@ -1731,6 +2148,7 @@ class InteractiveSession:
                     "arguments_canonical": arguments_canonical,
                     "arguments": json.loads(arguments_canonical),
                     "settled": False,
+                    "round_limit_pending": turn.rounds == self.max_rounds,
                 }
             elif self.guest_profile == "nexus" and completion.reply.type == "final":
                 assert self._nexus_task_ledger is not None
@@ -1945,20 +2363,19 @@ class InteractiveSession:
             projection_digest = str(entry.get("projection_sha256", ""))
             tool = str(entry["tool"])
             expected_fields = set(scalar_fields)
+            expected_wrapper = dict(scalar_fields)
             if projection_digest:
-                if tool in NEXUS_WORKSPACE_TOOLS:
-                    content_key = "workspace_request"
-                    scalar_fields["data_trust"] = NEXUS_WORKSPACE_PLACEHOLDER_TRUST
-                    expected_fields.update((content_key, "data_trust"))
-                elif tool == "inspect_system":
-                    content_key = "runtime_observation"
-                    scalar_fields["data_trust"] = "guest_runtime_untrusted"
-                    expected_fields.update((content_key, "data_trust"))
-                else:
+                if tool not in NEXUS_WORKSPACE_TOOLS and tool != "inspect_system":
                     raise relay.WireProtocolError(
                         "BAD_REQUEST", "tool history projection type is unsupported"
                     )
-                content = wrapper.get(content_key)
+                projection_field = (
+                    "model_projection"
+                    if tool in NEXUS_WORKSPACE_TOOLS
+                    else "runtime_observation"
+                )
+                expected_fields.add(projection_field)
+                content = wrapper.get(projection_field)
                 if not isinstance(content, str) or not hmac.compare_digest(
                     hashlib.sha256(content.encode("utf-8")).hexdigest(),
                     projection_digest,
@@ -1966,12 +2383,19 @@ class InteractiveSession:
                     raise relay.WireProtocolError(
                         "BAD_REQUEST", "tool history projection digest is malformed"
                     )
-                if tool in NEXUS_WORKSPACE_TOOLS and content != (
-                    _workspace_request_projection(tool)
-                ):
+                expected_projection = (
+                    entry.get("workspace_result")
+                    if tool in NEXUS_WORKSPACE_TOOLS
+                    else entry.get("model_projection")
+                )
+                if content != expected_projection:
                     raise relay.WireProtocolError(
-                        "BAD_REQUEST", "workspace request placeholder is malformed"
+                        "BAD_REQUEST", "tool history changed settled projection bytes"
                     )
+                expected_wrapper[projection_field] = expected_projection
+                if tool == "inspect_system":
+                    expected_fields.add("data_trust")
+                    expected_wrapper["data_trust"] = "guest_runtime_untrusted"
             if set(wrapper) != expected_fields or any(
                 wrapper.get(key) != value for key, value in scalar_fields.items()
             ):
@@ -1982,90 +2406,23 @@ class InteractiveSession:
                 str(record["wrapper_canonical"]).encode("utf-8")
             ).hexdigest()
             if not hmac.compare_digest(
-                wrapper_digest, str(entry.get("result_sha256", ""))
+                wrapper_digest,
+                hashlib.sha256(relay.canonical_json_bytes(expected_wrapper)).hexdigest(),
             ):
                 raise relay.WireProtocolError(
                     "BAD_REQUEST", "tool history result digest is malformed"
+                )
+            if (tool != "inspect_system" or not projection_digest) and not hmac.compare_digest(
+                wrapper_digest, str(entry.get("result_sha256", ""))
+            ):
+                raise relay.WireProtocolError(
+                    "BAD_REQUEST", "tool history result settlement is malformed"
                 )
             if record.get("projection_sha256", "") != projection_digest:
                 raise relay.WireProtocolError(
                     "BAD_REQUEST", "tool history projection binding is malformed"
                 )
         return _history_bindings(records)
-
-    def _provider_workspace_request(
-        self,
-        request: Mapping[str, object],
-        records: Mapping[int, Mapping[str, object]],
-    ) -> dict[str, object]:
-        private_request = copy.deepcopy(dict(request))
-        messages = private_request.get("messages")
-        if not isinstance(messages, list):
-            raise relay.WireProtocolError(
-                "BAD_REQUEST", "Nexus message history is malformed"
-            )
-        for corr_id, record in records.items():
-            entry = self._nexus_tool_ledger.get(corr_id)
-            if entry is None or entry.get("tool") not in NEXUS_WORKSPACE_TOOLS:
-                continue
-            workspace_result = entry.get("workspace_result")
-            if not isinstance(workspace_result, str):
-                if entry.get("status") != 0:
-                    continue
-                raise relay.WireProtocolError(
-                    "BAD_REQUEST", "workspace result is unavailable"
-                )
-            index = record.get("index")
-            if (
-                not isinstance(index, int)
-                or isinstance(index, bool)
-                or not 0 <= index < len(messages)
-                or not isinstance(messages[index], dict)
-            ):
-                raise relay.WireProtocolError(
-                    "BAD_REQUEST", "workspace result history is malformed"
-                )
-            wrapper = record.get("wrapper")
-            if not isinstance(wrapper, Mapping):
-                raise relay.WireProtocolError(
-                    "BAD_REQUEST", "workspace result wrapper is malformed"
-                )
-            private_wrapper = {
-                key: wrapper[key]
-                for key in ("status", "value0", "value1", "value2", "result")
-            }
-            private_wrapper.update(
-                {
-                    "workspace_result": workspace_result,
-                    "data_trust": NEXUS_WORKSPACE_RESULT_TRUST,
-                }
-            )
-            messages[index]["content"] = relay.canonical_json_bytes(
-                private_wrapper
-            ).decode("utf-8")
-        return private_request
-
-    def _provider_dialogue_request(
-        self, request: Mapping[str, object]
-    ) -> dict[str, object]:
-        """Add bounded Host-private prior turns to an online Nexus request."""
-
-        private_request = copy.deepcopy(dict(request))
-        messages = private_request.get("messages")
-        if not isinstance(messages, list):
-            raise relay.WireProtocolError(
-                "BAD_REQUEST", "Nexus message history is malformed"
-            )
-        retained: list[dict[str, str]] = []
-        for user_content, final_content in self._nexus_dialogue_history:
-            retained.extend(
-                (
-                    {"role": "user", "content": user_content},
-                    {"role": "assistant", "content": final_content},
-                )
-            )
-        messages[0:0] = retained
-        return private_request
 
     def _model_request(self, payload: dict[str, object]) -> None:
         turn = self._match_active(payload)
@@ -2091,6 +2448,7 @@ class InteractiveSession:
             relay.canonical_json_bytes(request_payload)
         ).hexdigest()
         provider_payload = request_payload
+        context_path: Mapping[str, object] | None = None
         if self.guest_profile == "nexus":
             try:
                 provider_payload = nexus_contract.strip_internal_contract_fields(
@@ -2098,6 +2456,10 @@ class InteractiveSession:
                 )
             except nexus_contract.NexusContractError as error:
                 raise relay.WireProtocolError("BAD_REQUEST", str(error)) from None
+            supplied_context_path = request_payload.get("context_path")
+            if not isinstance(supplied_context_path, Mapping):
+                raise AssertionError("validated Nexus context_path is not an object")
+            context_path = supplied_context_path
         request = relay.validate_guest_request(
             provider_payload,
             max_output_tokens=self.max_tokens,
@@ -2117,24 +2479,91 @@ class InteractiveSession:
         )
         user_message_index = -1
         if self.guest_profile == "nexus":
-            matching_indices: list[int] = []
+            assert context_path is not None
+            context_path_projection = _context_path_metadata(context_path)
+            if context_path_projection is None:
+                raise AssertionError("validated Nexus context_path metadata changed")
+            context_turns = context_path.get("turns")
+            if not isinstance(context_turns, list):
+                raise AssertionError("validated Nexus Context turns are not a list")
+            supplied_context_bindings: list[tuple[int, int, int, int, str]] = []
+            for context_turn in context_turns:
+                if not isinstance(context_turn, Mapping):
+                    raise AssertionError("validated Nexus Context turn is not an object")
+                supplied_context_bindings.append(
+                    (
+                        int(context_turn["turn_id"]),
+                        int(context_turn["request_id"]),
+                        int(context_turn["user_sequence"]),
+                        int(context_turn["final_sequence"]),
+                        str(context_turn["sha256"]),
+                    )
+                )
+            retained_suffix = (
+                self._nexus_completed_turn_bindings[-len(supplied_context_bindings) :]
+                if supplied_context_bindings
+                else []
+            )
+            if supplied_context_bindings != retained_suffix:
+                raise relay.WireProtocolError(
+                    "BAD_REQUEST",
+                    "Context path is not the retained suffix of completed turns",
+                )
+            branch_generation = int(context_path["branch_generation"])
+            if (
+                turn.context_branch_generation != 0
+                and turn.context_branch_generation != branch_generation
+            ):
+                raise relay.WireProtocolError(
+                    "BAD_REQUEST",
+                    "Context branch changed within the active turn",
+                )
+            visible_head_sequence = int(context_path["visible_head_sequence"])
+            if visible_head_sequence < turn.context_visible_head_sequence:
+                raise relay.WireProtocolError(
+                    "BAD_REQUEST",
+                    "visible Context head moved backwards within the active turn",
+                )
+            current_user_sequence = int(context_path["current_user_sequence"])
+            if (
+                turn.context_user_sequence != 0
+                and turn.context_user_sequence != current_user_sequence
+            ):
+                raise relay.WireProtocolError(
+                    "BAD_REQUEST",
+                    "current user changed within the active Context path",
+                )
+            context_start_sequence = turn.context_start_sequence
+            context_start_known = turn.context_start_known
+            if not context_start_known:
+                context_start_sequence = current_user_sequence - 1
+                context_start_known = True
+            elif current_user_sequence <= context_start_sequence:
+                raise relay.WireProtocolError(
+                    "BAD_REQUEST",
+                    "current user Context node does not follow the pinned turn-start head",
+                )
             messages = request.get("messages", [])
             assert isinstance(messages, list)
-            for index, message in enumerate(messages):
-                if not isinstance(message, Mapping) or message.get("role") != "user":
-                    continue
-                content = message.get("content")
-                if not isinstance(content, str):
-                    continue
-                digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-                if hmac.compare_digest(digest, turn.user_content_sha256):
-                    matching_indices.append(index)
-            if len(matching_indices) != 1:
+            user_message_index = 2 * len(context_turns)
+            current_message = messages[user_message_index]
+            current_content = (
+                current_message.get("content")
+                if isinstance(current_message, Mapping)
+                and current_message.get("role") == "user"
+                else None
+            )
+            if (
+                not isinstance(current_content, str)
+                or not hmac.compare_digest(
+                    hashlib.sha256(current_content.encode("utf-8")).hexdigest(),
+                    turn.user_content_sha256,
+                )
+            ):
                 raise relay.WireProtocolError(
                     "BAD_REQUEST",
                     "model request does not bind the current user message",
                 )
-            user_message_index = matching_indices[0]
             context_index = user_message_index + 1
             if context_index >= len(messages):
                 raise relay.WireProtocolError(
@@ -2158,24 +2587,6 @@ class InteractiveSession:
             ):
                 raise relay.WireProtocolError(
                     "BAD_REQUEST", "model request runtime context is malformed"
-                )
-            for index, message in enumerate(messages):
-                if index in (user_message_index, context_index):
-                    continue
-                if not isinstance(message, Mapping) or message.get("role") not in (
-                    "assistant",
-                    "tool",
-                ):
-                    raise relay.WireProtocolError(
-                        "BAD_REQUEST", "Nexus message history shape is malformed"
-                    )
-                if message.get("role") == "assistant" and "tool_use" not in message:
-                    raise relay.WireProtocolError(
-                        "BAD_REQUEST", "plain assistant history is not authenticated"
-                    )
-            if user_message_index != 0 or context_index != 1:
-                raise relay.WireProtocolError(
-                    "BAD_REQUEST", "Nexus request contains unauthenticated summary history"
                 )
             if "tool_choice" in request_payload or any(
                 key in request_payload for key in ("temperature", "stop")
@@ -2219,6 +2630,18 @@ class InteractiveSession:
                     self._nexus_cancel_pending = False
             except nexus_task_ledger.NexusTaskLedgerError as error:
                 raise _nexus_ledger_wire_error(error) from None
+        if self.guest_profile == "nexus":
+            turn.context_start_sequence = context_start_sequence
+            turn.context_start_known = context_start_known
+            if self._nexus_context_head_known:
+                if self._nexus_context_head_sequence != context_start_sequence:
+                    raise AssertionError("active Context turn-start head changed")
+            else:
+                self._nexus_context_head_sequence = context_start_sequence
+                self._nexus_context_head_known = True
+            turn.context_branch_generation = branch_generation
+            turn.context_user_sequence = current_user_sequence
+            turn.context_visible_head_sequence = visible_head_sequence
         self._active_last_corr = corr_id
         self._last_corr = corr_id
         # Only a response to this newer request may authorize a later tool.
@@ -2255,6 +2678,11 @@ class InteractiveSession:
                     "history_bindings": [
                         dict(binding) for binding in history_bindings
                     ],
+                    **(
+                        {"context_path": copy.deepcopy(context_path_projection)}
+                        if self.guest_profile == "nexus"
+                        else {}
+                    ),
                     "request_contains_user": True,
                     "user_message_index": user_message_index,
                     "generation": turn.generation,
@@ -2279,6 +2707,11 @@ class InteractiveSession:
                     "history_bindings": [
                         dict(binding) for binding in history_bindings
                     ],
+                    **(
+                        {"context_path": copy.deepcopy(context_path_projection)}
+                        if self.guest_profile == "nexus"
+                        else {}
+                    ),
                     "request_contains_user": True,
                     "user_message_index": user_message_index,
                     "generation": turn.generation,
@@ -2317,16 +2750,6 @@ class InteractiveSession:
             and turn.rounds == self.max_rounds - 1
         )
         provider_request_base = request
-        if (
-            self.guest_profile == "nexus"
-            and not isinstance(self.provider, relay.ReplayProvider)
-        ):
-            provider_request_base = self._provider_workspace_request(
-                request, history_records
-            )
-            provider_request_base = self._provider_dialogue_request(
-                provider_request_base
-            )
         generation = turn.generation
         self._model_job = (generation, corr_id)
         provider_token = (generation, corr_id)
@@ -2348,6 +2771,11 @@ class InteractiveSession:
                 "history_bindings": [
                     dict(binding) for binding in history_bindings
                 ],
+                **(
+                    {"context_path": copy.deepcopy(context_path_projection)}
+                    if self.guest_profile == "nexus"
+                    else {}
+                ),
                 "request_contains_user": True,
                 "user_message_index": user_message_index,
                 "generation": turn.generation,
@@ -2367,6 +2795,11 @@ class InteractiveSession:
                 "history_bindings": [
                     dict(binding) for binding in history_bindings
                 ],
+                **(
+                    {"context_path": copy.deepcopy(context_path_projection)}
+                    if self.guest_profile == "nexus"
+                    else {}
+                ),
                 "request_contains_user": True,
                 "user_message_index": user_message_index,
                 "generation": turn.generation,
@@ -2567,6 +3000,667 @@ class InteractiveSession:
             }
         )
 
+    def _workspace_request(self, payload: dict[str, object]) -> None:
+        code = "BAD_WORKSPACE_EVENT"
+        if self.guest_profile != "nexus":
+            raise relay.WireProtocolError(
+                code, "workspace exchange is only valid for the Nexus profile"
+            )
+        if set(payload) != set(NEXUS_WORKSPACE_REQUEST_FIELDS):
+            raise relay.WireProtocolError(code, "workspace request fields are malformed")
+        turn = self._match_active(payload)
+        if self._nexus_final_frozen and not turn.cancelled:
+            raise relay.WireProtocolError(
+                code, "workspace request arrived outside active tool execution"
+            )
+        version = _bounded_int(
+            payload["version"], "version", code=code, minimum=1, maximum=1
+        )
+        corr_id = _bounded_int(
+            payload["corr_id"], "corr_id", code=code, minimum=1,
+            maximum=relay.MAX_SEQUENCE,
+        )
+        task_id = _bounded_int(
+            payload["task_id"], "task_id", code=code, minimum=1,
+            maximum=(1 << 32) - 1,
+        )
+        attempt = _bounded_int(
+            payload["attempt"], "attempt", code=code, minimum=1,
+            maximum=nexus_task_ledger.MAX_WORKSPACE_ATTEMPTS,
+        )
+        tool = _safe_text(payload["tool"], "tool", code=code, maximum=64)
+        operation = _safe_text(
+            payload["operation"], "operation", code=code, maximum=16
+        )
+        if operation not in NEXUS_WORKSPACE_OPERATIONS:
+            raise relay.WireProtocolError(code, "workspace operation is unsupported")
+        allowed_operations = {
+            "search_files": frozenset(("manifest", "search")),
+            "read_file": frozenset(("manifest", "read")),
+        }
+        if operation not in allowed_operations.get(tool, frozenset()):
+            raise relay.WireProtocolError(
+                code, "workspace operation does not match the delivered tool"
+            )
+        entry = self._nexus_tool_ledger.get(corr_id)
+        if (
+            entry is None
+            or entry.get("tool") != tool
+            or bool(entry.get("settled"))
+            or corr_id
+            != (
+                self._active_last_corr
+                if turn.cancelled
+                else self._last_model_response_corr
+            )
+        ):
+            raise relay.WireProtocolError(
+                code, "workspace request has no delivered unsettled tool"
+            )
+        generation = _safe_text(
+            payload["workspace_generation"],
+            "workspace_generation",
+            code=code,
+            maximum=64,
+            empty=True,
+        )
+        if generation:
+            _digest(generation, "workspace_generation", code=code)
+        arguments_sha256 = _digest(
+            payload["arguments_sha256"], "arguments_sha256", code=code
+        )
+        arguments_value = payload["arguments"]
+        if not isinstance(arguments_value, dict):
+            raise relay.WireProtocolError(code, "workspace arguments must be an object")
+        arguments = dict(arguments_value)
+        canonical_arguments = relay.canonical_json_bytes(arguments)
+        if not hmac.compare_digest(
+            hashlib.sha256(canonical_arguments).hexdigest(), arguments_sha256
+        ):
+            raise relay.WireProtocolError(
+                code, "workspace arguments do not match their digest"
+            )
+        public_arguments = entry.get("arguments")
+        if not isinstance(public_arguments, Mapping):
+            raise relay.WireProtocolError(
+                code, "delivered workspace tool arguments are unavailable"
+            )
+
+        if operation == "manifest":
+            if set(arguments) != {"cursor", "limit"}:
+                raise relay.WireProtocolError(
+                    code, "manifest arguments are malformed"
+                )
+            cursor = _bounded_int(
+                arguments["cursor"], "cursor", code=code, minimum=0,
+                maximum=(1 << 32) - 1,
+            )
+            limit = _bounded_int(
+                arguments["limit"], "limit", code=code, minimum=1,
+                maximum=workspace.MAX_MANIFEST_PAGE,
+            )
+            if cursor == 0 and generation:
+                raise relay.WireProtocolError(
+                    code, "manifest restart must refresh the workspace"
+                )
+            if cursor != 0 and not generation:
+                raise relay.WireProtocolError(
+                    code, "non-initial manifest page lacks a generation"
+                )
+            if cursor != 0 and entry.get("workspace_next_cursor") != cursor:
+                raise relay.WireProtocolError(
+                    code, "manifest cursor skipped or repeated a Catalog page"
+                )
+            pending_candidates = entry.get("workspace_pending_candidates", [])
+            if tool == "search_files" and pending_candidates:
+                raise relay.WireProtocolError(
+                    code, "next manifest page preceded its candidate search"
+                )
+        elif operation == "search":
+            if set(arguments) != {"query", "candidates"}:
+                raise relay.WireProtocolError(code, "search arguments are malformed")
+            if not generation:
+                raise relay.WireProtocolError(code, "search lacks a generation")
+            query = _safe_text(
+                arguments["query"],
+                "query",
+                code=code,
+                maximum=workspace.MAX_QUERY_BYTES,
+                empty=True,
+            )
+            if query != public_arguments.get("query"):
+                raise relay.WireProtocolError(
+                    code, "search changed the delivered query"
+                )
+            try:
+                candidates = workspace.WorkspaceReader._validate_candidates(
+                    arguments["candidates"]
+                )
+            except (TypeError, ValueError) as error:
+                raise relay.WireProtocolError(
+                    code, "search candidates are malformed"
+                ) from error
+            prefix_value = public_arguments.get("path_prefix", "")
+            if not isinstance(prefix_value, str):
+                raise relay.WireProtocolError(
+                    code, "delivered search prefix is malformed"
+                )
+            if any(prefix_value and not path.startswith(prefix_value) for _, path, _ in candidates):
+                raise relay.WireProtocolError(
+                    code, "search candidate is outside the delivered prefix"
+                )
+            expected_candidates = entry.get("workspace_pending_candidates")
+            canonical_candidates = [
+                {"object_id": object_id, "path": path, "revision": revision}
+                for object_id, path, revision in candidates
+            ]
+            if (
+                not isinstance(expected_candidates, list)
+                or canonical_candidates != expected_candidates
+            ):
+                raise relay.WireProtocolError(
+                    code, "search candidates do not cover the Catalog page"
+                )
+        else:
+            if set(arguments) != {
+                "object_id",
+                "path",
+                "revision",
+                "start_line",
+                "max_lines",
+            }:
+                raise relay.WireProtocolError(code, "read arguments are malformed")
+            if not generation:
+                raise relay.WireProtocolError(code, "read lacks a generation")
+            try:
+                read_candidates = workspace.WorkspaceReader._validate_candidates(
+                    [
+                        {
+                            "object_id": arguments["object_id"],
+                            "path": arguments["path"],
+                            "revision": arguments["revision"],
+                        }
+                    ]
+                )
+            except (TypeError, ValueError) as error:
+                raise relay.WireProtocolError(
+                    code, "read object binding is malformed"
+                ) from error
+            read_binding = {
+                "object_id": read_candidates[0][0],
+                "path": read_candidates[0][1],
+                "revision": read_candidates[0][2],
+            }
+            manifest_objects = entry.get("workspace_manifest_objects")
+            if not isinstance(manifest_objects, list) or read_binding not in manifest_objects:
+                raise relay.WireProtocolError(
+                    code, "read object was not delivered through the Catalog"
+                )
+            start_line = _bounded_int(
+                arguments["start_line"], "start_line", code=code, minimum=1,
+                maximum=(1 << 32) - 1,
+            )
+            max_lines = _bounded_int(
+                arguments["max_lines"], "max_lines", code=code, minimum=1,
+                maximum=NEXUS_FILE_READ_MAX_LINES,
+            )
+            if (
+                arguments["path"] != public_arguments.get("path")
+                or start_line != public_arguments.get("start_line")
+                or max_lines != public_arguments.get("max_lines")
+            ):
+                raise relay.WireProtocolError(
+                    code, "read changed the delivered file request"
+                )
+
+        objects_sha256 = _workspace_objects_sha256(arguments)
+        if turn.cancelled:
+            last_attempt = entry.get("workspace_last_attempt", 0)
+            if (
+                not isinstance(last_attempt, int)
+                or isinstance(last_attempt, bool)
+                or attempt != last_attempt + 1
+                or "workspace_cancel_drain_attempt" in entry
+            ):
+                raise relay.WireProtocolError(
+                    code, "cancelled workspace request is duplicated or reordered"
+                )
+            content = "workspace_error=cancelled"
+            entry["workspace_cancel_drain_attempt"] = attempt
+            result_payload = {
+                "version": version,
+                "turn_id": turn.turn_id,
+                "request_id": turn.request_id,
+                "corr_id": corr_id,
+                "task_id": task_id,
+                "tool": tool,
+                "operation": operation,
+                "attempt": attempt,
+                "arguments_sha256": arguments_sha256,
+                "workspace_generation": generation or ("0" * 64),
+                "status": "error",
+                "content": content,
+                "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            }
+            self._send("WORKSPACE_RESULT", result_payload)
+            self._telemetry(
+                {
+                    "event": "workspace_request_after_cancel_drained",
+                    "turn_id": turn.turn_id,
+                    "request_id": turn.request_id,
+                    "corr_id": corr_id,
+                    "task_id": task_id,
+                    "tool": tool,
+                    "operation": operation,
+                    "attempt": attempt,
+                    "arguments_sha256": arguments_sha256,
+                },
+                source="host",
+            )
+            return
+        assert self._nexus_task_ledger is not None
+        try:
+            self._nexus_task_ledger.record_workspace_request(
+                corr_id,
+                task_id=task_id,
+                tool=tool,
+                operation=operation,
+                attempt=attempt,
+                workspace_generation=generation,
+                arguments_sha256=arguments_sha256,
+                objects_sha256=objects_sha256,
+                manifest_cursor=cursor if operation == "manifest" else 0,
+            )
+        except nexus_task_ledger.NexusTaskLedgerError as error:
+            raise _nexus_ledger_wire_error(error) from None
+        entry["workspace_last_attempt"] = attempt
+        request_event = {
+            "type": "workspace_request",
+            "turn_id": turn.turn_id,
+            "request_id": turn.request_id,
+            "corr_id": corr_id,
+            "task_id": task_id,
+            "tool": tool,
+            "operation": operation,
+            "attempt": attempt,
+            "workspace_generation": generation,
+            "arguments_sha256": arguments_sha256,
+            "objects_sha256": objects_sha256,
+            "manifest_cursor": cursor if operation == "manifest" else 0,
+        }
+        self._controller(request_event)
+        self._telemetry(
+            {"event": "workspace_request", **request_event}, source="guest"
+        )
+
+        if self.workspace_reader is None:
+            operation_result = workspace.WorkspaceOperationResult(
+                "error",
+                generation if generation else "0" * 64,
+                "workspace_error=workspace_not_configured",
+            )
+        else:
+            try:
+                if operation == "manifest":
+                    operation_result = self.workspace_reader.manifest(
+                        generation, cursor, limit
+                    )
+                elif operation == "search":
+                    operation_result = self.workspace_reader.search_candidates(
+                        generation, query, arguments["candidates"]
+                    )
+                else:
+                    operation_result = self.workspace_reader.read_versioned(
+                        generation,
+                        str(arguments["object_id"]),
+                        str(arguments["path"]),
+                        str(arguments["revision"]),
+                        start_line,
+                        max_lines,
+                    )
+            except Exception:
+                operation_result = workspace.WorkspaceOperationResult(
+                    "error",
+                    generation if generation else "0" * 64,
+                    "workspace_error=host_workspace_failure",
+                )
+        result_status = operation_result.status
+        if result_status not in NEXUS_WORKSPACE_STATUSES:
+            result_status = "error"
+            content = "workspace_error=invalid_host_result"
+        else:
+            maximum = (
+                NEXUS_WORKSPACE_MANIFEST_MAX_BYTES
+                if operation == "manifest"
+                else NEXUS_WORKSPACE_RESULT_MAX_BYTES
+            )
+            content = _bounded_workspace_result(
+                operation_result.content, maximum=maximum
+            )
+            if content != operation_result.content:
+                result_status = "error"
+        result_generation = operation_result.workspace_generation
+        if relay.WIRE_DIGEST_RE.fullmatch(result_generation) is None:
+            result_generation = generation if generation else "0" * 64
+            result_status = "error"
+            content = "workspace_error=invalid_host_result"
+        if result_status == "stale":
+            content = ""
+        source_objects_sha256 = objects_sha256
+        manifest_next_cursor = 0
+        manifest_eof_result = False
+        if result_status == "ok":
+            try:
+                if operation == "manifest":
+                    parsed_cursor, next_cursor, manifest_eof, manifest_entries = (
+                        _parse_workspace_manifest_content(content)
+                    )
+                    if parsed_cursor != cursor or len(manifest_entries) > limit:
+                        raise ValueError("workspace manifest changed its request")
+                    if tool == "search_files":
+                        projected_search_arguments = {
+                            "query": public_arguments.get("query", ""),
+                            "candidates": manifest_entries,
+                        }
+                        if (
+                            len(
+                                relay.canonical_json_bytes(
+                                    projected_search_arguments
+                                )
+                            )
+                            > workspace.MAX_WORKSPACE_ARGUMENT_BYTES
+                        ):
+                            raise ValueError(
+                                "workspace manifest exceeds Guest search arguments"
+                            )
+                    source_objects_sha256 = _workspace_objects_sha256(
+                        {"candidates": manifest_entries}
+                    )
+                    manifest_next_cursor = next_cursor
+                    manifest_eof_result = manifest_eof
+                    manifest_objects = (
+                        []
+                        if not generation
+                        else entry.get("workspace_manifest_objects")
+                    )
+                    if not isinstance(manifest_objects, list):
+                        raise ValueError("workspace manifest object set is malformed")
+                    existing_object_ids = {
+                        str(item.get("object_id"))
+                        for item in manifest_objects
+                        if isinstance(item, Mapping)
+                    }
+                    existing_paths = {
+                        str(item.get("path"))
+                        for item in manifest_objects
+                        if isinstance(item, Mapping)
+                    }
+                    page_object_ids = [
+                        str(item["object_id"]) for item in manifest_entries
+                    ]
+                    page_paths = [str(item["path"]) for item in manifest_entries]
+                    if (
+                        len(set(page_object_ids)) != len(page_object_ids)
+                        or len(set(page_paths)) != len(page_paths)
+                        or any(
+                            object_id in existing_object_ids
+                            for object_id in page_object_ids
+                        )
+                        or any(path in existing_paths for path in page_paths)
+                    ):
+                        raise ValueError("workspace manifest repeats an object")
+                    if not generation:
+                        entry["workspace_source_records"] = []
+                        entry["workspace_manifest_objects"] = []
+                        entry["workspace_aggregate"] = {
+                            "matches": [],
+                            "truncated": False,
+                            "manifest_eof": False,
+                        }
+                        for key in (
+                            "workspace_result",
+                            "workspace_content_sha256",
+                            "workspace_source_sha256",
+                        ):
+                            entry.pop(key, None)
+                    aggregate = entry.setdefault(
+                        "workspace_aggregate",
+                        {
+                            "matches": [],
+                            "truncated": False,
+                            "manifest_eof": False,
+                        },
+                    )
+                    aggregate["manifest_eof"] = manifest_eof
+                    aggregate["manifest_entries"] = manifest_entries
+                    entry["workspace_next_cursor"] = next_cursor
+                    manifest_objects = entry.setdefault(
+                        "workspace_manifest_objects", []
+                    )
+                    assert isinstance(manifest_objects, list)
+                    manifest_objects.extend(manifest_entries)
+                    if tool == "search_files":
+                        prefix = str(public_arguments.get("path_prefix", ""))
+                        entry["workspace_pending_candidates"] = [
+                            candidate
+                            for candidate in manifest_entries
+                            if not prefix or str(candidate["path"]).startswith(prefix)
+                        ]
+                elif operation == "search":
+                    parsed_query, candidate_count, page_truncated, page_matches = (
+                        _parse_workspace_search_content(content)
+                    )
+                    requested_candidates = arguments["candidates"]
+                    assert isinstance(requested_candidates, list)
+                    if (
+                        parsed_query != query
+                        or candidate_count != len(requested_candidates)
+                    ):
+                        raise ValueError("workspace search changed its request")
+                    candidate_bindings = {
+                        (
+                            str(candidate["object_id"]),
+                            str(candidate["path"]),
+                            str(candidate["revision"]),
+                        )
+                        for candidate in requested_candidates
+                        if isinstance(candidate, Mapping)
+                    }
+                    if any(
+                        (
+                            str(match["object_id"]),
+                            str(match["path"]),
+                            str(match["revision"]),
+                        )
+                        not in candidate_bindings
+                        for match in page_matches
+                    ):
+                        raise ValueError(
+                            "workspace search returned an unrequested object"
+                        )
+                    aggregate = entry.get("workspace_aggregate")
+                    if not isinstance(aggregate, dict):
+                        raise ValueError("workspace search lacks a manifest page")
+                    matches = aggregate.get("matches")
+                    if not isinstance(matches, list):
+                        raise ValueError("workspace search aggregate is malformed")
+                    remaining = max(0, workspace.MAX_RESULTS - len(matches))
+                    if len(page_matches) > remaining:
+                        aggregate["truncated"] = True
+                    matches.extend(page_matches[:remaining])
+                    aggregate["truncated"] = bool(
+                        aggregate.get("truncated") or page_truncated
+                    )
+                    entry["workspace_pending_candidates"] = []
+                    if len(matches) == workspace.MAX_RESULTS and not bool(
+                        aggregate.get("manifest_eof")
+                    ):
+                        aggregate["truncated"] = True
+                else:
+                    if content.startswith("workspace_error="):
+                        if content not in {
+                            "workspace_error=binary_file",
+                            "workspace_error=file_too_large",
+                            "workspace_error=start_line_out_of_range",
+                            "workspace_error=line_too_large",
+                        }:
+                            raise ValueError("workspace read error is not model-visible")
+                    elif not content.startswith("workspace_read\n"):
+                        raise ValueError("workspace read result is malformed")
+            except (TypeError, ValueError, workspace._WorkspaceInputError):
+                result_status = "error"
+                content = "workspace_error=invalid_host_result"
+                source_objects_sha256 = objects_sha256
+                manifest_next_cursor = 0
+                manifest_eof_result = False
+        if result_status in ("stale", "error"):
+            for key in (
+                "workspace_result",
+                "workspace_content_sha256",
+                "workspace_source_sha256",
+            ):
+                entry.pop(key, None)
+            if result_status == "stale":
+                entry["workspace_source_records"] = []
+                entry.pop("workspace_aggregate", None)
+                entry["workspace_pending_candidates"] = []
+                entry.pop("workspace_next_cursor", None)
+                entry.pop("workspace_manifest_objects", None)
+        content_bytes = len(content.encode("utf-8"))
+        content_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        result_payload = {
+            "version": version,
+            "turn_id": turn.turn_id,
+            "request_id": turn.request_id,
+            "corr_id": corr_id,
+            "task_id": task_id,
+            "tool": tool,
+            "operation": operation,
+            "attempt": attempt,
+            "arguments_sha256": arguments_sha256,
+            "workspace_generation": result_generation,
+            "status": result_status,
+            "content": content,
+            "content_sha256": content_sha256,
+        }
+        try:
+            self._nexus_task_ledger.record_workspace_result(
+                corr_id,
+                task_id=task_id,
+                tool=tool,
+                operation=operation,
+                attempt=attempt,
+                workspace_generation=result_generation,
+                arguments_sha256=arguments_sha256,
+                result_objects_sha256=source_objects_sha256,
+                status=result_status,
+                content_bytes=content_bytes,
+                content_sha256=content_sha256,
+                manifest_cursor=cursor if operation == "manifest" else 0,
+                manifest_next_cursor=manifest_next_cursor,
+                manifest_eof=manifest_eof_result,
+                content=content,
+            )
+        except nexus_task_ledger.NexusTaskLedgerError as error:
+            raise _nexus_ledger_wire_error(error) from None
+        if result_status == "ok":
+            source_records = entry.setdefault("workspace_source_records", [])
+            if not isinstance(source_records, list):
+                raise relay.WireProtocolError(
+                    code, "workspace source accumulator is malformed"
+                )
+            source_records.append(
+                _workspace_source_record(
+                    operation=operation,
+                    attempt=attempt,
+                    request_generation=generation,
+                    result_generation=result_generation,
+                    arguments_sha256=arguments_sha256,
+                    objects_sha256=source_objects_sha256,
+                    content_bytes=content_bytes,
+                    content_sha256=content_sha256,
+                )
+            )
+            workspace_source_sha256 = hashlib.sha256(
+                "".join(source_records).encode("utf-8")
+            ).hexdigest()
+            try:
+                ledger_source_sha256 = (
+                    self._nexus_task_ledger.workspace_source_sha256(corr_id)
+                )
+            except nexus_task_ledger.NexusTaskLedgerError as error:
+                raise _nexus_ledger_wire_error(error) from None
+            if not hmac.compare_digest(
+                workspace_source_sha256, ledger_source_sha256
+            ):
+                raise relay.WireProtocolError(
+                    code, "workspace source root disagrees with the Task ledger"
+                )
+            entry["workspace_source_sha256"] = workspace_source_sha256
+            if tool == "search_files":
+                aggregate = entry.get("workspace_aggregate")
+                if not isinstance(aggregate, Mapping):
+                    raise relay.WireProtocolError(
+                        code, "workspace search aggregate is unavailable"
+                    )
+                matches = aggregate.get("matches")
+                if not isinstance(matches, list):
+                    raise relay.WireProtocolError(
+                        code, "workspace search matches are unavailable"
+                    )
+                aggregate_content = _render_workspace_search_aggregate(
+                    str(public_arguments.get("query", "")),
+                    str(public_arguments.get("path_prefix", "")),
+                    matches,
+                    bool(aggregate.get("truncated")),
+                )
+                entry.update(
+                    {
+                        "workspace_result": aggregate_content,
+                        "workspace_content_sha256": hashlib.sha256(
+                            aggregate_content.encode("utf-8")
+                        ).hexdigest(),
+                        "workspace_task_id": task_id,
+                    }
+                )
+            elif operation == "read":
+                entry.update(
+                    {
+                        "workspace_result": content,
+                        "workspace_content_sha256": content_sha256,
+                        "workspace_task_id": task_id,
+                    }
+                )
+        entry.setdefault("workspace_attempts", []).append(
+            {
+                "task_id": task_id,
+                "operation": operation,
+                "attempt": attempt,
+                "request_generation": generation,
+                "result_generation": result_generation,
+                "arguments_sha256": arguments_sha256,
+                "objects_sha256": objects_sha256,
+                "result_objects_sha256": source_objects_sha256,
+                "status": result_status,
+                "content_bytes": content_bytes,
+                "content_sha256": content_sha256,
+            }
+        )
+        self._send("WORKSPACE_RESULT", result_payload)
+        result_event = {
+            **request_event,
+            "type": "workspace_result",
+            "workspace_generation": result_generation,
+            "objects_sha256": source_objects_sha256,
+            "status": result_status,
+            "content_bytes": content_bytes,
+            "content_sha256": content_sha256,
+            "manifest_next_cursor": manifest_next_cursor,
+            "manifest_eof": manifest_eof_result,
+        }
+        self._controller(result_event)
+        self._telemetry({"event": "workspace_result", **result_event})
+
     def _tool_event(self, payload: dict[str, object]) -> None:
         if self.guest_profile != "nexus":
             if "turn_id" in payload:
@@ -2628,6 +3722,21 @@ class InteractiveSession:
         result = _safe_text(
             payload["result"], "result", code=code, maximum=95, empty=True
         )
+        model_projection = payload["model_projection"]
+        if not isinstance(model_projection, str) or "\0" in model_projection:
+            raise relay.WireProtocolError(
+                code, "Nexus tool model projection must be UTF-8 text"
+            )
+        try:
+            model_projection_bytes = model_projection.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise relay.WireProtocolError(
+                code, "Nexus tool model projection is not UTF-8"
+            ) from error
+        if len(model_projection_bytes) > NEXUS_WORKSPACE_RESULT_MAX_BYTES:
+            raise relay.WireProtocolError(
+                code, "Nexus tool model projection is outside bounds"
+            )
         projection_value = payload["projection_sha256"]
         if projection_value == "":
             projection_sha256 = ""
@@ -2638,6 +3747,45 @@ class InteractiveSession:
         if status != 0 and projection_sha256:
             raise relay.WireProtocolError(
                 code, "failed Nexus tool must not claim a model projection"
+            )
+        if (status == 0) != bool(model_projection):
+            raise relay.WireProtocolError(
+                code, "Nexus tool model projection does not match its status"
+            )
+        data_trust = _safe_text(
+            payload["data_trust"],
+            "data_trust",
+            code=code,
+            maximum=32,
+            empty=True,
+        )
+        artifact_value = payload["artifact_sha256"]
+        if artifact_value == "":
+            artifact_sha256 = ""
+        else:
+            artifact_sha256 = _digest(
+                artifact_value, "artifact digest", code=code
+            )
+        workspace_source_value = payload["workspace_source_sha256"]
+        if workspace_source_value == "":
+            workspace_source_sha256 = ""
+        else:
+            workspace_source_sha256 = _digest(
+                workspace_source_value, "workspace source digest", code=code
+            )
+        if status != 0 and artifact_sha256:
+            raise relay.WireProtocolError(
+                code, "failed Nexus tool must not claim a successful artifact"
+            )
+        if status != 0 and data_trust != (
+            "untrusted" if tool in NEXUS_WORKSPACE_TOOLS else "none"
+        ):
+            raise relay.WireProtocolError(
+                code, "failed Nexus tool trust label is malformed"
+            )
+        if status != 0 and workspace_source_sha256:
+            raise relay.WireProtocolError(
+                code, "failed Nexus tool must not claim workspace source"
             )
         result_sha256 = _digest(
             payload["result_sha256"], "result digest", code=code
@@ -2656,27 +3804,57 @@ class InteractiveSession:
                     code, "successful Nexus tool lacks its result binding"
                 )
             if tool in NEXUS_WORKSPACE_TOOLS:
-                expected_projection = _workspace_request_projection(tool)
-                guest_wrapper["workspace_request"] = expected_projection
-                guest_wrapper["data_trust"] = NEXUS_WORKSPACE_PLACEHOLDER_TRUST
+                expected_projection = entry.get("workspace_result")
+                aggregate = entry.get("workspace_aggregate")
+                search_complete = True
+                if tool == "search_files":
+                    search_complete = bool(
+                        isinstance(aggregate, Mapping)
+                        and not entry.get("workspace_pending_candidates")
+                        and (
+                            aggregate.get("manifest_eof")
+                            or len(aggregate.get("matches", ()))
+                            >= workspace.MAX_RESULTS
+                        )
+                    )
                 if (
-                    values["value0"] != 0
-                    or result != NEXUS_WORKSPACE_REQUEST_RESULT
+                    not isinstance(expected_projection, str)
+                    or not search_complete
+                    or model_projection != expected_projection
+                    or entry.get("workspace_content_sha256")
+                    != projection_sha256
+                    or entry.get("workspace_task_id") != values["value1"]
+                    or values["value0"]
+                    != len(expected_projection.encode("utf-8"))
+                    or result != NEXUS_WORKSPACE_OBSERVATION_RESULT
+                    or data_trust != "untrusted"
+                    or artifact_sha256 != projection_sha256
+                    or workspace_source_sha256
+                    != entry.get("workspace_source_sha256")
                 ):
                     raise relay.WireProtocolError(
-                        code, "workspace request placeholder is malformed"
+                        code, "workspace observation is not bound to Host bytes"
                     )
             else:
-                result_metrics = entry.get("result_value_metrics", {})
-                if not isinstance(result_metrics, Mapping):
+                if workspace_source_sha256:
                     raise relay.WireProtocolError(
-                        code, "system observation result metrics are malformed"
+                        code, "system observation claimed workspace source"
                     )
-                expected_projection = _inspect_system_projection(
-                    arguments.get("operation"), result_metrics
+                expected_values = _inspect_system_projection_values(
+                    arguments.get("operation"), model_projection
                 )
-                guest_wrapper["runtime_observation"] = expected_projection
-                guest_wrapper["data_trust"] = "guest_runtime_untrusted"
+                if (
+                    (values["value0"], values["value1"]) != expected_values
+                    or values["value2"] != 0
+                    or result != NEXUS_SYSTEM_OBSERVATION_RESULT
+                    or data_trust != "kernel_fact"
+                    or artifact_sha256 != projection_sha256
+                ):
+                    raise relay.WireProtocolError(
+                        code, "system observation is not bound to its Task artifact"
+                    )
+                expected_projection = model_projection
+            guest_wrapper["model_projection"] = model_projection
             if not hmac.compare_digest(
                 projection_sha256,
                 hashlib.sha256(expected_projection.encode("utf-8")).hexdigest(),
@@ -2691,28 +3869,6 @@ class InteractiveSession:
             raise relay.WireProtocolError(
                 code, "Nexus tool result digest does not match its exact Guest wrapper"
             )
-        workspace_result: str | None = None
-        if tool in NEXUS_WORKSPACE_TOOLS and status == 0:
-            assert isinstance(arguments, Mapping)
-            if self.workspace_reader is None:
-                workspace_result = "workspace_error=workspace_not_configured"
-            else:
-                try:
-                    if tool == "search_files":
-                        raw_workspace_result = self.workspace_reader.search_files(
-                            arguments.get("query"), arguments.get("path_prefix", "")
-                        )
-                    else:
-                        raw_workspace_result = self.workspace_reader.read_file(
-                            arguments.get("path"),
-                            arguments.get("start_line"),
-                            arguments.get("max_lines"),
-                        )
-                    workspace_result = _bounded_workspace_result(
-                        raw_workspace_result
-                    )
-                except Exception:
-                    workspace_result = "workspace_error=host_workspace_failure"
         assert self._nexus_task_ledger is not None
         try:
             self._nexus_task_ledger.settle_tool(
@@ -2724,6 +3880,8 @@ class InteractiveSession:
                 value2=values["value2"],
                 provenance=provenance,
                 projection_sha256=projection_sha256,
+                workspace_source_sha256=workspace_source_sha256,
+                context_seq=values["context_seq"],
                 result_sha256=result_sha256,
                 session_blocked_marker=(
                     result
@@ -2731,6 +3889,11 @@ class InteractiveSession:
                     else ""
                 ),
             )
+            if (
+                entry.get("round_limit_pending")
+                and not self._nexus_task_ledger.snapshot().termination_cause
+            ):
+                self._nexus_task_ledger.begin_termination(corr_id, "round_limit")
         except nexus_task_ledger.NexusTaskLedgerError as error:
             raise _nexus_ledger_wire_error(error) from None
         entry.update(
@@ -2746,10 +3909,12 @@ class InteractiveSession:
                 "provenance": provenance,
                 "projection_sha256": projection_sha256,
                 "result_sha256": result_sha256,
+                "data_trust": data_trust,
+                "artifact_sha256": artifact_sha256,
+                "workspace_source_sha256": workspace_source_sha256,
+                "model_projection": model_projection,
             }
         )
-        if workspace_result is not None:
-            entry["workspace_result"] = workspace_result
         event = {
             "type": "tool_event",
             "turn_id": turn.turn_id,
@@ -2759,20 +3924,20 @@ class InteractiveSession:
             "status": status,
             **values,
             "result": result,
+            "model_projection": model_projection,
             "provenance": provenance,
             "projection_sha256": projection_sha256,
             "result_sha256": result_sha256,
+            "data_trust": data_trust,
+            "artifact_sha256": artifact_sha256,
+            "workspace_source_sha256": workspace_source_sha256,
         }
-        controller_event = dict(event)
-        if workspace_result is not None:
-            controller_event.update(
-                {
-                    "workspace_result": workspace_result,
-                    "data_trust": NEXUS_WORKSPACE_RESULT_TRUST,
-                }
-            )
-        self._controller(controller_event)
-        telemetry = {key: value for key, value in event.items() if key != "result"}
+        self._controller(event)
+        telemetry = {
+            key: value
+            for key, value in event.items()
+            if key not in ("result", "model_projection")
+        }
         telemetry["event"] = "tool_event"
         self._telemetry(telemetry, source="guest")
 
@@ -2871,30 +4036,6 @@ class InteractiveSession:
         value["agent_role"] = role
         value["task_state"] = task_state
         value["event"] = event
-        pending_result_metric: tuple[dict[str, object], int, int] | None = None
-        metric_code = value.get("metric_code")
-        metric_entry = self._nexus_tool_ledger.get(int(value["corr_id"]))
-        if (
-            event == "progress"
-            and value["parent_task_id"] != 0
-            and isinstance(metric_code, int)
-            and NEXUS_RESULT_VALUE_METRIC_FIRST
-            <= metric_code
-            <= NEXUS_RESULT_VALUE_METRIC_LAST
-            and metric_entry is not None
-            and metric_entry.get("tool") == "inspect_system"
-        ):
-            stored_metrics = metric_entry.get("result_value_metrics", {})
-            if not isinstance(stored_metrics, Mapping) or metric_code in stored_metrics:
-                raise relay.WireProtocolError(
-                    "BAD_TASK_EVENT",
-                    "system observation result metric was duplicated",
-                )
-            pending_result_metric = (
-                metric_entry,
-                metric_code,
-                int(value["metric_value"]),
-            )
         assert self._nexus_task_ledger is not None
         try:
             if self._nexus_user_cancel_root_needs_synthetic_tool_settlement(value):
@@ -2913,11 +4054,6 @@ class InteractiveSession:
                 self._nexus_cancel_pending = False
         except nexus_task_ledger.NexusTaskLedgerError as error:
             raise _nexus_ledger_wire_error(error) from None
-        if pending_result_metric is not None:
-            metric_entry, metric_code, metric_value = pending_result_metric
-            result_metrics = metric_entry.setdefault("result_value_metrics", {})
-            assert isinstance(result_metrics, dict)
-            result_metrics[metric_code] = metric_value
         self._controller({"type": "task_event", **value})
         self._telemetry(value, source="guest")
 
@@ -2997,6 +4133,33 @@ class InteractiveSession:
         status = _text(payload.get("status", "completed"), "turn status", maximum=32)
         if status not in ("completed", "cancelled", "error"):
             raise relay.WireProtocolError("BAD_TURN", "unsupported turn completion status")
+        terminal_context_sequence = 0
+        if self.guest_profile == "nexus":
+            if status == "completed":
+                terminal_context_sequence = _positive_full_u64(
+                    payload.get("context_seq"), "context_seq", code="BAD_TURN"
+                )
+            else:
+                terminal_context_sequence = _full_u64(
+                    payload.get("context_seq"), "context_seq", code="BAD_TURN"
+                )
+                expected_rollback_sequence = (
+                    turn.context_start_sequence
+                    if turn.context_start_known
+                    else (
+                        self._nexus_context_head_sequence
+                        if self._nexus_context_head_known
+                        else None
+                    )
+                )
+                if (
+                    expected_rollback_sequence is not None
+                    and terminal_context_sequence != expected_rollback_sequence
+                ):
+                    raise relay.WireProtocolError(
+                        "BAD_TURN",
+                        "rollback context_seq does not match the pinned turn-start head",
+                    )
         if "answer" in payload and "content" in payload:
             raise relay.WireProtocolError(
                 "BAD_TURN", "turn completion contains ambiguous answer fields"
@@ -3016,6 +4179,11 @@ class InteractiveSession:
                 "cancelled or failed Nexus turns must not contain an answer",
             )
         if self.guest_profile == "nexus" and status == "completed":
+            if terminal_context_sequence <= turn.context_visible_head_sequence:
+                raise relay.WireProtocolError(
+                    "BAD_TURN",
+                    "Nexus final Context node must follow every observed visible head",
+                )
             delivered = self._last_final_response
             if (
                 delivered is None
@@ -3142,13 +4310,29 @@ class InteractiveSession:
                     "attempts": turn.attempts,
                 }
             )
-            if (
-                status == "completed"
-                and not turn.cancelled
-                and not isinstance(self.provider, relay.ReplayProvider)
-            ):
-                self._nexus_dialogue_history.append((turn.user_content, str(answer)))
-                del self._nexus_dialogue_history[:-NEXUS_DIALOGUE_HISTORY_TURNS]
+            if not turn.context_start_known and status != "completed":
+                turn.context_start_sequence = terminal_context_sequence
+                turn.context_start_known = True
+            self._nexus_context_head_sequence = terminal_context_sequence
+            self._nexus_context_head_known = True
+            if status == "completed":
+                pair_sha256 = hashlib.sha256(
+                    turn.user_content.encode("utf-8")
+                    + b"\0"
+                    + str(answer).encode("utf-8")
+                ).hexdigest()
+                self._nexus_completed_turn_bindings.append(
+                    (
+                        turn.turn_id,
+                        turn.request_id,
+                        turn.context_user_sequence,
+                        terminal_context_sequence,
+                        pair_sha256,
+                    )
+                )
+                del self._nexus_completed_turn_bindings[
+                    :-nexus_contract.CONTEXT_PATH_MAX_TURNS
+                ]
         for optional in (("rounds",) if self.guest_profile != "nexus" else ()) + (
             "context_seq",
         ):
@@ -3191,7 +4375,9 @@ class InteractiveSession:
         event.setdefault("status", status)
         if command == "reset" and status == "ok":
             self.session_approvals.clear()
-            self._nexus_dialogue_history.clear()
+            self._nexus_completed_turn_bindings.clear()
+            self._nexus_context_head_sequence = 0
+            self._nexus_context_head_known = True
             self._nexus_tool_ledger.clear()
             self._last_final_request_sha256 = ""
             self._nexus_final_frozen = False
@@ -3309,56 +4495,42 @@ class InteractiveSession:
                 raise relay.WireProtocolError(
                     "BAD_TELEMETRY", "kernel audit role is unsupported"
                 )
-            audit_kind = self._telemetry_int(
+            self._telemetry_int(
                 payload.get("audit_kind"), "audit_kind", minimum=0, maximum=0xFFFFFFFF
             )
-            if audit_kind not in (2, 3):
-                raise relay.WireProtocolError(
-                    "BAD_TELEMETRY", "kernel audit kind is unsupported"
-                )
             self._telemetry_int(
                 payload.get("loop_state"), "loop_state", minimum=0, maximum=0xFFFFFFFF
             )
             self._telemetry_int(
                 payload.get("tool_id"), "tool_id", minimum=0, maximum=0xFFFFFFFF
             )
-            if payload.get("event_type") != 2 or isinstance(payload.get("event_type"), bool):
-                raise relay.WireProtocolError(
-                    "BAD_TELEMETRY", "kernel audit event type is unsupported"
-                )
-            source_pid = self._telemetry_int(
+            self._telemetry_int(
+                payload.get("event_type"), "event_type", minimum=0, maximum=0xFFFFFFFF
+            )
+            self._telemetry_int(
                 payload.get("source_pid"),
                 "source_pid",
                 minimum=1,
                 maximum=(1 << 31) - 1,
             )
-            target_pid = self._telemetry_int(
+            self._telemetry_int(
                 payload.get("target_pid"),
                 "target_pid",
                 minimum=1,
                 maximum=(1 << 31) - 1,
             )
-            del source_pid
             self._telemetry_int(
                 payload.get("status"),
                 "status",
                 minimum=-(1 << 31),
                 maximum=(1 << 31) - 1,
             )
-            self._telemetry_int(payload.get("value0"), "value0", minimum=1)
-            self._telemetry_int(payload.get("value1"), "value1", minimum=1)
-            value2 = self._telemetry_int(payload.get("value2"), "value2", minimum=0)
-            if value2 != target_pid:
-                raise relay.WireProtocolError(
-                    "BAD_TELEMETRY", "kernel audit target binding is inconsistent"
-                )
-            provenance = self._telemetry_int(
+            self._telemetry_int(payload.get("value0"), "value0", minimum=0)
+            self._telemetry_int(payload.get("value1"), "value1", minimum=0)
+            self._telemetry_int(payload.get("value2"), "value2", minimum=0)
+            self._telemetry_int(
                 payload.get("provenance"), "provenance", minimum=0
             )
-            if provenance != 0:
-                raise relay.WireProtocolError(
-                    "BAD_TELEMETRY", "MESSAGE audit provenance must be zero"
-                )
             self._bind_nexus_lifecycle(lifecycle, code="BAD_TELEMETRY")
             self._bind_kernel_identity(
                 role=role,
@@ -3539,7 +4711,9 @@ class InteractiveSession:
             self.provider.assert_exhausted()
         if self._nexus_task_ledger is not None:
             self._nexus_task_ledger.clear(reset_session=True)
-        self._nexus_dialogue_history.clear()
+        self._nexus_completed_turn_bindings.clear()
+        self._nexus_context_head_sequence = 0
+        self._nexus_context_head_known = False
         self.closed = True
         self._controller({"type": "session_closed", "reason": reason})
         self._telemetry({"event": "session_closed", "reason": reason})
@@ -3584,6 +4758,11 @@ class InteractiveSession:
             if key not in payload:
                 continue
             item = payload[key]
+            if key == "context_path":
+                projected = _context_path_metadata(item)
+                if projected is not None:
+                    value[key] = projected
+                continue
             if key == "history_bindings":
                 if (
                     isinstance(item, list)
@@ -3591,7 +4770,13 @@ class InteractiveSession:
                     and all(
                         isinstance(binding, dict)
                         and set(binding)
-                        == {"tool_corr_id", "tool", "projection_sha256"}
+                        == {
+                            "tool_corr_id",
+                            "tool",
+                            "projection_sha256",
+                            "projection_field",
+                            "data_trust",
+                        }
                         and isinstance(binding["tool_corr_id"], int)
                         and not isinstance(binding["tool_corr_id"], bool)
                         and 0 < binding["tool_corr_id"] <= relay.MAX_SEQUENCE
@@ -3603,6 +4788,10 @@ class InteractiveSession:
                             binding["projection_sha256"]
                         )
                         is not None
+                        and binding["projection_field"]
+                        in ("model_projection", "runtime_observation")
+                        and binding["data_trust"]
+                        in ("", "guest_runtime_untrusted")
                         for binding in item
                     )
                 ):

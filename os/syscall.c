@@ -324,10 +324,9 @@ static uint64 sys_read(struct file *f, int fd, uint64 va, uint64 len)
 	return result;
 }
 
-uint64 sys_fstat(int fd, uint64 stataddr)
+uint64 sys_fstat(struct file *f, int fd, uint64 stataddr)
 {
 	struct user_stat status;
-	struct file *f;
 	struct proc *p = curr_proc();
 	struct vfs_cred cred;
 	int result = -1;
@@ -335,7 +334,6 @@ uint64 sys_fstat(int fd, uint64 stataddr)
 	if (fd < 0 || fd >= FD_BUFFER_SIZE || stataddr == 0 ||
 	    user_range_check(p->pagetable, stataddr, sizeof(status), PTE_W) < 0)
 		return -1;
-	f = fdget(fd);
 	if (f == 0)
 		return -1;
 	memset(&status, 0, sizeof(status));
@@ -355,7 +353,6 @@ uint64 sys_fstat(int fd, uint64 stataddr)
 			result = copyout(p->pagetable, stataddr, (char *)&status,
 					 sizeof(status));
 	}
-	fileclose(f);
 	return result;
 }
 
@@ -933,6 +930,7 @@ static void syscall_transaction_prepare(
 	switch (transaction->id) {
 	case SYS_read:
 	case SYS_write:
+	case SYS_fstat:
 		transaction->file_fd = (int)trapframe->a0;
 		transaction->file = syscall_fd_pin(trapframe->a0);
 		if (syscall_file_uses_disk(transaction->file)) {
@@ -1153,7 +1151,8 @@ static __attribute__((noinline)) int syscall_dispatch(
 			       trapframe->a1, trapframe->a2);
 		break;
 	case SYS_fstat:
-		ret = sys_fstat(trapframe->a0, trapframe->a1);
+		ret = sys_fstat(transaction->file, (int)trapframe->a0,
+				trapframe->a1);
 		break;
 	case SYS_openat:
 		ret = sys_openat(trapframe->a0, trapframe->a1, trapframe->a2);
@@ -1295,6 +1294,14 @@ static __attribute__((noinline)) int syscall_dispatch(
 			trapframe->a0, trapframe->a1,
 			transaction != 0 ? transaction->file : 0,
 			transaction != 0 ? transaction->file_fd : -1);
+		break;
+	case SYS_agent_task_delegate_claim:
+		ret = sys_agent_task_delegate_claim(trapframe->a0,
+						 trapframe->a1);
+		break;
+	case SYS_agent_task_delegate_complete:
+		ret = sys_agent_task_delegate_complete(trapframe->a0,
+						    trapframe->a1);
 		break;
 	case SYS_agent_resource_snapshot:
 		ret = sys_agent_resource_snapshot(trapframe->a0,
@@ -1484,6 +1491,7 @@ static __attribute__((noinline)) int syscall_dispatch(
 static __attribute__((noinline)) int syscall_slow_path(
 	struct trapframe *trapframe, int id, uint policy,
 	struct agent_execution_direct_guard *direct_guard,
+	struct agent_execution_direct_guard *file_pin_guard,
 	int *operation_denied)
 {
 	struct syscall_transaction_context *transaction =
@@ -1493,6 +1501,22 @@ static __attribute__((noinline)) int syscall_slow_path(
 	int ret = -1;
 
 	syscall_transaction_prepare(transaction, trapframe, id, policy);
+	/*
+	 * The publication cut protects a stable inode identity.  Pipes, devices,
+	 * and console streams are long-lived control flows and must not pin
+	 * bare_inflight while a read blocks; their writes remain governed by the
+	 * exact direct-effect gate below.
+	 */
+	if ((id == SYS_read || id == SYS_write || id == SYS_fstat ||
+	     id == SYS_agent_task_channel_resource) &&
+	    transaction->file != 0 && transaction->file->type == FD_INODE) {
+		ret = agent_execution_contract_file_pin_enter(
+			curr_proc(), file_pin_guard);
+		if (ret != AGENT_STATUS_OK) {
+			*operation_denied = 1;
+			goto finish;
+		}
+	}
 	direct_side_effects = syscall_direct_agent_side_effects(
 		id, trapframe, transaction);
 	if (direct_side_effects != 0) {
@@ -1604,6 +1628,8 @@ syscall_mutates_workflow_cut(int id, const struct trapframe *trapframe)
 	case SYS_agent_worker_create:
 	case SYS_agent_task_channel_setup:
 	case SYS_agent_task_channel_enter:
+	case SYS_agent_task_delegate_claim:
+	case SYS_agent_task_delegate_complete:
 		return 0;
 	/* Exit/close drive their own lifecycle protocols; never nest the gate. */
 	case SYS_exit:
@@ -1821,18 +1847,10 @@ void syscall()
 			}
 			operation_entered = 1;
 		}
-		if (id == SYS_read || id == SYS_write || id == SYS_fstat ||
-		    id == SYS_agent_task_channel_resource) {
-			ret = agent_execution_contract_file_pin_enter(
-				curr_proc(), &file_pin_guard);
-			if (ret != AGENT_STATUS_OK) {
-				operation_denied = 1;
-				goto operation_done;
-			}
-		}
 		if (syscall_needs_transaction(class)) {
 			ret = syscall_slow_path(
 				trapframe, id, policy, &direct_guard,
+				&file_pin_guard,
 				&operation_denied);
 		} else {
 			direct_side_effects = syscall_direct_agent_side_effects(

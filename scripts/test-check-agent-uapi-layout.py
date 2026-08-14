@@ -23,7 +23,41 @@ class AgentUapiLayoutTests(unittest.TestCase):
         )
 
     def test_golden_contract_has_expected_coverage(self):
-        self.assertEqual(len(self.golden), 560)
+        self.assertEqual(len(self.golden), 640)
+        self.assertEqual(
+            self.golden["agent_uapi_layout_size_task_delegate_descriptor"],
+            56,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_size_task_delegate_claim_result"],
+            128,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_size_task_delegate_complete"],
+            96,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_offset_task_delegate_complete_ack_terminal_status"
+            ],
+            89,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_offset_task_delegate_complete_result_terminal_generation"
+            ],
+            61,
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_value_task_delegate_claim_syscall"],
+            567,
+        )
+        self.assertEqual(
+            self.golden[
+                "agent_uapi_layout_value_task_delegate_complete_syscall"
+            ],
+            568,
+        )
         self.assertEqual(
             self.golden["agent_uapi_layout_value_ledger_version"], 3
         )
@@ -368,6 +402,88 @@ class AgentUapiLayoutTests(unittest.TestCase):
             ):
                 agent_uapi_layout.validate_feature_abi_constants(root)
 
+            path.write_text(
+                (ROOT / "include" / "agent_task_channel_abi.h")
+                .read_text(encoding="utf-8")
+                .replace(
+                    "#define AGENT_TASK_DELEGATE_VERSION 1U",
+                    "#define AGENT_TASK_DELEGATE_VERSION 2U",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "frozen value 1"
+            ):
+                agent_uapi_layout.validate_feature_abi_constants(root)
+
+            path.write_text(
+                (ROOT / "include" / "agent_task_channel_abi.h")
+                .read_text(encoding="utf-8")
+                .replace(
+                    "#define AGENT_TASK_DELEGATE_CLAIM_F_ALL "
+                    "AGENT_TASK_DELEGATE_CLAIM_F_WAIT",
+                    "#define AGENT_TASK_DELEGATE_CLAIM_F_ALL 0U",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "claim mask"
+            ):
+                agent_uapi_layout.validate_feature_abi_constants(root)
+
+            path.write_text(
+                (ROOT / "include" / "agent_task_channel_abi.h")
+                .read_text(encoding="utf-8")
+                .replace(
+                    "#define AGENT_TASK_DELEGATE_COMPLETE_F_ALL \\\n"
+                    "\t(AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL | \\\n"
+                    "\t AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL)",
+                    "#define AGENT_TASK_DELEGATE_COMPLETE_F_ALL 0U",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "completion mask"
+            ):
+                agent_uapi_layout.validate_feature_abi_constants(root)
+
+            path.write_text(
+                (ROOT / "include" / "agent_task_channel_abi.h")
+                .read_text(encoding="utf-8")
+                .replace(
+                    "#define AGENT_TASK_DELEGATE_EXECUTOR_PID_MASK 0xffffffffULL",
+                    "#define AGENT_TASK_DELEGATE_EXECUTOR_PID_MASK 0xffffULL",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "executor identity packing"
+            ):
+                agent_uapi_layout.validate_feature_abi_constants(root)
+            path.write_text(
+                (ROOT / "include" / "agent_task_channel_abi.h").read_text(
+                    encoding="utf-8"
+                ),
+                encoding="utf-8",
+            )
+
+            for relative in ("os/agent.h", "user/include/agent.h"):
+                route_path = root / relative
+                route_path.write_text(
+                    (ROOT / relative)
+                    .read_text(encoding="utf-8")
+                    .replace(
+                        "#define AGENT_IPC_ROUTE_MASK "
+                        "(AGENT_IPC_EVENT_MASK | AGENT_IPC_ROUTE_TASK)",
+                        "#define AGENT_IPC_ROUTE_MASK AGENT_IPC_EVENT_MASK",
+                    ),
+                    encoding="utf-8",
+                )
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "route mask"
+            ):
+                agent_uapi_layout.validate_feature_abi_constants(root)
+
     def test_syscall_reservations_reject_partial_task_wiring(self):
         agent_uapi_layout.validate_agent_syscall_numbers(ROOT)
         temporary = tempfile.TemporaryDirectory()
@@ -393,6 +509,17 @@ class AgentUapiLayoutTests(unittest.TestCase):
             self.assertIn(definition, source)
             path.write_text(
                 source.replace(definition, "", 1),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "atomically mirror"
+            ):
+                agent_uapi_layout.validate_agent_syscall_numbers(root)
+
+            claim_definition = "#define SYS_agent_task_delegate_claim 567\n"
+            self.assertIn(claim_definition, source)
+            path.write_text(
+                source.replace(claim_definition, "", 1),
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(
@@ -433,6 +560,7 @@ class AgentUapiLayoutTests(unittest.TestCase):
         for relative in (
             "include/agent_provenance_abi.h",
             "os/agent.h",
+            "os/agent_provenance.c",
             "user/include/agent.h",
         ):
             (root / relative).write_text(
@@ -518,6 +646,23 @@ class AgentUapiLayoutTests(unittest.TestCase):
             path.write_text(source, encoding="utf-8")
             with self.assertRaisesRegex(
                 agent_uapi_layout.LayoutError, "not one-to-one"
+            ):
+                agent_uapi_layout.validate_tool_protocol_schema(root)
+
+    def test_tool_security_registry_covers_the_public_capability_mask(self):
+        temporary, root = self.schema_fixture(
+            'X(REPLY_SUMMARY, "reply_summary")'
+        )
+        with temporary:
+            path = root / "os" / "agent_provenance.c"
+            source = path.read_text(encoding="utf-8").replace(
+                "#define AGENT_PROVENANCE_CAP_ALL ((1ULL << 14) - 1ULL)",
+                "#define AGENT_PROVENANCE_CAP_ALL ((1ULL << 13) - 1ULL)",
+            )
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError,
+                "capability acceptance mask",
             ):
                 agent_uapi_layout.validate_tool_protocol_schema(root)
 

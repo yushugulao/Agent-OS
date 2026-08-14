@@ -51,6 +51,7 @@ static const struct expected_tool_schema expected_tools[AGENT_TOOL_COUNT] = {
 	{ AGENT_TOOL_LLM_REQUEST, AGENT_TOOL_F_CALLABLE, 2, "llm_request", "target_pid:uint64,prompt_summary:string" },
 	{ AGENT_TOOL_LLM_RESPONSE, AGENT_TOOL_F_CALLABLE, 2, "llm_response", "target_pid:uint64,reply_summary:string" },
 	{ AGENT_TOOL_DEPENDENCY_UPDATE, AGENT_TOOL_F_CALLABLE, 1, "dependency_update", "selector:string" },
+	{ AGENT_TOOL_DELEGATE_TASK, AGENT_TOOL_F_SYSCALL_ONLY, 0, "delegate_task", "none" },
 };
 
 static void check(int ok, const char *message)

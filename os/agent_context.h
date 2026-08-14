@@ -39,7 +39,7 @@ int agent_context_append(struct proc *, struct agent_op *,
 			 struct agent_result *, uint64, int);
 int agent_context_append_reserved_ticket(
 	struct proc *, struct agent_op *, struct agent_result *, uint64, int,
-	struct agent_evidence_context_reservation *, uint64 *);
+	struct agent_evidence_context_reservation *, uint64 *, uint64 *);
 int agent_context_append_system(struct proc *, int, uint64, uint64, char *,
 				char *, int, uint64, uint64, uint64);
 int agent_context_append_system_causal(struct proc *, int, uint64, uint64,

@@ -61,7 +61,8 @@ struct agent_tool_security_definition {
 	X(AGENT_TOOL_ARTIFACT_UPDATE, AGENT_TOOL_F_CALLABLE, "artifact_update", "update a generic Agent artifact state") \
 	X(AGENT_TOOL_LLM_REQUEST, AGENT_TOOL_F_CALLABLE, "llm_request", "record and route a structured LLM request") \
 	X(AGENT_TOOL_LLM_RESPONSE, AGENT_TOOL_F_CALLABLE, "llm_response", "return a structured LLM relay response") \
-	X(AGENT_TOOL_DEPENDENCY_UPDATE, AGENT_TOOL_F_CALLABLE, "dependency_update", "register or update a generic object dependency")
+	X(AGENT_TOOL_DEPENDENCY_UPDATE, AGENT_TOOL_F_CALLABLE, "dependency_update", "register or update a generic object dependency") \
+	X(AGENT_TOOL_DELEGATE_TASK, AGENT_TOOL_F_SYSCALL_ONLY, "delegate_task", "submit a typed task to another Agent provider")
 
 #define ASSERT_TOOL_STRINGS(id, flags, name, description) \
 	_Static_assert(sizeof(name) <= AGENT_TOOL_NAME_SIZE, \
@@ -103,7 +104,8 @@ static const struct agent_tool_definition agent_tools[] = {
 	X(AGENT_CAP_ARTIFACT_WRITE, PROV_ACCEPT_ARTIFACT, PROV_DERIVED, AGENT_SIDE_EFFECT_ARTIFACT) \
 	X(AGENT_CAP_MESSAGE_SEND, PROV_ACCEPT_AGENT_LOOP, PROV_DERIVED, AGENT_SIDE_EFFECT_IPC) \
 	X(AGENT_CAP_LLM_RELAY, PROV_ACCEPT_AGENT_LOOP, PROV_TOOL, AGENT_SIDE_EFFECT_IPC) \
-	X(AGENT_CAP_DEPENDENCY_UPDATE, PROV_ACCEPT_CONTROL, PROV_DERIVED, AGENT_SIDE_EFFECT_METADATA)
+	X(AGENT_CAP_DEPENDENCY_UPDATE, PROV_ACCEPT_CONTROL, PROV_DERIVED, AGENT_SIDE_EFFECT_METADATA) \
+	X(AGENT_CAP_ORCHESTRATE, PROV_ACCEPT_AGENT_LOOP, PROV_DERIVED, AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA | AGENT_SIDE_EFFECT_IPC | AGENT_SIDE_EFFECT_PROCESS | AGENT_SIDE_EFFECT_PERMISSION | AGENT_SIDE_EFFECT_ARTIFACT)
 
 #define SECURITY_ENTRY(caps, accepted, output, effects) \
 	{ caps, accepted, output, effects },
@@ -195,7 +197,7 @@ static const struct param_rule rules[] = {
 #define AGENT_TOOL_RULE_COUNT 30U
 static const unsigned char rule_offsets[AGENT_TOOL_COUNT + 1] = {
 	0, 3, 3, 3, 4, 4, 4, 5, 7, 7, 7, 8, 9,
-	11, 13, 15, 17, 18, 19, 20, 21, 23, 25, 27, 29, 30,
+	11, 13, 15, 17, 18, 19, 20, 21, 23, 25, 27, 29, 30, 30,
 };
 #undef R
 #undef AGENT_TOOL_REGISTRY

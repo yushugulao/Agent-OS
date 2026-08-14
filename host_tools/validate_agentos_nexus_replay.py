@@ -77,10 +77,12 @@ CONTROL_ID_FIELDS = frozenset(
     ("control_id", "agent_control_id", "actor_control_id")
 )
 ARTIFACT_CLEANUP_SESSION_BLOCK = "artifact_cleanup_failed;session_blocked=1"
-WORKSPACE_REQUEST_RESULT = "workspace_request_ready;provided_by_host=1"
+CONTEXT_FINAL_FAILED = "context_final_failed"
+WORKSPACE_OBSERVATION_RESULT = (
+    "workspace_observation_ready;agentos_catalog=1;task_channel=1"
+)
+SYSTEM_OBSERVATION_RESULT = "system_observation_ready;task_channel=1"
 FILE_READ_MAX_LINES = 64
-RESULT_VALUE_METRIC_FIRST = 140
-RESULT_VALUE_METRIC_LAST = 145
 
 MODEL_REQUEST_FIELDS = frozenset(
     (
@@ -93,6 +95,7 @@ MODEL_REQUEST_FIELDS = frozenset(
         "request_sha256",
         "raw_guest_request_sha256",
         "history_bindings",
+        "context_path",
         "request_contains_user",
         "user_message_index",
         "generation",
@@ -157,6 +160,35 @@ TOOL_EVENT_FIELDS = frozenset(
         "provenance",
         "projection_sha256",
         "result_sha256",
+        "artifact_sha256",
+        "data_trust",
+        "workspace_source_sha256",
+        "model_projection",
+    )
+)
+WORKSPACE_REQUEST_FIELDS = frozenset(
+    (
+        "type",
+        "turn_id",
+        "request_id",
+        "corr_id",
+        "task_id",
+        "tool",
+        "operation",
+        "attempt",
+        "workspace_generation",
+        "arguments_sha256",
+        "objects_sha256",
+        "manifest_cursor",
+    )
+)
+WORKSPACE_RESULT_FIELDS = WORKSPACE_REQUEST_FIELDS | frozenset(
+    (
+        "status",
+        "content_bytes",
+        "content_sha256",
+        "manifest_next_cursor",
+        "manifest_eof",
     )
 )
 OBSERVER_SAFE_FIELDS = frozenset(
@@ -222,11 +254,22 @@ OBSERVER_SAFE_FIELDS = frozenset(
         "rounds",
         "attempt",
         "attempts",
+        "operation",
+        "workspace_generation",
+        "arguments_sha256",
+        "objects_sha256",
+        "manifest_cursor",
+        "manifest_next_cursor",
+        "manifest_eof",
+        "workspace_source_sha256",
+        "content_bytes",
+        "content_sha256",
         "retries",
         "max_retries",
         "request_sha256",
         "raw_guest_request_sha256",
         "history_bindings",
+        "context_path",
         "projection_sha256",
         "result_sha256",
         "request_contains_user",
@@ -272,6 +315,7 @@ OBSERVER_FORBIDDEN_KEYS = frozenset(
         "detail",
         "display",
         "message",
+        "model_projection",
         "nonce",
         "objective",
         "raw",
@@ -280,6 +324,7 @@ OBSERVER_FORBIDDEN_KEYS = frozenset(
         "system",
         "tools",
         "user_message",
+        "workspace_result",
     )
 )
 
@@ -295,6 +340,33 @@ class FixtureRecord:
 
 
 @dataclass(frozen=True)
+class _ContextTurnBinding:
+    turn_id: int
+    request_id: int
+    user_sequence: int
+    final_sequence: int
+    sha256: str
+
+
+@dataclass(frozen=True)
+class _ContextPath:
+    version: int
+    branch_generation: int
+    visible_head_sequence: int
+    current_user_sequence: int
+    turns: tuple[_ContextTurnBinding, ...]
+
+
+@dataclass(frozen=True)
+class _CompletedContextTurn:
+    turn_id: int
+    request_id: int
+    user_sequence: int
+    final_sequence: int
+    pair_sha256: str | None
+
+
+@dataclass(frozen=True)
 class TurnReport:
     turn_id: int
     request_id: int
@@ -302,6 +374,7 @@ class TurnReport:
     request_count: int
     tool_calls: tuple[tuple[int, str], ...]
     direct_final: bool
+    cancel_requested: bool
     cancelled_active_worker: bool
     final_content: str
 
@@ -336,6 +409,132 @@ def _digest(value: object, label: str, *, empty: bool = False) -> str:
     _require(isinstance(value, str) and DIGEST_RE.fullmatch(value) is not None,
              f"{label} is not a lowercase SHA-256 digest")
     return str(value)
+
+
+def _context_path(value: object, label: str = "context_path") -> _ContextPath:
+    root_fields = {
+        "version",
+        "branch_generation",
+        "visible_head_sequence",
+        "current_user_sequence",
+        "turns",
+    }
+    turn_fields = {
+        "turn_id",
+        "request_id",
+        "user_sequence",
+        "final_sequence",
+        "sha256",
+    }
+    _require(
+        isinstance(value, dict) and set(value) == root_fields,
+        f"{label} fields are malformed",
+    )
+    assert isinstance(value, dict)
+    _require(
+        value.get("version") == nexus_contract.CONTEXT_PATH_VERSION
+        and not isinstance(value.get("version"), bool),
+        f"{label} version is unsupported",
+    )
+    for field in (
+        "branch_generation",
+        "visible_head_sequence",
+        "current_user_sequence",
+    ):
+        _require(
+            _is_int(value.get(field), 1, U64_MAX),
+            f"{label} {field} is not positive u64",
+        )
+    visible_head_sequence = int(value["visible_head_sequence"])
+    current_user_sequence = int(value["current_user_sequence"])
+    _require(
+        current_user_sequence <= visible_head_sequence,
+        f"{label} current user is outside the visible Context path",
+    )
+    raw_turns = value.get("turns")
+    _require(
+        isinstance(raw_turns, list)
+        and len(raw_turns) <= nexus_contract.CONTEXT_PATH_MAX_TURNS,
+        f"{label} turns are not a bounded list",
+    )
+    assert isinstance(raw_turns, list)
+    turns: list[_ContextTurnBinding] = []
+    previous_turn_id = 0
+    previous_request_id = 0
+    previous_final_sequence = 0
+    for index, raw_turn in enumerate(raw_turns):
+        turn_label = f"{label} turn {index}"
+        _require(
+            isinstance(raw_turn, dict) and set(raw_turn) == turn_fields,
+            f"{turn_label} fields are malformed",
+        )
+        assert isinstance(raw_turn, dict)
+        for field in (
+            "turn_id",
+            "request_id",
+            "user_sequence",
+            "final_sequence",
+        ):
+            _require(
+                _is_int(raw_turn.get(field), 1, U64_MAX),
+                f"{turn_label} {field} is not positive u64",
+            )
+        turn = _ContextTurnBinding(
+            turn_id=int(raw_turn["turn_id"]),
+            request_id=int(raw_turn["request_id"]),
+            user_sequence=int(raw_turn["user_sequence"]),
+            final_sequence=int(raw_turn["final_sequence"]),
+            sha256=_digest(raw_turn.get("sha256"), f"{turn_label} digest"),
+        )
+        _require(
+            turn.turn_id > previous_turn_id
+            and turn.request_id > previous_request_id,
+            f"{label} turn bindings are not increasing",
+        )
+        _require(
+            turn.user_sequence > previous_final_sequence
+            and turn.final_sequence > turn.user_sequence
+            and turn.final_sequence < current_user_sequence,
+            f"{label} Context sequences are not increasing",
+        )
+        turns.append(turn)
+        previous_turn_id = turn.turn_id
+        previous_request_id = turn.request_id
+        previous_final_sequence = turn.final_sequence
+    return _ContextPath(
+        version=int(value["version"]),
+        branch_generation=int(value["branch_generation"]),
+        visible_head_sequence=visible_head_sequence,
+        current_user_sequence=current_user_sequence,
+        turns=tuple(turns),
+    )
+
+
+def _context_path_projection(path: _ContextPath) -> dict[str, object]:
+    return {
+        "version": path.version,
+        "branch_generation": path.branch_generation,
+        "visible_head_sequence": path.visible_head_sequence,
+        "current_user_sequence": path.current_user_sequence,
+        "turns": [
+            {
+                "turn_id": turn.turn_id,
+                "request_id": turn.request_id,
+                "user_sequence": turn.user_sequence,
+                "final_sequence": turn.final_sequence,
+                "sha256": turn.sha256,
+            }
+            for turn in path.turns
+        ],
+    }
+
+
+def _pair_sha256(user: str, assistant: str) -> str:
+    try:
+        raw = user.encode("utf-8") + b"\0" + assistant.encode("utf-8")
+    except UnicodeEncodeError:
+        _fail("Context pair is not scalar UTF-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _bounded_text(
@@ -423,8 +622,8 @@ def _sha_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _inspect_system_projection(
-    operation: object, result_metrics: Mapping[int, object]
+def _system_projection(
+    operation: object, value0: object, value1: object, value2: object
 ) -> str:
     specifications = {
         "status": (
@@ -447,22 +646,13 @@ def _inspect_system_projection(
         ),
     }
     specification = specifications.get(operation)
-    expected_codes = set(range(RESULT_VALUE_METRIC_FIRST, RESULT_VALUE_METRIC_LAST + 1))
     _require(
-        specification is not None and set(result_metrics) == expected_codes,
-        "system observation result metrics are incomplete",
+        specification is not None
+        and _is_int(value0, 0, MAX_U64)
+        and _is_int(value1, 0, MAX_U64)
+        and value2 == 0,
+        "system observation values do not match its operation",
     )
-    values: list[int] = []
-    for low_code in range(
-        RESULT_VALUE_METRIC_FIRST, RESULT_VALUE_METRIC_LAST + 1, 2
-    ):
-        low = result_metrics[low_code]
-        high = result_metrics[low_code + 1]
-        _require(
-            _is_int(low, 0, MAX_U32) and _is_int(high, 0, MAX_U32),
-            "system observation result metric is malformed",
-        )
-        values.append(int(low) | (int(high) << 32))
     assert specification is not None
     tool, first_label, second_label, omitted = specification
     return (
@@ -471,8 +661,8 @@ def _inspect_system_projection(
         f"operation={operation}\n"
         f"tool={tool}\n"
         "status=0\n"
-        f"{first_label}={values[0]}\n"
-        f"{second_label}={values[1]}\n"
+        f"{first_label}={value0}\n"
+        f"{second_label}={value1}\n"
         f"volatile_fields_omitted={omitted}\n"
     )
 
@@ -662,16 +852,38 @@ def _history_bindings(
     previous = 0
     available = {entry for entry in settled if entry is not None}
     for item in value:
-        _require(isinstance(item, dict)
-                 and set(item) == {"tool_corr_id", "tool", "projection_sha256"},
-                 "model history binding fields are malformed")
+        _require(
+            isinstance(item, dict)
+            and set(item)
+            == {
+                "tool_corr_id",
+                "tool",
+                "projection_sha256",
+                "projection_field",
+                "data_trust",
+            },
+            "model history binding fields are malformed",
+        )
         corr = item.get("tool_corr_id")
         tool = item.get("tool")
         digest = item.get("projection_sha256")
         _require(_is_int(corr, 1) and previous < int(corr) < current_corr,
                  "model history correlations are not unique and increasing")
         _require(isinstance(tool, str) and tool in TOOL_SET,
-                 "model history names an unadvertised tool")
+                  "model history names an unadvertised tool")
+        expected_projection_field = (
+            "model_projection"
+            if tool in task_ledger.WORKSPACE_TOOLS
+            else "runtime_observation"
+        )
+        expected_data_trust = (
+            "" if tool in task_ledger.WORKSPACE_TOOLS else "guest_runtime_untrusted"
+        )
+        _require(
+            item.get("projection_field") == expected_projection_field
+            and item.get("data_trust") == expected_data_trust,
+            "model history projection type does not match its tool",
+        )
         _digest(digest, "model history projection")
         _require((int(corr), str(tool), str(digest)) in available,
                  "model history is not bound to a settled tool projection")
@@ -681,7 +893,21 @@ def _history_bindings(
     suffixes = (tail[-length:] for length in range(1, len(tail) + 1))
     candidates = [
         [
-            {"tool_corr_id": corr, "tool": tool, "projection_sha256": digest}
+            {
+                "tool_corr_id": corr,
+                "tool": tool,
+                "projection_sha256": digest,
+                "projection_field": (
+                    "model_projection"
+                    if tool in task_ledger.WORKSPACE_TOOLS
+                    else "runtime_observation"
+                ),
+                "data_trust": (
+                    ""
+                    if tool in task_ledger.WORKSPACE_TOOLS
+                    else "guest_runtime_untrusted"
+                ),
+            }
             for entry in suffix
             if entry is not None
             for corr, tool, digest in (entry,)
@@ -745,6 +971,14 @@ def _validate_provider_proof(
     _require(base_required | variant <= set(response)
              and not set(response).difference(base_required | variant | optional),
              "model_response proof fields are malformed")
+    _require(
+        _is_int(
+            response.get("user_message_index"),
+            0,
+            2 * nexus_contract.CONTEXT_PATH_MAX_TURNS,
+        ),
+        "model_response user_message_index is malformed",
+    )
     for key in (
         "turn_id", "request_id", "corr_id", "generation", "request_sha256",
         "raw_guest_request_sha256", "history_bindings", "request_contains_user",
@@ -905,6 +1139,14 @@ def _validate_provider_error_proof(
     _require(provider == "deepseek" and proof.get("provider") == provider
              and proof.get("model") == model,
              "provider error proof changed the configured provider identity")
+    _require(
+        _is_int(
+            proof.get("user_message_index"),
+            0,
+            2 * nexus_contract.CONTEXT_PATH_MAX_TURNS,
+        ),
+        "provider error proof user_message_index is malformed",
+    )
     for key in (
         "turn_id", "request_id", "corr_id", "generation", "request_sha256",
         "raw_guest_request_sha256", "history_bindings", "request_contains_user",
@@ -947,13 +1189,9 @@ def _validate_provider_error_proof(
 
 
 def _validate_tool_event_shape(record: Mapping[str, object]) -> None:
-    workspace_fields = {"workspace_result", "data_trust"}
     tool = record.get("tool")
     status_value = record.get("status")
-    expected_fields = set(TOOL_EVENT_FIELDS)
-    if tool in ("search_files", "read_file") and status_value == 0:
-        expected_fields.update(workspace_fields)
-    _require(set(record) == expected_fields, "tool_event fields are malformed")
+    _require(set(record) == TOOL_EVENT_FIELDS, "tool_event fields are malformed")
     _require(record.get("tool") in TOOL_SET, "tool_event names an unadvertised tool")
     _require(_is_int(record.get("corr_id"), 1)
              and _is_int(record.get("sequence"), 0)
@@ -965,22 +1203,51 @@ def _validate_tool_event_shape(record: Mapping[str, object]) -> None:
         _require(_is_int(record.get(field)), f"tool_event {field} is malformed")
     _bounded_text(record.get("result"), "tool_event result", 95, empty=True)
     _digest(record.get("result_sha256"), "tool result digest")
+    expected_trust = (
+        "untrusted"
+        if tool in task_ledger.WORKSPACE_TOOLS
+        else ("kernel_fact" if status_value == 0 else "none")
+    )
+    _require(
+        record.get("data_trust") == expected_trust,
+        "tool_event trust classification is malformed",
+    )
     status = int(record["status"])
     if status == 0:
         _require(record.get("provenance") == SUCCESS_PROVENANCE[record["tool"]],
                  "successful tool_event provenance is malformed")
         _digest(record.get("projection_sha256"), "successful tool projection")
+        artifact_digest = _digest(
+            record.get("artifact_sha256"), "successful tool artifact"
+        )
+        _require(
+            hmac.compare_digest(
+                artifact_digest, str(record.get("projection_sha256"))
+            ),
+            "tool projection is not bound to its published artifact",
+        )
         if tool in ("search_files", "read_file"):
             _bounded_workspace_result(
-                record.get("workspace_result"), "Host workspace result"
+                record.get("model_projection"), "Guest workspace projection"
+            )
+            _digest(
+                record.get("workspace_source_sha256"),
+                "workspace source root",
+            )
+        else:
+            _bounded_workspace_result(
+                record.get("model_projection"), "Guest system projection"
             )
             _require(
-                record.get("data_trust") == "host_workspace_untrusted",
-                "workspace result trust label is malformed",
+                record.get("workspace_source_sha256") == "",
+                "non-workspace tool exposed a workspace source root",
             )
     else:
         _require(record.get("provenance") == 0
                  and record.get("projection_sha256") == ""
+                 and record.get("artifact_sha256") == ""
+                 and record.get("workspace_source_sha256") == ""
+                 and record.get("model_projection") == ""
                  and all(record.get(field) == 0 for field in ("value0", "value1", "value2")),
                  "failed tool_event exposed successful result bindings")
 
@@ -1017,12 +1284,16 @@ def _kernel_identities(
             _require(_is_int(sequence, 1) and int(sequence) > audit_sequence,
                      "kernel audit sequence is not increasing")
             audit_sequence = int(sequence)
-            _require(record.get("event_type") == 2
-                     and record.get("audit_kind") in (2, 3)
-                     and record.get("provenance") == 0,
-                     "kernel MESSAGE audit contract is malformed")
-            _require(record.get("value2") == record.get("target_pid"),
-                     "kernel MESSAGE audit target binding is malformed")
+            _require(
+                _is_int(record.get("event_type"), 0, MAX_U32)
+                and _is_int(record.get("audit_kind"), 0, MAX_U32)
+                and _is_int(
+                    record.get("provenance"),
+                    0,
+                    task_ledger.NEXUS_PROVENANCE_ALL,
+                ),
+                "generic kernel audit metadata is malformed",
+            )
         else:
             _require(record.get("event") == "kernel_snapshot"
                      and record.get("fresh") is False,
@@ -1166,6 +1437,9 @@ def _validate_turn(
     max_rounds: int,
     global_corr: list[int],
     child_ids: set[int],
+    completed_context_turns: list[_CompletedContextTurn],
+    observed_context_digests: dict[tuple[int, int], str],
+    context_head_sequence: list[int | None],
 ) -> TurnReport:
     _require(records[0].get("type") == "turn_started"
              and records[-1].get("type") == "turn_complete",
@@ -1210,19 +1484,28 @@ def _validate_turn(
     tool_events: dict[int, dict[str, object]] = {}
     task_states: dict[int, tuple[int, str, str]] = {}
     task_for_corr: dict[int, int] = {}
-    result_value_metrics: dict[int, dict[int, int]] = {}
+    artifact_for_corr: dict[int, dict[str, object]] = {}
+    workspace_task_for_corr: dict[int, int] = {}
+    workspace_requests: dict[tuple[int, int], dict[str, object]] = {}
+    workspace_results: dict[tuple[int, int], dict[str, object]] = {}
+    workspace_content: dict[int, dict[str, object]] = {}
     settled_history: list[tuple[int, str, str] | None] = []
     tool_calls: list[tuple[int, str]] = []
     latest_corr = 0
     final_response: dict[str, object] | None = None
+    cancel_requested = False
     cancellation_started = False
     cancelled_active_worker = False
     cancelled_child_corrs: set[int] = set()
     derived_cancel_settlements: set[int] = set()
     pending_cleanup_root: dict[str, object] | None = None
+    frozen_final_cleanup_root = False
     attempt_number = 0
     decision_count = 0
     retry_count = 0
+    round_limit_pending_corr = 0
+    active_context_path: _ContextPath | None = None
+    turn_start_context_head = context_head_sequence[0]
     terminal = records[-1]
     terminal_status = terminal.get("status")
 
@@ -1264,28 +1547,6 @@ def _validate_turn(
                          "child task_id was reused across the session")
                 child_ids.add(task_id_int)
                 task_for_corr[corr_int] = task_id_int
-            metric_code = record.get("metric_code")
-            if (
-                int(parent) != 0
-                and event == "progress"
-                and _is_int(
-                    metric_code,
-                    RESULT_VALUE_METRIC_FIRST,
-                    RESULT_VALUE_METRIC_LAST,
-                )
-                and responses.get(corr_int, {}).get("tool") == "inspect_system"
-            ):
-                _require(
-                    task_for_corr.get(corr_int) == task_id_int,
-                    "system observation result metric changed child Task",
-                )
-                metrics = result_value_metrics.setdefault(corr_int, {})
-                code = int(metric_code)
-                _require(
-                    code not in metrics and _is_int(record.get("metric_value"), 0, MAX_U32),
-                    "system observation result metric was duplicated or malformed",
-                )
-                metrics[code] = int(record["metric_value"])
             if event == "artifact_published":
                 _digest(record.get("artifact_sha256"), "TASK artifact digest")
                 _require(record.get("provenance") == SUCCESS_PROVENANCE[
@@ -1293,6 +1554,12 @@ def _validate_turn(
                 ], "TASK artifact provenance does not match its tool")
                 _require(record.get("artifact_handle", 0) == 0,
                          "transient Nexus tool artifact exposed a handle")
+                _require(
+                    corr_int not in artifact_for_corr
+                    and task_for_corr.get(corr_int) == task_id_int,
+                    "TASK artifact changed or duplicated its child binding",
+                )
+                artifact_for_corr[corr_int] = dict(record)
             root_cancel_binding = bool(
                 cancellation_started
                 and int(parent) == 0
@@ -1322,6 +1589,16 @@ def _validate_turn(
                     "TASK_EVENT replay failed",
                 )
                 task_states[task_id_int] = (corr_int, str(event), str(state))
+                if (
+                    int(parent) == 0
+                    and event == "failed"
+                    and state == "failed"
+                    and record.get("status") == task_ledger.AGENT_STATUS_IO_ERROR
+                    and record.get("summary") == ARTIFACT_CLEANUP_SESSION_BLOCK
+                    and final_response is not None
+                    and corr_int == final_response.get("corr_id")
+                ):
+                    frozen_final_cleanup_root = True
             if (
                 int(parent) != 0
                 and event == "cancelled"
@@ -1346,12 +1623,86 @@ def _validate_turn(
                       "model request attempts are not consecutive and bounded")
             _require(record.get("round") == decision_count + 1 <= max_rounds,
                       "model request decision slot is not retry-stable and bounded")
+            context_path = _context_path(record.get("context_path"))
+            expected_user_message_index = 2 * len(context_path.turns)
             _require(record.get("generation") == generation
                      and record.get("request_contains_user") is True
-                     and record.get("user_message_index") == 0
+                     and _is_int(
+                         record.get("user_message_index"),
+                         0,
+                         2 * nexus_contract.CONTEXT_PATH_MAX_TURNS,
+                     )
+                     and record.get("user_message_index")
+                     == expected_user_message_index
                      and record.get("user_content_sha256") == user_digest
                      and record.get("user_bytes") == user_bytes,
-                     "model request is not bound to the current user goal")
+                      "model request is not bound to the current user goal")
+            if active_context_path is None:
+                if turn_start_context_head is None:
+                    turn_start_context_head = context_path.current_user_sequence - 1
+                _require(
+                    context_path.current_user_sequence > turn_start_context_head,
+                    "model request USER node does not follow the Relay Context head",
+                )
+            else:
+                _require(
+                    context_path.version == active_context_path.version
+                    and context_path.branch_generation
+                    == active_context_path.branch_generation
+                    and context_path.current_user_sequence
+                    == active_context_path.current_user_sequence
+                    and context_path.visible_head_sequence
+                    >= active_context_path.visible_head_sequence,
+                    "model request changed branch/user identity or rewound Context",
+                )
+            active_context_path = context_path
+
+            recent_context = completed_context_turns[
+                -nexus_contract.CONTEXT_PATH_MAX_TURNS:
+            ]
+            recent_completed = {
+                (prior.turn_id, prior.request_id): prior
+                for prior in recent_context
+            }
+            expected_suffix = recent_context[-len(context_path.turns):]
+            if context_path.turns:
+                _require(
+                    tuple(
+                        (prior.turn_id, prior.request_id)
+                        for prior in context_path.turns
+                    )
+                    == tuple(
+                        (prior.turn_id, prior.request_id)
+                        for prior in expected_suffix
+                    ),
+                    "context_path turns are not the ordered completed-turn suffix",
+                )
+            for prior in context_path.turns:
+                binding_key = (prior.turn_id, prior.request_id)
+                completed = recent_completed.get(binding_key)
+                _require(
+                    completed is not None,
+                    "context_path references a turn not recently completed in this session",
+                )
+                assert completed is not None
+                _require(
+                    prior.user_sequence == completed.user_sequence
+                    and prior.final_sequence == completed.final_sequence,
+                    "context_path sequences do not match the completed public turn",
+                )
+                if completed.pair_sha256 is not None:
+                    _require(
+                        hmac.compare_digest(prior.sha256, completed.pair_sha256),
+                        "context_path digest does not match the completed public turn",
+                    )
+                else:
+                    observed_digest = observed_context_digests.setdefault(
+                        binding_key, prior.sha256
+                    )
+                    _require(
+                        hmac.compare_digest(prior.sha256, observed_digest),
+                        "context_path changed an opaque completed-turn digest",
+                    )
             _digest(record.get("request_sha256"), "model request digest")
             _digest(record.get("raw_guest_request_sha256"), "raw Guest request digest")
             _require(record.get("request_sha256") != record.get("raw_guest_request_sha256"),
@@ -1418,11 +1769,185 @@ def _validate_turn(
             responses[corr_int] = dict(record)
             decision_count += 1
             if decision_count == max_rounds and record.get("response_type") == "tool_use":
-                _ledger(
-                    lambda corr_id=corr_int:
-                    ledger.begin_termination(corr_id, "round_limit"),
-                    "MODEL_RESPONSE decision limit replay failed",
+                round_limit_pending_corr = corr_int
+
+        elif kind == "workspace_request":
+            _require(
+                set(record) == WORKSPACE_REQUEST_FIELDS,
+                "workspace_request fields are malformed",
+            )
+            corr = record.get("corr_id")
+            task_id_value = record.get("task_id")
+            attempt = record.get("attempt")
+            tool = record.get("tool")
+            operation = record.get("operation")
+            manifest_cursor = record.get("manifest_cursor")
+            _require(
+                _is_int(corr, 1)
+                and int(corr) == latest_corr
+                and _is_int(task_id_value, 1, MAX_U32)
+                and _is_int(
+                    attempt, 1, task_ledger.MAX_WORKSPACE_ATTEMPTS
                 )
+                and tool in task_ledger.WORKSPACE_TOOLS
+                and operation in task_ledger.WORKSPACE_OPERATIONS[str(tool)]
+                and _is_int(manifest_cursor, 0, MAX_U32)
+                and (
+                    operation == "manifest" or int(manifest_cursor) == 0
+                )
+                and int(corr) in responses
+                and responses[int(corr)].get("response_type") == "tool_use"
+                and responses[int(corr)].get("tool") == tool,
+                "workspace_request has no active delivered workspace tool",
+            )
+            corr_int = int(corr)
+            task_id_int = int(task_id_value)
+            attempt_int = int(attempt)
+            key = (corr_int, attempt_int)
+            _require(
+                key not in workspace_requests
+                and key not in workspace_results
+                and task_for_corr.get(corr_int) is None,
+                "workspace_request was duplicated or followed child execution",
+            )
+            reserved = workspace_task_for_corr.get(corr_int)
+            _require(
+                (reserved is None or reserved == task_id_int)
+                and task_id_int not in child_ids
+                and all(
+                    other_corr == corr_int or other_task != task_id_int
+                    for other_corr, other_task in workspace_task_for_corr.items()
+                ),
+                "workspace_request changed or reused its reserved child Task",
+            )
+            workspace_generation_value = _digest(
+                record.get("workspace_generation"),
+                "workspace request generation",
+                empty=True,
+            )
+            arguments_digest = _digest(
+                record.get("arguments_sha256"),
+                "workspace request arguments digest",
+            )
+            objects_digest = _digest(
+                record.get("objects_sha256"),
+                "workspace request object revisions digest",
+            )
+            _ledger(
+                lambda: ledger.record_workspace_request(
+                    corr_int,
+                    task_id=task_id_int,
+                    tool=str(tool),
+                    operation=str(operation),
+                    attempt=attempt_int,
+                    workspace_generation=workspace_generation_value,
+                    arguments_sha256=arguments_digest,
+                    objects_sha256=objects_digest,
+                    manifest_cursor=manifest_cursor,
+                ),
+                "WORKSPACE_REQUEST replay failed",
+            )
+            workspace_task_for_corr[corr_int] = task_id_int
+            workspace_requests[key] = dict(record)
+
+        elif kind == "workspace_result":
+            _require(
+                set(record) == WORKSPACE_RESULT_FIELDS,
+                "workspace_result fields are malformed",
+            )
+            corr = record.get("corr_id")
+            attempt = record.get("attempt")
+            _require(
+                _is_int(corr, 1)
+                and _is_int(
+                    attempt, 1, task_ledger.MAX_WORKSPACE_ATTEMPTS
+                ),
+                "workspace_result correlation or attempt is malformed",
+            )
+            corr_int = int(corr)
+            attempt_int = int(attempt)
+            key = (corr_int, attempt_int)
+            request_record = workspace_requests.get(key)
+            _require(
+                request_record is not None
+                and key not in workspace_results
+                and corr_int == latest_corr,
+                "workspace_result has no unique current Guest request",
+            )
+            assert request_record is not None
+            for field in (
+                "turn_id",
+                "request_id",
+                "corr_id",
+                "task_id",
+                "tool",
+                "operation",
+                "attempt",
+                "arguments_sha256",
+                "manifest_cursor",
+            ):
+                _require(
+                    record.get(field) == request_record.get(field),
+                    f"workspace_result changed request binding {field}",
+                )
+            workspace_generation_value = _digest(
+                record.get("workspace_generation"),
+                "workspace result generation",
+            )
+            content_digest = _digest(
+                record.get("content_sha256"),
+                "workspace result content digest",
+            )
+            content_bytes = record.get("content_bytes")
+            status = record.get("status")
+            manifest_cursor = record.get("manifest_cursor")
+            manifest_next_cursor = record.get("manifest_next_cursor")
+            manifest_eof = record.get("manifest_eof")
+            content_limit = (
+                task_ledger.MAX_WORKSPACE_MANIFEST_BYTES
+                if record.get("operation") == "manifest"
+                else task_ledger.MAX_WORKSPACE_CONTENT_BYTES
+            )
+            _require(
+                status in task_ledger.WORKSPACE_RESULT_STATUSES
+                and _is_int(
+                    content_bytes, 0, content_limit
+                ),
+                "workspace_result status or byte count is malformed",
+            )
+            _require(
+                _is_int(manifest_cursor, 0, MAX_U32)
+                and _is_int(manifest_next_cursor, 0, MAX_U32)
+                and isinstance(manifest_eof, bool),
+                "workspace_result manifest paging metadata is malformed",
+            )
+            _ledger(
+                lambda: ledger.record_workspace_result(
+                    corr_int,
+                    task_id=record["task_id"],
+                    tool=record["tool"],
+                    operation=record["operation"],
+                    attempt=attempt_int,
+                    workspace_generation=workspace_generation_value,
+                    arguments_sha256=record["arguments_sha256"],
+                    result_objects_sha256=record["objects_sha256"],
+                    status=status,
+                    content_bytes=content_bytes,
+                    content_sha256=content_digest,
+                    manifest_cursor=manifest_cursor,
+                    manifest_next_cursor=manifest_next_cursor,
+                    manifest_eof=manifest_eof,
+                ),
+                "WORKSPACE_RESULT replay failed",
+            )
+            workspace_results[key] = dict(record)
+            if status == "stale":
+                workspace_content.pop(corr_int, None)
+            target = (
+                "search" if record.get("tool") == "search_files" else "read"
+            )
+            if status == "ok" and record.get("operation") == target:
+                workspace_content[corr_int] = dict(record)
 
         elif kind == "tool_event":
             if pending_cleanup_root is not None:
@@ -1467,30 +1992,86 @@ def _validate_turn(
             }
             if status == 0:
                 if tool in ("search_files", "read_file"):
-                    expected_projection = (
-                        f"workspace_request={tool}\n"
-                        "result_delivery=host_provider_context\n"
-                        "content_untrusted=1\n"
-                    )
-                    guest_wrapper["workspace_request"] = expected_projection
-                    guest_wrapper["data_trust"] = "host_workspace_placeholder"
+                    accepted = workspace_content.get(corr_int)
+                    successful_workspace = [
+                        item
+                        for (item_corr, _attempt), item in workspace_results.items()
+                        if item_corr == corr_int and item.get("status") == "ok"
+                    ]
                     _require(
-                        record.get("result") == WORKSPACE_REQUEST_RESULT
-                        and record.get("value0") == 0,
-                        "workspace tool did not settle its exact Guest placeholder",
+                        successful_workspace
+                        and workspace_task_for_corr.get(corr_int)
+                        == record.get("value1")
+                        and record.get("result") == WORKSPACE_OBSERVATION_RESULT,
+                        "workspace tool is not bound to accepted Host content",
                     )
+                    expected_source_root = _ledger(
+                        lambda: ledger.workspace_source_sha256(corr_int),
+                        "workspace source root replay failed",
+                    )
+                    _require(
+                        hmac.compare_digest(
+                            str(record.get("workspace_source_sha256")),
+                            expected_source_root,
+                        ),
+                        "workspace aggregate changed its ordered source root",
+                    )
+                    workspace_result = _bounded_workspace_result(
+                        record.get("model_projection"),
+                        "Guest workspace projection",
+                    )
+                    expected_projection = workspace_result
+                    _require(
+                        len(workspace_result.encode("utf-8"))
+                        == record.get("value0")
+                        and (
+                            tool != "read_file"
+                            or (
+                                accepted is not None
+                                and accepted.get("content_bytes")
+                                == record.get("value0")
+                                and hmac.compare_digest(
+                                    _sha_text(workspace_result),
+                                    str(accepted.get("content_sha256")),
+                                )
+                            )
+                        )
+                        and hmac.compare_digest(
+                            _sha_text(workspace_result),
+                            str(record.get("artifact_sha256")),
+                        ),
+                        "Guest workspace result changed its accepted artifact",
+                    )
+                    guest_wrapper["model_projection"] = expected_projection
                 else:
-                    arguments = responses[corr_int].get("arguments")
+                    actual_projection = _bounded_workspace_result(
+                        record.get("model_projection"),
+                        "Guest system projection",
+                    )
+                    response_arguments = responses[corr_int].get("arguments")
                     _require(
-                        isinstance(arguments, Mapping),
-                        "system observation lacks delivered arguments",
+                        isinstance(response_arguments, Mapping),
+                        "system observation lost its delivered arguments",
                     )
-                    expected_projection = _inspect_system_projection(
-                        arguments.get("operation"),
-                        result_value_metrics.get(corr_int, {}),
+                    expected_projection = _system_projection(
+                        response_arguments.get("operation"),
+                        record.get("value0"),
+                        record.get("value1"),
+                        record.get("value2"),
                     )
-                    guest_wrapper["runtime_observation"] = expected_projection
-                    guest_wrapper["data_trust"] = "guest_runtime_untrusted"
+                    artifact = artifact_for_corr.get(corr_int)
+                    _require(
+                        actual_projection == expected_projection
+                        and record.get("result") == SYSTEM_OBSERVATION_RESULT
+                        and artifact is not None
+                        and artifact.get("task_id") == task_for_corr.get(corr_int)
+                        and artifact.get("artifact_sha256")
+                        == record.get("artifact_sha256")
+                        and artifact.get("resource_used")
+                        == len(actual_projection.encode("utf-8")),
+                        "system observation is not bound to its SYSTEM_RESULT artifact",
+                    )
+                    guest_wrapper["model_projection"] = expected_projection
                 _require(
                     hmac.compare_digest(projection, _sha_text(expected_projection)),
                     "tool projection does not match its exact Guest data",
@@ -1512,6 +2093,8 @@ def _validate_turn(
                     value2=event["value2"],
                     provenance=event["provenance"],
                     projection_sha256=event["projection_sha256"],
+                    workspace_source_sha256=event["workspace_source_sha256"],
+                    context_seq=event["context_seq"],
                     result_sha256=event["result_sha256"],
                     session_blocked_marker=(
                         event["result"]
@@ -1521,6 +2104,15 @@ def _validate_turn(
                 ),
                 "TOOL_EVENT replay failed",
             )
+            if (
+                corr_int == round_limit_pending_corr
+                and not ledger.snapshot().termination_cause
+            ):
+                _ledger(
+                    lambda corr_id=corr_int:
+                    ledger.begin_termination(corr_id, "round_limit"),
+                    "settled final-round tool could not arm round-limit termination",
+                )
             tool_events[corr_int] = dict(record)
             if status == 0:
                 settled_history.append((corr_int, tool, projection))
@@ -1529,24 +2121,33 @@ def _validate_turn(
 
         elif kind == "turn_cancelling":
             _require(set(record) == {"type", "turn_id", "request_id"}
-                     and not cancellation_started and latest_corr in responses,
+                     and not cancel_requested,
                      "turn_cancelling is malformed or duplicated")
-            active_children = [
-                task_id
-                for task_id, (corr, event, state) in task_states.items()
-                if corr == latest_corr
-                and task_id != task_ledger.NEXUS_ROOT_TASK_BASE + turn_id
-                and event not in task_ledger.TASK_TERMINALS
-                and state not in task_ledger.TASK_TERMINALS
-            ]
-            _require(bool(active_children) or latest_corr in cancelled_child_corrs,
-                     "cancel was not bound to active or just-cancelled worker work")
-            _require(responses[latest_corr].get("tool") in TASK_TOOLS,
-                     "cancel was not directed at an active worker task")
-            _ledger(lambda: ledger.begin_cancel(latest_corr),
-                    "active worker cancellation replay failed")
-            cancellation_started = True
-            cancelled_active_worker = True
+            cancel_snapshot = ledger.snapshot()
+            terminal_outcome_owned = bool(
+                cancel_snapshot.termination_cause
+                or cancel_snapshot.provider_final_frozen
+            )
+            if not terminal_outcome_owned:
+                _require(latest_corr in responses,
+                         "cancel has no delivered model outcome")
+                active_children = [
+                    task_id
+                    for task_id, (corr, event, state) in task_states.items()
+                    if corr == latest_corr
+                    and task_id != task_ledger.NEXUS_ROOT_TASK_BASE + turn_id
+                    and event not in task_ledger.TASK_TERMINALS
+                    and state not in task_ledger.TASK_TERMINALS
+                ]
+                _require(bool(active_children) or latest_corr in cancelled_child_corrs,
+                         "cancel was not bound to active or just-cancelled worker work")
+                _require(responses[latest_corr].get("tool") in TASK_TOOLS,
+                         "cancel was not directed at an active worker task")
+                _ledger(lambda: ledger.begin_cancel(latest_corr),
+                        "active worker cancellation replay failed")
+                cancellation_started = True
+                cancelled_active_worker = True
+            cancel_requested = True
 
         elif kind == "turn_complete":
             _require(position == len(records) - 1,
@@ -1664,14 +2265,15 @@ def _validate_turn(
         and terminal.get("attempts") == attempt_number,
         "TURN_COMPLETE attempt count is malformed",
     )
-    if "context_seq" in terminal:
-        _require(_is_int(terminal.get("context_seq")),
-                 "TURN_COMPLETE context sequence is malformed")
+    _require(active_context_path is not None,
+             "turn completed without an authenticated Context path")
+    _require(_is_int(terminal.get("context_seq"), 0, U64_MAX),
+             "TURN_COMPLETE context sequence is malformed")
     required_terminal = {
         "type", "turn_id", "request_id", "status", "final_proof_root",
-        "rounds", "retries", "attempts", *FINAL_PROOF_FIELDS,
+        "rounds", "retries", "attempts", "context_seq", *FINAL_PROOF_FIELDS,
     }
-    allowed_terminal = required_terminal | {"context_seq"}
+    allowed_terminal = set(required_terminal)
     if terminal_status == "completed":
         allowed_terminal.add("answer")
     _require(required_terminal <= set(terminal)
@@ -1687,27 +2289,86 @@ def _validate_turn(
              and terminal.get("final_task_root") == snapshot.task_root_sha256
              and terminal.get("final_artifact_root") == snapshot.artifact_root_sha256,
              "TURN_COMPLETE task/artifact roots do not replay")
+    preserved_final_proof = bool(
+        final_response is not None
+        and terminal.get("final_corr_id") == final_response.get("corr_id")
+        and terminal.get("final_request_sha256")
+        == final_response.get("final_request_sha256")
+        and terminal.get("final_response_sha256")
+        == final_response.get("final_response_sha256")
+        and terminal.get("provider_proof_sha256")
+        == final_response.get("provider_proof_sha256")
+    )
     if terminal_status == "completed":
-        _require(final_response is not None
-                 and terminal.get("answer") == final_response.get("content")
-                 and terminal.get("final_corr_id") == final_response.get("corr_id")
-                 and terminal.get("final_request_sha256")
-                 == final_response.get("final_request_sha256")
-                 and terminal.get("final_response_sha256")
-                 == final_response.get("final_response_sha256")
-                 and terminal.get("provider_proof_sha256")
-                 == final_response.get("provider_proof_sha256"),
-                 "TURN_COMPLETE did not preserve the exact provider final proof")
+        _require(
+            preserved_final_proof
+            and terminal.get("answer") == final_response.get("content"),
+            "TURN_COMPLETE did not preserve the exact provider final proof",
+        )
         final_content = str(terminal["answer"])
+        assert active_context_path is not None
+        final_context_sequence = int(terminal["context_seq"])
+        _require(
+            final_context_sequence > active_context_path.visible_head_sequence,
+            "TURN_COMPLETE final Context node does not follow the visible request path",
+        )
     else:
-        _require(final_response is None and "answer" not in terminal,
+        context_final_failed = snapshot.termination_cause == CONTEXT_FINAL_FAILED
+        frozen_final_cleanup_failed = bool(
+            frozen_final_cleanup_root
+            and snapshot.provider_final_frozen
+            and snapshot.termination_cause == "session_error"
+            and snapshot.session_blocked
+        )
+        if context_final_failed:
+            _require(
+                terminal_status == "error"
+                and preserved_final_proof
+                and snapshot.provider_final_frozen
+                and not snapshot.session_blocked,
+                "Context FINAL failure did not preserve its frozen provider proof",
+            )
+        elif frozen_final_cleanup_failed:
+            _require(
+                terminal_status == "error" and preserved_final_proof,
+                "frozen-final cleanup failure did not preserve its provider proof",
+            )
+        else:
+            _require(
+                final_response is None,
+                "non-completed turn retained an unauthorized provider final",
+            )
+        _require("answer" not in terminal,
                  "non-completed turn exposed a final answer")
+        assert active_context_path is not None
+        assert turn_start_context_head is not None
+        _require(
+            int(terminal["context_seq"]) == turn_start_context_head,
+            "non-completed turn did not restore its exact starting Context head",
+        )
         final_content = ""
+    context_head_sequence[0] = int(terminal["context_seq"])
     final_values = {field: terminal[field] for field in FINAL_PROOF_FIELDS}
     _require(hmac.compare_digest(
         _digest(terminal.get("final_proof_root"), "final proof root"),
         _sha(final_values),
     ), "TURN_COMPLETE final proof root is malformed")
+
+    if terminal_status == "completed":
+        assert active_context_path is not None
+        # Retain sequence metadata and, when a scripted goal is available, only
+        # the one-way pair binding.  Prior message bodies never enter Host proof state.
+        completed_context_turns.append(
+            _CompletedContextTurn(
+                turn_id=turn_id,
+                request_id=request_id,
+                user_sequence=active_context_path.current_user_sequence,
+                final_sequence=int(terminal["context_seq"]),
+                pair_sha256=(
+                    _pair_sha256(goal, final_content) if goal is not None else None
+                ),
+            )
+        )
 
     direct_final = bool(
         terminal_status == "completed"
@@ -1722,6 +2383,7 @@ def _validate_turn(
         request_count=attempt_number,
         tool_calls=tuple(tool_calls),
         direct_final=direct_final,
+        cancel_requested=cancel_requested,
         cancelled_active_worker=cancelled_active_worker,
         final_content=final_content,
     )
@@ -1736,6 +2398,11 @@ def _observer_projection(payload: Mapping[str, object], *, source: str) -> dict[
         if key == "history_bindings":
             if isinstance(item, list) and len(item) <= MAX_HISTORY_BINDINGS:
                 value[key] = [dict(binding) for binding in item]
+            continue
+        if key == "context_path":
+            value[key] = _context_path_projection(
+                _context_path(item, "observer context_path")
+            )
             continue
         if key == "forced_tool" and item is None:
             value[key] = None
@@ -1813,6 +2480,14 @@ def _controller_observer_projection(
         return (_observer_projection(
             {"event": "turn_cancel", **record}, source="host"
         ),)
+    if kind == "workspace_request":
+        return (_observer_projection(
+            {"event": "workspace_request", **record}, source="guest"
+        ),)
+    if kind == "workspace_result":
+        return (_observer_projection(
+            {"event": "workspace_result", **record}, source="host"
+        ),)
     if kind == "tool_event":
         payload = {key: value for key, value in record.items() if key != "result"}
         payload["event"] = "tool_event"
@@ -1848,6 +2523,8 @@ def _validate_observer(
                  "observer record escaped the metadata allowlist")
         _require(not set(record).intersection(OBSERVER_FORBIDDEN_KEYS),
                  "observer leaked controller-only content")
+        if "context_path" in record:
+            _context_path(record.get("context_path"), "observer context_path")
     expected = [
         projection
         for record in controller
@@ -1888,7 +2565,7 @@ def _validate_controls(records: Sequence[dict[str, object]]) -> None:
             catalog = result.get("tools")
             _require(isinstance(catalog, list)
                      and _canonical_bytes(catalog) == _canonical_bytes(list(nexus_contract.TOOLS)),
-                     "/tools does not expose the exact v3 Host contract")
+                     "/tools does not expose the exact v4 Host contract")
         elif record.get("command") == "status":
             _require(set(result) == {
                 "tick", "loop_state", "call_count", "wait_sleep", "wait_wakeup",
@@ -1952,6 +2629,19 @@ def validate_records(
 
     _validate_controls(controller)
     slices = _turn_slices(controller)
+    reset_epoch = 0
+    reset_epoch_by_turn: dict[tuple[int, int], int] = {}
+    for record in controller:
+        if (
+            record.get("type") == "control_result"
+            and record.get("command") == "reset"
+            and record.get("status") == "ok"
+        ):
+            reset_epoch += 1
+        elif record.get("type") == "turn_started":
+            reset_epoch_by_turn[
+                (int(record["turn_id"]), int(record["request_id"]))
+            ] = reset_epoch
     if goals is not None:
         _require(len(goals) == len(slices),
                  "scripted goals and controller turns differ")
@@ -1971,12 +2661,27 @@ def validate_records(
     global_corr = [0]
     generation = 1
     child_ids: set[int] = set()
+    completed_context_turns: list[_CompletedContextTurn] = []
+    observed_context_digests: dict[tuple[int, int], str] = {}
+    context_head_sequence: list[int | None] = [None]
+    session_blocked = False
     reports: list[TurnReport] = []
     previous_turn = 0
     previous_request = 0
+    active_reset_epoch = 0
     for index, (turn, request, records) in enumerate(slices):
         _require(turn > previous_turn and request > previous_request,
                  "turn/request ids are not session-increasing")
+        turn_reset_epoch = reset_epoch_by_turn[(turn, request)]
+        if turn_reset_epoch != active_reset_epoch:
+            _require(
+                turn_reset_epoch > active_reset_epoch,
+                "successful reset epochs moved backwards",
+            )
+            completed_context_turns.clear()
+            observed_context_digests.clear()
+            context_head_sequence[0] = 0
+            active_reset_epoch = turn_reset_epoch
         report = _validate_turn(
             records,
             turn_id=turn,
@@ -1991,38 +2696,59 @@ def validate_records(
             max_rounds=max_rounds,
             global_corr=global_corr,
             child_ids=child_ids,
+            completed_context_turns=completed_context_turns,
+            observed_context_digests=observed_context_digests,
+            context_head_sequence=context_head_sequence,
         )
         reports.append(report)
         snapshot = ledger.snapshot()
         if snapshot.session_blocked:
+            session_blocked = True
             _require(
                 index == len(slices) - 1 and report.status == "error",
                 "an indeterminate Nexus session attempted another turn or non-error close",
             )
         ledger.clear()
         # Host generations fence both turn admission and terminal cleanup.
-        # Cancellation installs one additional fence before TURN_COMPLETE.
-        generation += 3 if report.status == "cancelled" else 2
+        # Every observed CANCEL installs one additional fence, even when a
+        # previously owned terminal outcome remains authoritative.
+        generation += 3 if report.cancel_requested else 2
         previous_turn, previous_request = turn, request
 
     _require(fixture_cursor[0] == len(fixture),
              "Guest completed before the deterministic provider fixture was exhausted")
-    cleanup_session_blocked = any(
-        record.get("type") == "task_event"
-        and record.get("parent_task_id") == 0
-        and record.get("event") == "failed"
-        and record.get("status") == task_ledger.AGENT_STATUS_IO_ERROR
-        and record.get("summary") == ARTIFACT_CLEANUP_SESSION_BLOCK
-        for record in controller
+    closing_records = [
+        record for record in controller if record.get("type") == "session_closing"
+    ]
+    closed_records = [
+        record for record in controller if record.get("type") == "session_closed"
+    ]
+    _require(
+        len(closed_records) == 1
+        and controller[-1].get("type") == "session_closed",
+        "controller session did not close cleanly and exactly once",
     )
-    expected_close_reason = "session_error" if cleanup_session_blocked else "guest_complete"
-    _require(len([record for record in controller if record.get("type") == "session_closing"]) == 1
-             and len([record for record in controller if record.get("type") == "session_closed"]) == 1
-             and controller[-2].get("type") == "session_closing"
-             and controller[-2].get("reason") == "user_requested"
-             and controller[-1].get("type") == "session_closed"
-             and controller[-1].get("reason") == expected_close_reason,
-             "controller session did not close cleanly and exactly once")
+    if session_blocked:
+        _require(
+            controller[-1].get("reason") == "session_error"
+            and len(closing_records) <= 1
+            and (
+                not closing_records
+                or (
+                    controller[-2].get("type") == "session_closing"
+                    and controller[-2].get("reason") == "user_requested"
+                )
+            ),
+            "blocked controller session did not close with its exact error fence",
+        )
+    else:
+        _require(
+            len(closing_records) == 1
+            and controller[-2].get("type") == "session_closing"
+            and controller[-2].get("reason") == "user_requested"
+            and controller[-1].get("reason") == "guest_complete",
+            "controller session did not close cleanly and exactly once",
+        )
     _validate_observer(observer, controller, str(ready["session_id"]))
 
     if require_acceptance_scenarios:

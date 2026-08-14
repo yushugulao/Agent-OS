@@ -186,6 +186,7 @@ def check(root: Path) -> None:
             "policy=syscall_policy_base(class)",
             "if(syscall_needs_transaction(class))",
             "ret=syscall_slow_path(trapframe,id,policy,&direct_guard,"
+            "&file_pin_guard,"
             "&operation_denied)",
             "ret=syscall_dispatch(id,trapframe,0)",
         ),

@@ -162,6 +162,20 @@ check_case_contract() {
 		require_exact_case_marker "${log_file}" \
 			"agenttask_ucore: resource_unlinked_close_race=1 transaction_pin=1 launched_concurrently=1"
 		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: delegated_runtime agents=3 provider=artifact controller=orchestrator task_route=1 task_accept=1 artifact_write=1 descriptor_bytes=56 claim567=1 complete568=1"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: delegated_contracts=3 strict_reclaimed=1 reclaimed_generation_advance=1 issuer_gap_effects=pipe+file"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: delegated_lease preclaim_publish_denied=1 thread_helper=1 context_mutation=1 bounded_publish_read=1 effect_gates=process+metadata+file+artifact"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: delegated_normal=1 receipt_replay=1 changed_replay_stale=1 sole_owner_cqe=1 output_none=1"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: delegated_cancel_after_claim=1 agents=3 controller=orchestrator owner_sq_cancel_denied=1 request_cancel568=1 cancelled_offer=1 cleanup_ack=1 cancel_receipt_replay=1 late_complete_stale=1 sole_owner_cqe=1"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: contract_create_blocked_pipe_reader=1 enforce_pipe_write_denied=1 regular_inode_import_read_cut=1"
+		require_exact_case_marker "${log_file}" \
+			"agenttask_ucore: delegated_deadline_claimed=1 terminal_offer_timeout=1 cleanup_ack=1 ack_replay=1 late_complete_stale=1 sole_owner_cqe=1"
+		require_exact_case_marker "${log_file}" \
 			"agenttask_ucore: setup=1 single_issuer=1 resource_utf8_snapshot=1 borrowed_live=1 owned_consumed=1 release_stale=1 generation_aba=1"
 		require_exact_case_marker "${log_file}" \
 			"agenttask_ucore: submit=1 cq_ack=1 monotonic=1 resync=1"
@@ -222,7 +236,7 @@ check_case_contract() {
 		require_exact_case_marker "${log_file}" \
 			"agenttoolabi_ucore: optional_schema=1 heartbeat_zero_stop=1"
 		require_exact_case_marker "${log_file}" \
-			"agenttoolabi_ucore: schema_generated=1 validated=25"
+			"agenttoolabi_ucore: schema_generated=1 validated=26"
 		require_exact_case_marker "${log_file}" \
 			"agenttoolabi_ucore: v1_compatible=1"
 		require_exact_case_marker "${log_file}" \
@@ -243,6 +257,8 @@ check_case_contract() {
 			"agentsecurity_ucore: target_route_consent=1 unsolicited_response_denied=1"
 		require_exact_case_marker "${log_file}" \
 			"agentsecurity_ucore: route_slot_reclaimed=1"
+		require_exact_case_marker "${log_file}" \
+			"agentsecurity_ucore: specialist_result_artifact_capability=1"
 		;;
 	labdemo_ucore)
 		require_exact_case_marker "${log_file}" \

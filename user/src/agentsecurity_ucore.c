@@ -61,20 +61,23 @@ static uint64 expected_caps(int role)
 	if (role == AGENT_ROLE_SENTINEL)
 		return AGENT_CAP_META_READ | AGENT_CAP_PROCESS_READ |
 		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
-		       AGENT_CAP_AUDIT_WRITE;
+		       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE |
+		       AGENT_CAP_TASK_ACCEPT;
 	if (role == AGENT_ROLE_INVESTIGATOR)
 		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
 		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
-		       AGENT_CAP_AUDIT_WRITE;
+		       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE |
+		       AGENT_CAP_TASK_ACCEPT;
 	if (role == AGENT_ROLE_RECOVERY)
 		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
 		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
 		       AGENT_CAP_ACTION_WRITE | AGENT_CAP_ARTIFACT_WRITE |
-		       AGENT_CAP_AUDIT_WRITE;
+		       AGENT_CAP_AUDIT_WRITE | AGENT_CAP_TASK_ACCEPT;
 	if (role == AGENT_ROLE_ARTIFACT)
 		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
 		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
-		       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE;
+		       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE |
+		       AGENT_CAP_TASK_ACCEPT;
 	if (role == AGENT_ROLE_ORCHESTRATOR)
 		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
 		       AGENT_CAP_PROCESS_READ | AGENT_CAP_MESSAGE_SEND |
@@ -82,7 +85,7 @@ static uint64 expected_caps(int role)
 		       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE |
 		       AGENT_CAP_META_WRITE | AGENT_CAP_ORCHESTRATE |
 		       AGENT_CAP_LLM_RELAY | AGENT_CAP_WAIT_CANCEL |
-		       AGENT_CAP_ROUTE_MANAGE;
+		       AGENT_CAP_ROUTE_MANAGE | AGENT_CAP_TASK_ACCEPT;
 	return 0;
 }
 
@@ -479,7 +482,8 @@ static TEST_NOINLINE void run_sentinel(int audit_gate_fd)
 		AGENT_ROLE_RECOVERY,
 		"label=report;run_id=RUN-999;namespace=lab-gene-x");
 	run_one(&security_sentinel_op, &security_sentinel_result,
-		AGENT_STATUS_DENIED, "sentinel generic artifact");
+		AGENT_STATUS_OK, "sentinel result artifact capability");
+	printf("agentsecurity_ucore: specialist_result_artifact_capability=1\n");
 	make_op(&security_sentinel_op, AGENT_TOOL_LLM_RESPONSE, 8107, getppid(),
 		"template response");
 	run_one(&security_sentinel_op, &security_sentinel_result,
@@ -498,7 +502,7 @@ static TEST_NOINLINE void run_sentinel(int audit_gate_fd)
 		AGENT_ROLE_RECOVERY,
 		"fake report");
 	run_one(&security_sentinel_op, &security_sentinel_result,
-		AGENT_STATUS_DENIED, "sentinel spoof report");
+		AGENT_STATUS_BAD_PARAM, "sentinel malformed report rejected");
 	make_op(&security_sentinel_op, AGENT_TOOL_READ_FILE_DIGEST, 8104, 0,
 		"r42align");
 	run_one(&security_sentinel_op, &security_sentinel_result,

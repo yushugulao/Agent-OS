@@ -68,6 +68,7 @@ def check_class_selected_dispatch(route: str) -> None:
     condition = "if(syscall_needs_transaction(class))"
     slow_call = (
         "ret=syscall_slow_path(trapframe,id,policy,&direct_guard,"
+        "&file_pin_guard,"
         "&operation_denied);"
     )
     side_effects = (
@@ -506,7 +507,7 @@ def check(root: Path) -> None:
             )
     classes = {name: class_name for name, class_name, _enabled in registry_entries}
     expected_fast = {
-        "fstat", "agent_create", "agent_create_role", "agent_workflow_create",
+        "agent_create", "agent_create_role", "agent_workflow_create",
         "agent_scope_delegate_fd", "agent_workflow_lifecycle_info",
         "agent_sched_config",
         "context_push", "context_query", "context_snapshot", "context_detail",
@@ -515,6 +516,8 @@ def check(root: Path) -> None:
     }
     if any(classes.get(name) != "FAST" for name in expected_fast):
         raise ValueError("bounded cached syscalls regressed into transaction admission")
+    if classes.get("fstat") != "DESCRIPTOR":
+        raise ValueError("fstat escaped its exact open-file publication cut")
     expected_read_io = {"agent_file_query"}
     if any(classes.get(name) != "BLOCK_IO" for name in expected_read_io):
         raise ValueError("read-only Agent I/O acquired the filesystem mutation epoch")

@@ -4,63 +4,13 @@
 #include <agent.h>
 
 /* Stable, task-independent autonomous-model request contract. */
-#define AGENT_NEXUS_AUTONOMY_CONTRACT_VERSION 3U
+#define AGENT_NEXUS_AUTONOMY_CONTRACT_VERSION 4U
 #define AGENT_NEXUS_SYSTEM_POLICY_SHA256 \
-	"8d0e430c8b7517ab49d24d7bc0f726bfb9d5ef031cecbca9fbc507076ba1a3ce"
+	"395eb2871e978672c6a6a8d1485327310545e02132f39a24c5f1dec6a808d6c8"
 #define AGENT_NEXUS_TOOL_CATALOG_SHA256 \
 	"b59a831f6b1337393319c2d3e2af0d3b463ffac50447c11351226dd2989c999b"
 
-/*
- * Agent IPC currently carries a NUL-terminated 64-byte payload.  Nexus keeps
- * its task ABI binary and canonical by encoding these exact 44 little-endian
- * bytes as unpadded base64url after the "N1:" discriminator.
- */
-#define AGENT_NEXUS_TASK_MAGIC        0x3154584eU /* "NXT1" in LE bytes */
-#define AGENT_NEXUS_TASK_VERSION      1U
-#define AGENT_NEXUS_TASK_WIRE_SIZE    44U
-#define AGENT_NEXUS_TASK_B64_SIZE     59U
-#define AGENT_NEXUS_TASK_PREFIX       "N1:"
-#define AGENT_NEXUS_TASK_PREFIX_SIZE  3U
-#define AGENT_NEXUS_TASK_TEXT_SIZE    62U
 #define AGENT_NEXUS_TASK_MAX_DEADLINE_DELTA 12000U
-
-#define AGENT_NEXUS_TASK_OFF_MAGIC                0U
-#define AGENT_NEXUS_TASK_OFF_VERSION              4U
-#define AGENT_NEXUS_TASK_OFF_KIND                 5U
-#define AGENT_NEXUS_TASK_OFF_STATE                6U
-#define AGENT_NEXUS_TASK_OFF_FLAGS                7U
-#define AGENT_NEXUS_TASK_OFF_LIFECYCLE_ID         8U
-#define AGENT_NEXUS_TASK_OFF_LIFECYCLE_GENERATION 16U
-#define AGENT_NEXUS_TASK_OFF_PARENT_TASK_ID       24U
-#define AGENT_NEXUS_TASK_OFF_DEADLINE_TICK        28U
-#define AGENT_NEXUS_TASK_OFF_STATUS               32U
-#define AGENT_NEXUS_TASK_OFF_VALUE0               36U
-#define AGENT_NEXUS_TASK_OFF_VALUE1               40U
-
-enum agent_nexus_task_kind {
-	AGENT_NEXUS_TASK_ASSIGN = 1,
-	AGENT_NEXUS_TASK_ACCEPT = 2,
-	AGENT_NEXUS_TASK_PROGRESS = 3,
-	AGENT_NEXUS_TASK_RESULT = 4,
-	AGENT_NEXUS_TASK_FAILED = 5,
-	AGENT_NEXUS_TASK_CANCEL = 6,
-};
-
-enum agent_nexus_task_state {
-	AGENT_NEXUS_TASK_STATE_ASSIGNED = 1,
-	AGENT_NEXUS_TASK_STATE_ACCEPTED = 2,
-	AGENT_NEXUS_TASK_STATE_RUNNING = 3,
-	AGENT_NEXUS_TASK_STATE_WAITING = 4,
-	AGENT_NEXUS_TASK_STATE_COMPLETED = 5,
-	AGENT_NEXUS_TASK_STATE_FAILED = 6,
-	AGENT_NEXUS_TASK_STATE_CANCELLED = 7,
-};
-
-#define AGENT_NEXUS_TASK_F_HAS_INPUT     (1U << 0)
-#define AGENT_NEXUS_TASK_F_HAS_SECONDARY (1U << 1)
-#define AGENT_NEXUS_TASK_F_HAS_RESULT    (1U << 2)
-#define AGENT_NEXUS_TASK_F_FINAL         (1U << 3)
-#define AGENT_NEXUS_TASK_F_KNOWN_MASK    0x0fU
 
 /* ASSIGN uses status as the task type; terminal messages use Agent status. */
 enum agent_nexus_task_type {
@@ -91,22 +41,8 @@ enum agent_nexus_metric_code {
 	AGENT_NEXUS_METRIC_ARTIFACT_HANDLE = 40,
 };
 
-struct agent_nexus_task {
-	unsigned char kind;
-	unsigned char state;
-	unsigned char flags;
-	unsigned char reserved;
-	unsigned long long lifecycle_id;
-	unsigned long long lifecycle_generation;
-	unsigned int parent_task_id;
-	unsigned int deadline_tick;
-	int status;
-	unsigned int value0;
-	unsigned int value1;
-};
-
 #define AGENT_NEXUS_ARTIFACT_MAGIC   0x3158414eU /* "NAX1" */
-#define AGENT_NEXUS_ARTIFACT_VERSION 1U
+#define AGENT_NEXUS_ARTIFACT_VERSION 2U
 #define AGENT_NEXUS_ARTIFACT_MAX     3072U
 #define AGENT_NEXUS_ARTIFACT_SLOTS   65535U
 #define AGENT_NEXUS_ARTIFACT_PATH_SIZE 14U
@@ -155,6 +91,7 @@ enum agent_nexus_artifact_source {
 	AGENT_NEXUS_SOURCE_MODEL = 4,
 	AGENT_NEXUS_SOURCE_USER = 5,
 	AGENT_NEXUS_SOURCE_DERIVED = 6,
+	AGENT_NEXUS_SOURCE_HOST_WORKSPACE = 7,
 };
 
 struct agent_nexus_artifact_actor {
@@ -205,11 +142,12 @@ struct agent_nexus_artifact_header {
 	unsigned int source;
 	unsigned long long provenance_labels;
 	unsigned long long permission_mask;
+	unsigned long long producer_context_sequence;
 	unsigned char payload_sha256[32];
 	unsigned char manifest_sha256[32];
 };
 
-#define AGENT_NEXUS_TASK_CAPSULE_VERSION 2U
+#define AGENT_NEXUS_TASK_CAPSULE_VERSION 3U
 #define AGENT_NEXUS_TASK_OBJECTIVE_SIZE 2485U
 #define AGENT_NEXUS_TASK_ARGUMENT_SIZE 445U
 
@@ -227,15 +165,9 @@ struct agent_nexus_task_capsule {
 	struct agent_nexus_artifact_actor target;
 };
 
-_Static_assert(AGENT_NEXUS_TASK_PREFIX_SIZE + AGENT_NEXUS_TASK_B64_SIZE ==
-	       AGENT_NEXUS_TASK_TEXT_SIZE, "Nexus task text size");
 _Static_assert(sizeof(unsigned char) == 1 && sizeof(unsigned short) == 2 &&
 	       sizeof(unsigned int) == 4 && sizeof(unsigned long long) == 8,
 	       "Nexus protocol scalar widths");
-_Static_assert(AGENT_NEXUS_TASK_TEXT_SIZE < AGENT_EVENT_PAYLOAD_SIZE,
-	       "Nexus task must fit the Agent event payload");
-_Static_assert(AGENT_NEXUS_TASK_OFF_VALUE1 + 4U ==
-	       AGENT_NEXUS_TASK_WIRE_SIZE, "Nexus task wire extent");
 _Static_assert(AGENT_NEXUS_TASK_RESERVED_1004 == 1004,
 	       "Nexus task ABI reserved value");
 _Static_assert(AGENT_NEXUS_ROLE_RESERVED_4 == 4,
@@ -251,16 +183,16 @@ _Static_assert(sizeof(struct agent_nexus_artifact_actor) == 24,
 	       "Nexus artifact actor layout");
 _Static_assert(sizeof(struct agent_nexus_artifact_manifest) == 136,
 	       "Nexus artifact manifest layout");
-_Static_assert(sizeof(struct agent_nexus_artifact_header) == 208,
+_Static_assert(sizeof(struct agent_nexus_artifact_header) == 216,
 	       "Nexus artifact header layout");
 _Static_assert(__builtin_offsetof(struct agent_nexus_artifact_header,
 				  lifecycle_generation) == 24,
 	       "Nexus artifact lifecycle offset");
 _Static_assert(__builtin_offsetof(struct agent_nexus_artifact_header,
-				  payload_sha256) == 144,
+				  payload_sha256) == 152,
 	       "Nexus artifact digest offset");
 _Static_assert(__builtin_offsetof(struct agent_nexus_artifact_header,
-				  manifest_sha256) == 176,
+				  manifest_sha256) == 184,
 	       "Nexus artifact manifest digest offset");
 _Static_assert(sizeof(struct agent_nexus_task_capsule) <=
 	       AGENT_NEXUS_ARTIFACT_MAX, "Nexus task capsule bound");

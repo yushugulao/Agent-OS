@@ -1,4 +1,4 @@
-# AgentOS-uCore 系统架构
+# 面向 AI 智能体的操作系统内核：系统架构
 
 AgentOS-uCore 建立在 RISC-V uCore 之上。进程、虚拟内存、文件系统、IPC、调度器和设备 I/O 仍由 uCore 负责。我们在这些原有路径中加入 Agent 进程创建与地址空间、结构化工具接口、上下文路径、文件查询和 Agent Loop 所需的状态。同一次任务中的多个进程由此共用一套身份、事件、资源和调度机制，而模型协议与具体任务策略仍留在用户态。
 
@@ -39,7 +39,7 @@ AgentOS-uCore 按职责分为五部分。uCore 基础内核提供进程、VFS、
 | --- | --- | --- |
 | Agent 应用 | `agentlive_ucore`、`agentnexus_ucore`、科研工作流 | 拆分目标、安排角色、调用工具并汇总结果 |
 | Guest Runtime | Guest UAPI、Task Channel（SQ/CQ）、有界串口帧 | 把应用动作编码成内核请求，并在 Guest 内收发模型消息 |
-| Host Relay | 串口中继、TLS、Provider 与 Replay 适配器 | 转发协议帧并连接外部模型服务，不选择或执行工具 |
+| Host Relay | 串口中继、TLS、Provider、Replay 与工作区 broker | 连接外部模型服务，并在显式 root 边界内提供 manifest 与指定版本字节，不决定文件候选或业务任务 |
 | AgentOS 内核模块 | Agent identity、生命周期、Context、Execution Contract、Live Query、事件、Workflow Credit Domain、EEVDF、Workflow Fence | 检查工作流操作，保存状态，负责等待唤醒，并生成 terminal record |
 | uCore 基础内核 | 进程与线程、页表、VFS、IPC、时钟、调度、VirtIO | 提供 RISC-V 操作系统的基础对象和运行环境 |
 
@@ -106,6 +106,8 @@ static inline int key_equal(struct workflow_lifecycle_key a,
 
 工具调用协议用工具编号、typed 参数、状态码和结构化结果表达一次交互，不让内核解释自然语言。公开接口包括 V1、带类型信息的 V2、ENFORCE V3、批处理和 16 槽 Task Channel（SQ/CQ）。V2 按 Tool Registry 的参数 schema 检查请求；V3 继续绑定冻结的 DAG、前驱、尝试次数、截止时间、输入指纹和资源上限。入口先核对 Agent identity 与生命周期，再解析工具和 schema。登记普通操作后，内核继续检查能力位、Execution Contract、provenance 和 Phase Lease。文件写入在 VFS 路径真正执行时还会再查一次当前文件访问范围。
 
+Task Channel 的 `delegate_task` 把 56 字节不可变描述符作为 `AGENT_ARTIFACT_TASK` 输入，进入同一 Execution Contract 后停留在内核 pending 队列。取得 TASK route 且具有 `AGENT_CAP_TASK_ACCEPT` 的目标 Agent 通过 claim/complete 接口领取和完成；发起者只从 CQ 取得一条 terminal CQE。描述符只绑定目标身份、任务编号、关联编号和 capsule handle，大段输入与结果由 Guest artifact 承载。首版拒绝 self delegation，也不允许同一活动端点同时成为 owner 与 target。取消、截止时间、目标退出和迟到完成由内核按同一个 Task Channel 状态处理；同一生命周期 controller 可用 syscall 568 的 `REQUEST_CANCEL` 和完整任务绑定请求取消。若任务已被 claim，执行者仍要清理预绑定输出并确认内核选定的最新终态，首版不强制终止永久无响应的执行者。Task CQE 结算后，Contract 还要从 `RETIRING` 收敛到 `RECLAIMED`，普通作用和下一代 Contract 才恢复。
+
 这样，应用中的一次工具调用被拆成内核能够逐项核对的数据。实现与调用示例见[工具执行](modules/tool-execution.md)，公共布局见 [`include/agent_tool_abi.h`](../include/agent_tool_abi.h)、[`include/agent_execution_contract_abi.h`](../include/agent_execution_contract_abi.h) 和 [`include/agent_task_channel_abi.h`](../include/agent_task_channel_abi.h)。
 
 ### 5.3 面向 Agent 查询优化的文件系统扩展
@@ -159,7 +161,9 @@ Guest 提交请求
 
 内核 ABI 只传递结构化状态和系统操作，具体 Provider 协议由 Host 处理。`agentlive_ucore` 通过串口帧发送模型请求、接收工具调用，并把 terminal state 写入 Context。[`host_tools/agentos_relayd.py`](../host_tools/agentos_relayd.py) 负责 TLS、Provider JSON 和本地运行目录。更换模型 Provider 时无需修改内核 ABI。
 
-`agentnexus_ucore` 以任意非空用户输入建立每轮 root Task，并把模型放在一组通用的 Harness 规则与工具中运行。公开工具只有三个：`search_files` 和 `read_file` 只读访问当前 Host 工作区，`inspect_system` 查看当前 Guest 的系统状态。Coordinator 通过内核 `MESSAGE` 和 `N1` 协议把文件请求交给 Research 子 Task，把系统请求交给 System 子 Task；Host workspace broker 在限定根目录内完成实际文件搜索或分段读取，再把结果提供给模型的下一次决策。Task ledger 记录 root/child Task 的关系、执行者身份和状态迁移。首版不提供编辑文件或执行 Shell 的工具，Research 与 System 也是使用内核任务和消息协议的工作进程，而不是独立子模型。Guest 主程序见 [`user/src/agentnexus_ucore.c`](../user/src/agentnexus_ucore.c)，Host 工作区访问见 [`host_tools/agentos_workspace.py`](../host_tools/agentos_workspace.py)，运行流程与命令见 [Workflow Runtime](modules/workflow-runtime.md)和[运行指南](usage.md)。
+`agentnexus_ucore` 以任意非空用户输入建立每轮 root Task，并把模型放在一组通用的 Harness 规则与工具中运行。公开工具只有三个：`search_files` 和 `read_file` 只读访问当前 Host 工作区，`inspect_system` 查看当前 Guest 的系统状态。Coordinator 通过内核 Task Channel 的 `delegate_task` 把 child Task 交给 Research 或 System；目标 claim 后读取 capsule 所绑定的 Guest artifact，完成时发布结果 artifact，并由唯一的 terminal CQE 通知 Coordinator 结算。Coordinator 等待 Contract 到达 `RECLAIMED` 后才恢复 observer/Host 事件投影、读取结果 artifact 并创建下一代。
+
+Host workspace broker 只在显式配置的 root 内返回版本化 manifest 页面，并为 Guest 已通过 Metadata Catalog/Live Query 选定的候选执行正文匹配或返回 revision 绑定的分段字节。Guest 以 1 个 control inode 和最多 32 个 data-stub inode 维护当前 Catalog 窗口，按 4 个 stage 查询并复核完整路径；control stub 的 Typed Watch 负责在 generation 变化时使旧窗口失效。搜索和读取正文返回 Guest 后依次成为 Research 输入、结果 artifact、TOOL Context 与模型历史，Host 不私建、补写或替换 Provider 请求中的这段工具历史。Metadata Catalog 只负责有界候选选择，全文搜索仍由 Host 在候选内执行。Task ledger 记录 root/child Task 的关系、执行者身份和状态迁移。首版不提供编辑文件或执行 Shell 的工具，Research 与 System 是使用内核 Task Channel 协作的工作进程，不是独立子模型。Guest 主程序见 [`user/src/agentnexus_ucore.c`](../user/src/agentnexus_ucore.c)，Host 工作区访问见 [`host_tools/agentos_workspace.py`](../host_tools/agentos_workspace.py)，运行流程与命令见 [Workflow Runtime](modules/workflow-runtime.md)和[运行指南](usage.md)。
 
 ## 八、源码位置与检查方法
 

@@ -27,6 +27,7 @@ Agent（智能体）工作流会同时持有身份、文件、工具结果和异
 | 文件对象 | `dev`、`inum`、`incarnation`、文件更新序号 | 文件访问范围、元数据快照、编辑版本 |
 | Typed Watch | 目标控制编号、生命周期、文件访问范围、订阅编号 | 查询条件、目录 generation 和重新同步状态 |
 | Task Channel | 所有者、通道 generation、`slot_generation` | 唯一提交者、只读 CQ、内核水位和完成结果 |
+| Delegated task | owner/channel/request/slot、目标 Agent/control、capsule handle | TASK route、`TASK_ACCEPT`、claim/complete 和唯一 terminal CQE |
 | 类型化句柄 | 槽位、类型、所有权、generation | 所属生命周期、引用计数和析构 |
 | Workflow Credit Domain | 账户、计费类型、计费轮次 | reserve、阶段占用、commit 和退还 |
 | Workflow Fence | `challenge`、请求号、屏障序号 | 元数据、资源和工作流记录是否来自同一阶段 |
@@ -90,7 +91,7 @@ V2 参数数组、V3 绑定信息和 SQE 都会先复制到内核私有内存。
 <a id="schema-与-capability"></a>
 ## schema 与能力
 
-角色说明 Agent 在工作流中的分工，能力位决定它能做什么。现有能力包括读取元数据和文件内容、读取进程信息、发送消息、建立订阅、写入动作和 artifact、写入审计与元数据、管理工作流、转发模型调用、取消等待以及管理消息路由。部分兼容名称会映射到同一能力，例如更新依赖关系使用 `META_WRITE`。
+角色说明 Agent 在工作流中的分工，能力位决定它能做什么。现有能力包括读取元数据和文件内容、读取进程信息、发送消息、建立订阅、写入动作和 artifact、写入审计与元数据、管理工作流、转发模型调用、取消等待、管理消息路由以及接收 delegated task。`Sentinel` 和 `Investigator` 作为 System/Research 的真实结果生产者具有 `AGENT_CAP_ARTIFACT_WRITE`；这项能力仍要同时通过 artifact manifest permission、VFS 文件访问范围与当前 delegated effect lease，不能单独扩大写入范围。部分兼容名称会映射到同一能力，例如更新依赖关系使用 `META_WRITE`。
 
 Tool Registry 把 schema 和权限要求写在同一项中：
 
@@ -128,6 +129,10 @@ V3 请求按顺序检查以下内容：
 `agent_execution_contract_effect_begin()` 划分了“还能取消”和“已经开始产生副作用”两个阶段。取消请求若在这一步之前到达，节点可记录为 `CANCELLED`；工具已经开始修改系统状态时，取消会被标记为来得太晚，内核仍按实际结果结算。已经接受的尝试会保存执行结果，合法 Replay 直接取用相同的执行序号和结果，并设置缓存标志。
 
 启用 `ENFORCE` 后，受约束的直接系统调用也会经过 `agent_execution_contract_gate_direct_syscall()`。缺少 Execution Contract 的副作用调用会先写下一条结构化拒绝记录。记录成功时返回 `DENIED`，terminal record 槽位不足时返回 `NO_SPACE`，暂时无法写入时返回 `RETRY`。
+
+`RETIRE` 先把 Contract 改为 `RETIRING`，从而关闭新准入；仍有直接调用或运行引用时返回 `RETRY/RETIRING`。只有全部引用退出后才返回 `OK/RECLAIMED` 并解除 `ENFORCE`。这一代的完整结果会保留到下一次 `CREATE`，新 Contract 使用更大的 generation，旧 key 随后失效。Nexus 只在 `RECLAIMED` 后恢复普通 Host/event/artifact 作用并投影任务事件。
+
+CREATE 前的发布边界只固定普通 inode 文件操作。pipe、device 和 stdio 的阻塞控制读取不持有 Contract 引用，因而不会阻止新 Contract；但活动 Contract 内的普通 pipe write 仍被识别为 IPC 副作用并经过直接作用检查。控制流可以继续接收取消，不能借 pipe 输出绕过 manifest 或 delegated lease。
 
 <a id="provenance-传播"></a>
 ## Provenance label
@@ -177,6 +182,8 @@ Metadata Catalog 只接收 `agent_file_meta_set()` 显式登记、仅在运行�
 
 文件提交还要同时核对租约号、inode 的 `incarnation` 和 `expected_version`。
 
+Nexus 访问 Host 工作区时，Host broker 只持有会话显式配置并固定到已打开 handle 的 workspace root。Host 分页返回 generation、object id、相对路径和 revision，Guest 为当前页面建立真实的 Metadata Catalog stub inode，并用不截断的 Live Query 选择候选；generation 变化必须由 control stub 的 Typed Watch `UPDATE` 推进。Catalog 只是有界候选窗口，不是全文索引。Host 只能在 Guest 回传的候选对象内匹配正文，或返回与 object/path/revision 同时绑定的指定字节；正文回到 Guest 后成为 Research artifact 和 Context，而不是由 Host 在 Provider 历史中补写结果。
+
 ## Task Channel 协议
 
 Task Channel 只有一个提交者，队列水位以内核记录为准。SQ 由提交者写入，CQ 在用户页表中只读。每个已经接受的目标任务只产生一条 CQE；取消命令使用独立的请求号，通过 `link_request_id` 指向目标。
@@ -194,9 +201,17 @@ Task Channel 只有一个提交者，队列水位以内核记录为准。SQ 由�
 
 取消策略若当场拒绝取消命令，取消请求号仍会被记为已使用。此时 `enter` 返回 `DENIED`，不产生取消 CQE，原目标继续运行。CQ 已满时，内核保留尚未写出的结果；用户读取 CQ 后，再继续发布。
 
-类型化资源句柄包含槽位、类型、所有权标志和 generation。`IMPORT` 只接受当前 Agent 可读的普通文件、准确的 1–63 字节长度和 OWNED UTF-8，并要求当前 Agent 已经有一条经过校验的最新 Context；导入只绑定这条记录，不另建 Context。内核从 offset 0 取得内容，不改动共享文件 offset；EOF、NUL 和 UTF-8 检查通过后，只把不可变快照、内容指纹与内核生成的 producer/Context/provenance 元数据放入资源表，不保留 `struct file *`。最终 copyout 失败会回滚尚未暴露的资源，因此调用方不会得到“接口失败但槽位已占用”的半成功状态。
+类型化资源句柄包含槽位、类型、所有权标志和 generation。`IMPORT` 只接受当前 Agent 可读的普通文件和 OWNED 输入，并要求当前 Agent 已经有一条经过校验的最新 Context；导入只绑定这条记录，不另建 Context。`AGENT_ARTIFACT_UTF8` 接受准确的 1–63 字节文本并检查 EOF、NUL 与 UTF-8；`AGENT_ARTIFACT_TASK` 接受准确的 56 字节委派描述符并检查版本、大小、标志和保留字段。内核从 offset 0 取得内容，不改动共享文件 offset，只把不可变快照、内容指纹与内核生成的 producer/Context/provenance 元数据放入资源表，不保留 `struct file *`。最终 copyout 失败会回滚尚未暴露的资源，因此调用方不会得到“接口失败但槽位已占用”的半成功状态。
 
-SQE 可以用 BORROWED 别名引用同一 `{slot, type, generation}`。BORROWED 任务结束后引用归还，资源保持 `LIVE`；OWNED 任务结束后资源自动消费。`RELEASE` 以及槽位再次使用都会使旧 generation 返回 `STALE`。当前 ECHO Task Bridge 从内核快照复制 payload，不再读取导入时的 fd，文件后来被改写也不会改变已经接受的任务输入。
+SQE 可以用 BORROWED 别名引用同一 `{slot, type, generation}`。BORROWED 任务结束后引用归还，资源保持 `LIVE`；OWNED 任务结束后资源自动消费。`RELEASE` 以及槽位再次使用都会使旧 generation 返回 `STALE`。ECHO Task Bridge 从内核快照复制 payload，不再读取导入时的 fd；`delegate_task` 也只读取已导入的 TASK 快照。因此文件后来被改写不会改变已经接受的任务输入。
+
+跨 Agent 委派还要求发起者向目标授予独立的 `AGENT_IPC_ROUTE_TASK`，目标持有 `AGENT_CAP_TASK_ACCEPT`，且描述符中的目标 PID、Agent/control 身份和当前生命周期全部一致。TASK route 与 `MESSAGE`/`LLM_DONE` 事件 route 分开。首版拒绝 self delegation，并拒绝让活动端点同时承担 owner 与 target，使委派关系保持二分无环。提交成功后，任务进入 Execution Contract `RUNNING` 和内核 pending 队列；`agent_task_delegate_claim()` 在把描述符及 owner/channel/request/slot 绑定复制给目标之前，再次检查身份、生命周期、能力和 route，并登记 effect-start。首版每个 owner issuer 同时只接受一个尚未结算的委派。
+
+claim 后的 delegated effect lease 不是 workflow 级绕过。它精确绑定执行者 PID/Agent/`control_id`、主线程 identity generation 和 channel/request/slot 代次；Contract 允许的 helper 也必须匹配内核登记的 TID 与 identity generation。每次直接作用只能申请 Contract manifest side-effect mask 的子集，并在调用期间持有 lease 引用。正常 complete、最新终态 offer 的 cleanup ACK，或目标进程完成 quiescence 后，内核才在活动引用归零的边界撤销 lease；该机制不承诺强制终止永久无响应的执行者。
+
+目标通常以 `flags == 0` 调用 `agent_task_delegate_complete()`。如果 claim 之后的截止时间、取消、owner 退出或生命周期关闭先取得终态优先级，内核返回 `RETRY`、`CLAIMED` 及带 generation 的终态 offer。目标必须先使预绑定输出失效，再以相同业务状态、`ACK_TERMINAL` 和准确的 offer 字段确认；若 offer 升级为更高 generation 的 `TIMEOUT`，就再次清理并确认。内核只在确认最新 offer 后把任务置为 `READY`，再由 owner 的 Task Channel 发布唯一 terminal CQE。V1 依赖执行者协作，不会强制终止 claim 后永久无响应的 provider。
+
+同一生命周期的 controller 可以在 syscall 568 上设置 `REQUEST_CANCEL`。它必须准确持有 owner/channel/request/slot/task/correlation 绑定，同时具备 `ORCHESTRATE`、`WAIT_CANCEL` 和 caller 到 owner 的 TASK route。`OK` 只确认取消控制已经线性化；QUEUED 由 owner lane 终结，CLAIMED 仍要由执行者处理终态 offer 并完成 cleanup ACK。PREPARING/CLAIMING 返回 `RETRY`，已经 READY 或终结的请求返回 `STALE`，先到的结果不会被迟到取消覆盖；同一绑定可重试丢失的结果 copyout。
 
 <a id="失败状态与验证"></a>
 ## 失败状态与测试
@@ -222,10 +237,12 @@ SQE 可以用 BORROWED 别名引用同一 `{slot, type, generation}`。BORROWED 
 | [`agentscan_ucore.c`](../user/src/agentscan_ucore.c) | 文件身份和 Live Query 集合变化 |
 | [`agentfinal_ucore.c`](../user/src/agentfinal_ucore.c) | Context commit 顺序、资源结算和工作流回收 |
 | [`agenttask_ucore.c`](../user/src/agenttask_ucore.c) | SQ/CQ 所有权、重新同步、取消、截止时间和 CQE |
+| [`test-agent-task-channel.py`](../scripts/test-agent-task-channel.py) | delegated task 的 TASK route、claim/complete、协作式终态确认和唯一 CQE |
 
 ```bash
 make agent-uapi-check
 make agent-module-check
+python3 -B scripts/test-agent-task-channel.py
 AGENT_TEST_CASE=agentsecurity_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 AGENT_TEST_CASE=agentcontract_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 AGENT_TEST_CASE=agenttask_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-

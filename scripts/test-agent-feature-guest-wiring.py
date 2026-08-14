@@ -52,6 +52,13 @@ MARKERS = {
         "agenttask_ucore: submit=1 cq_ack=1 monotonic=1 resync=1",
         "agenttask_ucore: target_cancel_exactly_once=1 hard_deadline=1",
         "agenttask_ucore: batch_fp=31 scalar_v3_fp=31 task_fp=31",
+        "agenttask_ucore: delegated_runtime agents=3 provider=artifact controller=orchestrator task_route=1 task_accept=1 artifact_write=1 descriptor_bytes=56 claim567=1 complete568=1",
+        "agenttask_ucore: delegated_contracts=3 strict_reclaimed=1 reclaimed_generation_advance=1 issuer_gap_effects=pipe+file",
+        "agenttask_ucore: delegated_lease preclaim_publish_denied=1 thread_helper=1 context_mutation=1 bounded_publish_read=1 effect_gates=process+metadata+file+artifact",
+        "agenttask_ucore: delegated_normal=1 receipt_replay=1 changed_replay_stale=1 sole_owner_cqe=1 output_none=1",
+        "agenttask_ucore: delegated_deadline_claimed=1 terminal_offer_timeout=1 cleanup_ack=1 ack_replay=1 late_complete_stale=1 sole_owner_cqe=1",
+        "agenttask_ucore: delegated_cancel_after_claim=1 agents=3 controller=orchestrator owner_sq_cancel_denied=1 request_cancel568=1 cancelled_offer=1 cleanup_ack=1 cancel_receipt_replay=1 late_complete_stale=1 sole_owner_cqe=1",
+        "agenttask_ucore: contract_create_blocked_pipe_reader=1 enforce_pipe_write_denied=1 regular_inode_import_read_cut=1",
     ),
 }
 
@@ -110,7 +117,8 @@ class AgentFeatureGuestWiringTests(unittest.TestCase):
             "agenttask_ucore": (
                 'X("agenttask_ucore", "agenttask_ucore", '
                 "EXEC_MANIFEST_F_BOOT_SEALED, "
-                "EXEC_MANIFEST_ROLE_BIT(EXEC_MANIFEST_ROLE_ORCHESTRATOR), 0, "
+                "EXEC_MANIFEST_ROLE_BIT(EXEC_MANIFEST_ROLE_ORCHESTRATOR) | "
+                "EXEC_MANIFEST_ROLE_BIT(EXEC_MANIFEST_ROLE_ARTIFACT), 0, "
                 "EXEC_MANIFEST_VFS_PROFILE_WORKFLOW)"
             ),
         }
@@ -199,13 +207,18 @@ class AgentFeatureGuestWiringTests(unittest.TestCase):
             ),
             1,
         )
-        self.assertNotIn("agent_create_role(", source)
+        self.assertEqual(
+            source.count(
+                "agent_create_role(TASK_DELEGATE_PROVIDER_ROLE)"
+            ),
+            1,
+        )
         self.assertIn(
             "for (int attempt = 0; attempt < 2000; attempt++)", source
         )
         self.assertIn("sleep(1);", source)
         self.assertIn("pid = create_isolated_workflow();", source)
-        self.assertEqual(source.count("run_child(CHILD_"), 5)
+        self.assertEqual(source.count("run_child(CHILD_"), 6)
         self.assertIn("pre_effect_context_service_start", source)
         self.assertIn("interval_origin=sequence_start_boundary", source)
         self.assertIn("service_start_tick_intervals", source)

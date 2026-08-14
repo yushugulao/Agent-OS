@@ -187,11 +187,24 @@ def validate(syscall_source: str, registry_source: str) -> None:
         gate < gate_denied < gate_abort < gate_complete
     ):
         raise ContractError("workflow admission can still run background after denial")
-    file_pin = dispatch.find("agent_execution_contract_file_pin_enter(", gate_complete)
+    file_pin = dispatch.find("&file_pin_guard", transaction)
     if file_pin < 0 or not (
-        gate < gate_denied < gate_abort < gate_complete < file_pin < transaction
+        gate < gate_denied < gate_abort < gate_complete < transaction < file_pin
     ):
         raise ContractError("workflow cut no longer starts before transaction preparation")
+    slow_path = function_body(syscall_source, "syscall_slow_path")
+    pin_prepare = slow_path.find("syscall_transaction_prepare(")
+    inode_only = slow_path.find("transaction->file->type == FD_INODE", pin_prepare)
+    pin_enter = slow_path.find(
+        "agent_execution_contract_file_pin_enter(", inode_only
+    )
+    direct_gate = slow_path.find(
+        "agent_execution_contract_gate_direct_syscall(", pin_enter
+    )
+    if min(pin_prepare, inode_only, pin_enter, direct_gate) < 0 or not (
+        pin_prepare < inode_only < pin_enter < direct_gate
+    ):
+        raise ContractError("descriptor publication cut is not inode-exact")
     operation_done = dispatch.find("operation_done:", transaction)
     denied_guard = dispatch.find("!operation_denied || direct_guard.active ||", operation_done)
     pin_guard = dispatch.find("file_pin_guard.active", denied_guard)
@@ -348,7 +361,10 @@ class WorkflowSyscallCutTests(unittest.TestCase):
     def test_rejects_task_resource_removed_from_outer_gate(self) -> None:
         outer = "\tcase SYS_agent_task_channel_resource:\n"
         self_gated_tail = (
-            "\tcase SYS_agent_task_channel_enter:\n\t\treturn 0;"
+            "\tcase SYS_agent_task_channel_enter:\n"
+            "\tcase SYS_agent_task_delegate_claim:\n"
+            "\tcase SYS_agent_task_delegate_complete:\n"
+            "\t\treturn 0;"
         )
         mutated = self.mutate_cut(outer, "")
         body = function_body(mutated, "syscall_mutates_workflow_cut")

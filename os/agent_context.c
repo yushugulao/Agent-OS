@@ -1157,7 +1157,8 @@ agent_context_append_flags(struct proc *p, struct agent_op *op,
 			   struct agent_evidence_context_reservation *reservation,
 			   struct agent_evidence_security_reservation *
 				   security_reservation,
-			   uint64 *evidence_ticket_out)
+			   uint64 *evidence_ticket_out,
+			   uint64 *provenance_labels_out)
 {
 	struct agent_context_append_receipt receipt;
 	struct agent_context_detail detail;
@@ -1196,6 +1197,9 @@ agent_context_append_flags(struct proc *p, struct agent_op *op,
 	record.tick = tick;
 	record.flags = agent_provenance_context_flags(
 		p, latest->request_id, latest->tool_id, flags);
+	if (provenance_labels_out != 0)
+		*provenance_labels_out =
+			AGENT_CONTEXT_PROVENANCE_DECODE(record.flags);
 	if (strlen(op->payload) >= sizeof(record.payload) ||
 	    strlen(latest->result) >= sizeof(record.result))
 		record.flags |= AGENT_CONTEXT_RECORD_F_TRUNCATED;
@@ -1281,7 +1285,7 @@ agent_context_append(struct proc *p, struct agent_op *op,
 {
 	return agent_context_append_flags(
 		p, op, latest, tick, AGENT_CONTEXT_RECORD_F_SYSTEM,
-		authority_effect, 0, 0, 0, 0);
+		authority_effect, 0, 0, 0, 0, 0);
 }
 
 int
@@ -1289,15 +1293,17 @@ agent_context_append_reserved_ticket(
 	struct proc *p, struct agent_op *op, struct agent_result *latest,
 	uint64 tick, int authority_effect,
 	struct agent_evidence_context_reservation *reservation,
-	uint64 *evidence_ticket_out)
+	uint64 *evidence_ticket_out, uint64 *provenance_labels_out)
 {
-	if (reservation == 0 || evidence_ticket_out == 0)
+	if (reservation == 0 || evidence_ticket_out == 0 ||
+	    provenance_labels_out == 0)
 		return -1;
 	*evidence_ticket_out = 0;
+	*provenance_labels_out = 0;
 	return agent_context_append_flags(
 		p, op, latest, tick, AGENT_CONTEXT_RECORD_F_SYSTEM,
 		authority_effect, 0, reservation, 0,
-		evidence_ticket_out);
+		evidence_ticket_out, provenance_labels_out);
 }
 
 static void
@@ -1344,7 +1350,7 @@ agent_context_append_system_class(struct proc *p, int tool_id,
 	p->agent_call_count = latest.sequence;
 	append_status = agent_context_append_flags(
 		p, &op, &latest, agent_context_ticks(),
-		AGENT_CONTEXT_RECORD_F_SYSTEM, 0, causal_audit, 0, 0, 0);
+		AGENT_CONTEXT_RECORD_F_SYSTEM, 0, causal_audit, 0, 0, 0, 0);
 	if (append_status < 0)
 		p->agent_call_count--;
 	agent_lifecycle_context_lane_leave(p);
@@ -1416,7 +1422,7 @@ agent_context_append_security_denial_record(
 		p, &op, &latest, agent_context_ticks(),
 		AGENT_CONTEXT_RECORD_F_SYSTEM |
 			AGENT_CONTEXT_RECORD_F_SECURITY_DENIAL,
-		1, 1, 0, reservation, evidence_ticket_out);
+		1, 1, 0, reservation, evidence_ticket_out, 0);
 	if (append_status < 0)
 		p->agent_call_count--;
 	agent_lifecycle_context_lane_leave(p);
@@ -1468,7 +1474,7 @@ sys_context_push(uint64 recordaddr)
 	if (agent_context_append_flags(p, &op, &latest,
 				       agent_context_ticks(),
 				       AGENT_CONTEXT_RECORD_F_MANUAL, 0, 0,
-				       0, 0, 0) < 0)
+				       0, 0, 0, 0) < 0)
 		result = AGENT_STATUS_NO_SPACE;
 	if (result != 0)
 		p->agent_call_count--;

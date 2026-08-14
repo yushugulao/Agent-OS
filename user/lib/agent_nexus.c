@@ -129,6 +129,11 @@ static const struct agent_nexus_tool_spec nexus_tool_specs[AGENT_TOOL_COUNT] = {
 		AGENT_CAP_DEPENDENCY_UPDATE, AGENT_SIDE_EFFECT_METADATA,
 		"dependency_update", "selector:string", "update a scoped dependency",
 		"not a worker read", "updated dependency"),
+	NX_SPEC(AGENT_TOOL_DELEGATE_TASK, NX_COORD, AGENT_CAP_ORCHESTRATE,
+		AGENT_NEXUS_DELEGATE_SIDE_EFFECTS, "delegate_task", "none",
+		"submit a typed specialist task through the kernel Task Channel",
+		"syscall-only; never expose as a model-selected tool",
+		"kernel Task Channel terminal completion"),
 };
 
 _Static_assert(sizeof(nexus_tool_specs) / sizeof(nexus_tool_specs[0]) ==
@@ -341,358 +346,6 @@ void agent_nexus_sha256_hex(
 		text[i * 2 + 1] = hex[digest[i] & 15U];
 	}
 	text[AGENT_NEXUS_SHA256_HEX_SIZE] = 0;
-}
-
-static void nexus_put_u32(unsigned char *out, unsigned int value)
-{
-	for (unsigned int i = 0; i < 4; i++)
-		out[i] = (unsigned char)(value >> (i * 8U));
-}
-
-static void nexus_put_u64(unsigned char *out, unsigned long long value)
-{
-	for (unsigned int i = 0; i < 8; i++)
-		out[i] = (unsigned char)(value >> (i * 8U));
-}
-
-static unsigned int nexus_get_u32(const unsigned char *in)
-{
-	unsigned int value = 0;
-
-	for (unsigned int i = 0; i < 4; i++)
-		value |= (unsigned int)in[i] << (i * 8U);
-	return value;
-}
-
-static unsigned long long nexus_get_u64(const unsigned char *in)
-{
-	unsigned long long value = 0;
-
-	for (unsigned int i = 0; i < 8; i++)
-		value |= (unsigned long long)in[i] << (i * 8U);
-	return value;
-}
-
-static unsigned int nexus_base64_encode(const unsigned char *input,
-					unsigned int length, char *output,
-					unsigned int capacity)
-{
-	static const char alphabet[] =
-		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-	unsigned int needed = (length / 3U) * 4U +
-		(length % 3U == 0 ? 0U : length % 3U + 1U);
-	unsigned int in = 0;
-	unsigned int out = 0;
-
-	if (needed + 1U > capacity)
-		return 0;
-	while (in + 3U <= length) {
-		unsigned int value = ((unsigned int)input[in] << 16) |
-			((unsigned int)input[in + 1] << 8) | input[in + 2];
-
-		output[out++] = alphabet[(value >> 18) & 63U];
-		output[out++] = alphabet[(value >> 12) & 63U];
-		output[out++] = alphabet[(value >> 6) & 63U];
-		output[out++] = alphabet[value & 63U];
-		in += 3U;
-	}
-	if (length - in == 1U) {
-		unsigned int value = (unsigned int)input[in] << 16;
-
-		output[out++] = alphabet[(value >> 18) & 63U];
-		output[out++] = alphabet[(value >> 12) & 63U];
-	} else if (length - in == 2U) {
-		unsigned int value = ((unsigned int)input[in] << 16) |
-			((unsigned int)input[in + 1] << 8);
-
-		output[out++] = alphabet[(value >> 18) & 63U];
-		output[out++] = alphabet[(value >> 12) & 63U];
-		output[out++] = alphabet[(value >> 6) & 63U];
-	}
-	output[out] = 0;
-	return out;
-}
-
-static int nexus_base64_value(char value)
-{
-	if (value >= 'A' && value <= 'Z')
-		return value - 'A';
-	if (value >= 'a' && value <= 'z')
-		return value - 'a' + 26;
-	if (value >= '0' && value <= '9')
-		return value - '0' + 52;
-	if (value == '-')
-		return 62;
-	if (value == '_')
-		return 63;
-	return -1;
-}
-
-static int nexus_base64_decode(const char *input, unsigned int length,
-			       unsigned char *output, unsigned int capacity,
-			       unsigned int *output_length)
-{
-	unsigned int cursor = 0;
-	unsigned int written = 0;
-
-	if (length == 0 || length % 4U == 1U)
-		return -1;
-	while (cursor + 4U <= length) {
-		int a = nexus_base64_value(input[cursor]);
-		int b = nexus_base64_value(input[cursor + 1]);
-		int c = nexus_base64_value(input[cursor + 2]);
-		int d = nexus_base64_value(input[cursor + 3]);
-		unsigned int value;
-
-		if (a < 0 || b < 0 || c < 0 || d < 0 || written + 3U > capacity)
-			return -1;
-		value = ((unsigned int)a << 18) | ((unsigned int)b << 12) |
-			((unsigned int)c << 6) | (unsigned int)d;
-		output[written++] = (unsigned char)(value >> 16);
-		output[written++] = (unsigned char)(value >> 8);
-		output[written++] = (unsigned char)value;
-		cursor += 4U;
-	}
-	if (length - cursor == 2U) {
-		int a = nexus_base64_value(input[cursor]);
-		int b = nexus_base64_value(input[cursor + 1]);
-
-		if (a < 0 || b < 0 || (b & 15) != 0 || written + 1U > capacity)
-			return -1;
-		output[written++] = (unsigned char)(((unsigned int)a << 2) |
-			((unsigned int)b >> 4));
-	} else if (length - cursor == 3U) {
-		int a = nexus_base64_value(input[cursor]);
-		int b = nexus_base64_value(input[cursor + 1]);
-		int c = nexus_base64_value(input[cursor + 2]);
-
-		if (a < 0 || b < 0 || c < 0 || (c & 3) != 0 ||
-		    written + 2U > capacity)
-			return -1;
-		output[written++] = (unsigned char)(((unsigned int)a << 2) |
-			((unsigned int)b >> 4));
-		output[written++] = (unsigned char)(((unsigned int)b << 4) |
-			((unsigned int)c >> 2));
-	} else if (cursor != length) {
-		return -1;
-	}
-	*output_length = written;
-	return 0;
-}
-
-static int nexus_task_type_valid(int task_type)
-{
-	switch (task_type) {
-	case AGENT_NEXUS_TASK_INSPECT_SYSTEM:
-	case AGENT_NEXUS_TASK_INSPECT_PROCESSES:
-	case AGENT_NEXUS_TASK_INSPECT_CONTEXT:
-	case AGENT_NEXUS_TASK_SEARCH_FILES:
-	case AGENT_NEXUS_TASK_READ_FILE:
-	case AGENT_NEXUS_TASK_USER_TURN:
-	case AGENT_NEXUS_TASK_MODEL_REQUEST:
-	case AGENT_NEXUS_TASK_APPROVAL:
-	case AGENT_NEXUS_TASK_SESSION_CLOSE:
-	case AGENT_NEXUS_TASK_INFRA_READY:
-		return 1;
-	default:
-		return 0;
-	}
-}
-
-static int nexus_system_task_type(int task_type)
-{
-	return task_type == AGENT_NEXUS_TASK_INSPECT_SYSTEM ||
-	       task_type == AGENT_NEXUS_TASK_INSPECT_PROCESSES ||
-	       task_type == AGENT_NEXUS_TASK_INSPECT_CONTEXT;
-}
-
-int agent_nexus_task_validate(const struct agent_nexus_task *task)
-{
-	if (task == 0 || task->kind < AGENT_NEXUS_TASK_ASSIGN ||
-	    task->kind > AGENT_NEXUS_TASK_CANCEL ||
-	    task->state < AGENT_NEXUS_TASK_STATE_ASSIGNED ||
-	    task->state > AGENT_NEXUS_TASK_STATE_CANCELLED ||
-	    (task->flags & ~AGENT_NEXUS_TASK_F_KNOWN_MASK) != 0 ||
-	    task->reserved != 0 || task->lifecycle_id == 0 ||
-	    task->lifecycle_generation == 0 || task->deadline_tick == 0)
-		return 0;
-	if (task->kind == AGENT_NEXUS_TASK_ASSIGN &&
-	    nexus_system_task_type(task->status)) {
-		if (task->flags != (AGENT_NEXUS_TASK_F_HAS_INPUT |
-				    AGENT_NEXUS_TASK_F_HAS_SECONDARY) ||
-		    (task->value0 == 0 && task->value1 == 0))
-			return 0;
-	} else if (task->kind != AGENT_NEXUS_TASK_PROGRESS) {
-		unsigned int value1_flags = task->flags &
-			(AGENT_NEXUS_TASK_F_HAS_SECONDARY |
-			 AGENT_NEXUS_TASK_F_HAS_RESULT);
-
-		if (((task->flags & AGENT_NEXUS_TASK_F_HAS_INPUT) != 0) !=
-		    (task->value0 != 0))
-			return 0;
-		if (task->kind == AGENT_NEXUS_TASK_ASSIGN) {
-			if (value1_flags == (AGENT_NEXUS_TASK_F_HAS_SECONDARY |
-					     AGENT_NEXUS_TASK_F_HAS_RESULT) ||
-			    ((value1_flags != 0) != (task->value1 != 0)))
-				return 0;
-		} else if (((task->flags & AGENT_NEXUS_TASK_F_HAS_RESULT) != 0) !=
-			   (task->value1 != 0) ||
-			   (task->flags & AGENT_NEXUS_TASK_F_HAS_SECONDARY) != 0) {
-			return 0;
-		}
-	}
-	switch (task->kind) {
-	case AGENT_NEXUS_TASK_ASSIGN:
-		return task->state == AGENT_NEXUS_TASK_STATE_ASSIGNED &&
-		       (task->flags & AGENT_NEXUS_TASK_F_FINAL) == 0 &&
-		       nexus_task_type_valid(task->status);
-	case AGENT_NEXUS_TASK_ACCEPT:
-		return task->state == AGENT_NEXUS_TASK_STATE_ACCEPTED &&
-		       task->flags == 0 && task->status == AGENT_STATUS_OK;
-	case AGENT_NEXUS_TASK_PROGRESS:
-		return (task->state == AGENT_NEXUS_TASK_STATE_RUNNING ||
-			task->state == AGENT_NEXUS_TASK_STATE_WAITING) &&
-		       task->flags == 0 && task->status == AGENT_STATUS_OK &&
-		       task->value0 != 0;
-	case AGENT_NEXUS_TASK_RESULT:
-		return task->state == AGENT_NEXUS_TASK_STATE_COMPLETED &&
-		       (task->flags & AGENT_NEXUS_TASK_F_FINAL) != 0 &&
-		       task->status == AGENT_STATUS_OK;
-	case AGENT_NEXUS_TASK_FAILED:
-		return task->state == AGENT_NEXUS_TASK_STATE_FAILED &&
-		       (task->flags & AGENT_NEXUS_TASK_F_FINAL) != 0 &&
-		       task->status < AGENT_STATUS_OK;
-	default:
-		return task->state == AGENT_NEXUS_TASK_STATE_CANCELLED &&
-		       task->flags == AGENT_NEXUS_TASK_F_FINAL &&
-		       task->status == AGENT_STATUS_CANCELLED;
-	}
-}
-
-int agent_nexus_task_validate_runtime(
-	const struct agent_nexus_task *task,
-	const struct agent_workflow_lifecycle_key *expected_lifecycle,
-	unsigned int current_tick)
-{
-	unsigned int delta;
-
-	if (!agent_nexus_task_validate(task) || expected_lifecycle == 0 ||
-	    task->lifecycle_id != expected_lifecycle->id ||
-	    task->lifecycle_generation != expected_lifecycle->generation)
-		return 0;
-	delta = task->deadline_tick - current_tick;
-	return delta != 0 && delta <= AGENT_NEXUS_TASK_MAX_DEADLINE_DELTA;
-}
-
-int agent_nexus_task_transition_validate(
-	const struct agent_nexus_task *previous,
-	const struct agent_nexus_task *next)
-{
-	if (!agent_nexus_task_validate(previous) ||
-	    !agent_nexus_task_validate(next) ||
-	    previous->lifecycle_id != next->lifecycle_id ||
-	    previous->lifecycle_generation != next->lifecycle_generation ||
-	    previous->parent_task_id != next->parent_task_id ||
-	    previous->deadline_tick != next->deadline_tick ||
-	    previous->kind == AGENT_NEXUS_TASK_RESULT ||
-	    previous->kind == AGENT_NEXUS_TASK_FAILED ||
-	    previous->kind == AGENT_NEXUS_TASK_CANCEL)
-		return 0;
-	if (next->kind == AGENT_NEXUS_TASK_CANCEL ||
-	    next->kind == AGENT_NEXUS_TASK_FAILED)
-		return 1;
-	if (previous->kind == AGENT_NEXUS_TASK_ASSIGN)
-		return next->kind == AGENT_NEXUS_TASK_ACCEPT;
-	if (previous->kind == AGENT_NEXUS_TASK_ACCEPT)
-		return next->kind == AGENT_NEXUS_TASK_PROGRESS ||
-		       next->kind == AGENT_NEXUS_TASK_RESULT;
-	return next->kind == AGENT_NEXUS_TASK_PROGRESS ||
-	       next->kind == AGENT_NEXUS_TASK_RESULT;
-}
-
-int agent_nexus_task_encode(const struct agent_nexus_task *task,
-			    char text[AGENT_EVENT_PAYLOAD_SIZE])
-{
-	unsigned char wire[AGENT_NEXUS_TASK_WIRE_SIZE];
-	unsigned int encoded;
-
-	if (text == 0 || !agent_nexus_task_validate(task))
-		return -1;
-	memset(wire, 0, sizeof(wire));
-	nexus_put_u32(wire + AGENT_NEXUS_TASK_OFF_MAGIC,
-		      AGENT_NEXUS_TASK_MAGIC);
-	wire[AGENT_NEXUS_TASK_OFF_VERSION] = AGENT_NEXUS_TASK_VERSION;
-	wire[AGENT_NEXUS_TASK_OFF_KIND] = task->kind;
-	wire[AGENT_NEXUS_TASK_OFF_STATE] = task->state;
-	wire[AGENT_NEXUS_TASK_OFF_FLAGS] = task->flags;
-	nexus_put_u64(wire + AGENT_NEXUS_TASK_OFF_LIFECYCLE_ID,
-		      task->lifecycle_id);
-	nexus_put_u64(wire + AGENT_NEXUS_TASK_OFF_LIFECYCLE_GENERATION,
-		      task->lifecycle_generation);
-	nexus_put_u32(wire + AGENT_NEXUS_TASK_OFF_PARENT_TASK_ID,
-		      task->parent_task_id);
-	nexus_put_u32(wire + AGENT_NEXUS_TASK_OFF_DEADLINE_TICK,
-		      task->deadline_tick);
-	nexus_put_u32(wire + AGENT_NEXUS_TASK_OFF_STATUS,
-		      (unsigned int)task->status);
-	nexus_put_u32(wire + AGENT_NEXUS_TASK_OFF_VALUE0, task->value0);
-	nexus_put_u32(wire + AGENT_NEXUS_TASK_OFF_VALUE1, task->value1);
-	memcpy(text, AGENT_NEXUS_TASK_PREFIX, AGENT_NEXUS_TASK_PREFIX_SIZE);
-	encoded = nexus_base64_encode(
-		wire, sizeof(wire), text + AGENT_NEXUS_TASK_PREFIX_SIZE,
-		AGENT_EVENT_PAYLOAD_SIZE - AGENT_NEXUS_TASK_PREFIX_SIZE);
-	return encoded == AGENT_NEXUS_TASK_B64_SIZE ? 0 : -1;
-}
-
-int agent_nexus_task_decode_n(const char *text, unsigned int length,
-			      struct agent_nexus_task *task)
-{
-	unsigned char wire[AGENT_NEXUS_TASK_WIRE_SIZE];
-	char canonical[AGENT_EVENT_PAYLOAD_SIZE];
-	unsigned int decoded = 0;
-
-	if (text == 0 || task == 0 || length != AGENT_NEXUS_TASK_TEXT_SIZE ||
-	    strncmp(text, AGENT_NEXUS_TASK_PREFIX,
-		    AGENT_NEXUS_TASK_PREFIX_SIZE) != 0 ||
-	    nexus_base64_decode(text + AGENT_NEXUS_TASK_PREFIX_SIZE,
-			AGENT_NEXUS_TASK_B64_SIZE, wire, sizeof(wire),
-			&decoded) < 0 || decoded != sizeof(wire) ||
-	    nexus_get_u32(wire + AGENT_NEXUS_TASK_OFF_MAGIC) !=
-		    AGENT_NEXUS_TASK_MAGIC ||
-	    wire[AGENT_NEXUS_TASK_OFF_VERSION] != AGENT_NEXUS_TASK_VERSION)
-		return -1;
-	memset(task, 0, sizeof(*task));
-	task->kind = wire[AGENT_NEXUS_TASK_OFF_KIND];
-	task->state = wire[AGENT_NEXUS_TASK_OFF_STATE];
-	task->flags = wire[AGENT_NEXUS_TASK_OFF_FLAGS];
-	task->lifecycle_id =
-		nexus_get_u64(wire + AGENT_NEXUS_TASK_OFF_LIFECYCLE_ID);
-	task->lifecycle_generation = nexus_get_u64(
-		wire + AGENT_NEXUS_TASK_OFF_LIFECYCLE_GENERATION);
-	task->parent_task_id =
-		nexus_get_u32(wire + AGENT_NEXUS_TASK_OFF_PARENT_TASK_ID);
-	task->deadline_tick =
-		nexus_get_u32(wire + AGENT_NEXUS_TASK_OFF_DEADLINE_TICK);
-	task->status = (int)nexus_get_u32(wire + AGENT_NEXUS_TASK_OFF_STATUS);
-	task->value0 = nexus_get_u32(wire + AGENT_NEXUS_TASK_OFF_VALUE0);
-	task->value1 = nexus_get_u32(wire + AGENT_NEXUS_TASK_OFF_VALUE1);
-	if (!agent_nexus_task_validate(task) ||
-	    agent_nexus_task_encode(task, canonical) < 0 ||
-	    !nexus_bytes_equal(text, canonical, AGENT_NEXUS_TASK_TEXT_SIZE))
-		return -1;
-	return 0;
-}
-
-int agent_nexus_task_decode(const char *text, struct agent_nexus_task *task)
-{
-	unsigned int length;
-
-	if (text == 0)
-		return -1;
-	length = strnlen(text, AGENT_EVENT_PAYLOAD_SIZE);
-	if (length == AGENT_EVENT_PAYLOAD_SIZE)
-		return -1;
-	return agent_nexus_task_decode_n(text, length, task);
 }
 
 int agent_nexus_tools_discover(void)
@@ -1006,29 +659,6 @@ int agent_nexus_tool_call_as(
 				     argument_count, response);
 }
 
-int agent_nexus_task_send(int target_pid, unsigned long long task_id,
-			  const struct agent_nexus_task *task,
-			  struct agent_response_v2 *response)
-{
-	struct agent_nexus_tool_argument arguments[2];
-	char message[AGENT_EVENT_PAYLOAD_SIZE];
-
-	if (target_pid <= 0 || task_id == 0 || response == 0 ||
-	    agent_nexus_task_encode(task, message) < 0)
-		return -1;
-	memset(arguments, 0, sizeof(arguments));
-	strcpy(arguments[0].key, "target_pid");
-	arguments[0].type = AGENT_PARAM_UINT64;
-	arguments[0].number = (unsigned long long)target_pid;
-	strcpy(arguments[1].key, "message");
-	arguments[1].type = AGENT_PARAM_STRING;
-	strcpy(arguments[1].text, message);
-	if (agent_nexus_tool_call("send_message", task_id, arguments, 2,
-				  response) < 0)
-		return -1;
-	return response->status;
-}
-
 static char nexus_hex(unsigned int value)
 {
 	return value < 10U ? (char)('0' + value) : (char)('a' + value - 10U);
@@ -1056,11 +686,13 @@ unsigned long long agent_nexus_product_capabilities(
 	case AGENT_NEXUS_ROLE_SYSTEM:
 		return AGENT_CAP_META_READ | AGENT_CAP_PROCESS_READ |
 		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
-		       AGENT_CAP_AUDIT_WRITE;
+		       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE |
+		       AGENT_CAP_TASK_ACCEPT;
 	case AGENT_NEXUS_ROLE_RESEARCH:
 		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
 		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
-		       AGENT_CAP_AUDIT_WRITE;
+		       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE |
+		       AGENT_CAP_TASK_ACCEPT;
 	case AGENT_NEXUS_ROLE_COORDINATOR:
 	case AGENT_NEXUS_ROLE_RELAY:
 		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
@@ -1069,7 +701,7 @@ unsigned long long agent_nexus_product_capabilities(
 		       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE |
 		       AGENT_CAP_META_WRITE | AGENT_CAP_ORCHESTRATE |
 		       AGENT_CAP_LLM_RELAY | AGENT_CAP_WAIT_CANCEL |
-		       AGENT_CAP_ROUTE_MANAGE;
+		       AGENT_CAP_ROUTE_MANAGE | AGENT_CAP_TASK_ACCEPT;
 	default:
 		return 0;
 	}
@@ -1334,6 +966,10 @@ static unsigned long long nexus_artifact_required_provenance(
 	case AGENT_NEXUS_SOURCE_DERIVED:
 		required = AGENT_PROVENANCE_AGENT_DERIVED;
 		break;
+	case AGENT_NEXUS_SOURCE_HOST_WORKSPACE:
+		required = AGENT_PROVENANCE_UNTRUSTED_FILE_DATA |
+			   AGENT_PROVENANCE_UNTRUSTED_TOOL_OUTPUT;
+		break;
 	default:
 		return AGENT_PROVENANCE_ALL + 1ULL;
 	}
@@ -1359,7 +995,7 @@ int agent_nexus_artifact_manifest_validate(
 	    !nexus_actor_shape_valid(&manifest->materializer) ||
 	    !nexus_artifact_kind_valid(manifest->kind) ||
 	    manifest->source < AGENT_NEXUS_SOURCE_SEED ||
-	    manifest->source > AGENT_NEXUS_SOURCE_DERIVED ||
+	    manifest->source > AGENT_NEXUS_SOURCE_HOST_WORKSPACE ||
 	    manifest->reserved != 0 || manifest->provenance_labels == 0 ||
 	    (manifest->provenance_labels & ~AGENT_PROVENANCE_ALL) != 0 ||
 	    manifest->permission_mask == 0 ||
@@ -1412,6 +1048,10 @@ static int nexus_owned_manifest_valid(
 	if (manifest->materializer.product_role == AGENT_NEXUS_ROLE_RELAY)
 		return manifest->kind == AGENT_NEXUS_ARTIFACT_MODEL_RESPONSE ||
 		       manifest->kind == AGENT_NEXUS_ARTIFACT_APPROVAL;
+	if (manifest->materializer.product_role == AGENT_NEXUS_ROLE_SYSTEM)
+		return manifest->kind == AGENT_NEXUS_ARTIFACT_SYSTEM_RESULT;
+	if (manifest->materializer.product_role == AGENT_NEXUS_ROLE_RESEARCH)
+		return manifest->kind == AGENT_NEXUS_ARTIFACT_RESEARCH_RESULT;
 	return 0;
 }
 
@@ -1460,9 +1100,13 @@ static int nexus_manifest_relationship_valid(
 		       manifest->kind == AGENT_NEXUS_ARTIFACT_MODEL_REQUEST ||
 		       manifest->kind == AGENT_NEXUS_ARTIFACT_TASK_CAPSULE ||
 		       manifest->kind == AGENT_NEXUS_ARTIFACT_APPROVAL;
-	return manifest->materializer.product_role == AGENT_NEXUS_ROLE_RELAY &&
-	       (manifest->kind == AGENT_NEXUS_ARTIFACT_MODEL_RESPONSE ||
-		manifest->kind == AGENT_NEXUS_ARTIFACT_APPROVAL);
+	if (manifest->materializer.product_role == AGENT_NEXUS_ROLE_RELAY)
+		return manifest->kind == AGENT_NEXUS_ARTIFACT_MODEL_RESPONSE ||
+		       manifest->kind == AGENT_NEXUS_ARTIFACT_APPROVAL;
+	if (manifest->materializer.product_role == AGENT_NEXUS_ROLE_SYSTEM)
+		return manifest->kind == AGENT_NEXUS_ARTIFACT_SYSTEM_RESULT;
+	return manifest->materializer.product_role == AGENT_NEXUS_ROLE_RESEARCH &&
+	       manifest->kind == AGENT_NEXUS_ARTIFACT_RESEARCH_RESULT;
 }
 
 static void nexus_header_from_manifest(
@@ -1470,6 +1114,8 @@ static void nexus_header_from_manifest(
 	const struct agent_nexus_artifact_manifest *manifest,
 	unsigned int payload_size)
 {
+	struct agent_context_header context;
+
 	memset(header, 0, sizeof(*header));
 	header->magic = AGENT_NEXUS_ARTIFACT_MAGIC;
 	header->version = AGENT_NEXUS_ARTIFACT_VERSION;
@@ -1491,6 +1137,9 @@ static void nexus_header_from_manifest(
 	header->source = manifest->source;
 	header->provenance_labels = manifest->provenance_labels;
 	header->permission_mask = manifest->permission_mask;
+	memset(&context, 0, sizeof(context));
+	if (context_snapshot(&context, 0, 0) >= 0)
+		header->producer_context_sequence = context.latest_sequence;
 }
 
 static void nexus_manifest_from_header(
@@ -1767,5 +1416,57 @@ int agent_nexus_context_note(unsigned long long task_id, int tool_id,
 		AGENT_CONTEXT_PROVENANCE_ENCODE(provenance);
 	nexus_copy_text(record.payload, sizeof(record.payload), payload);
 	nexus_copy_text(record.result, sizeof(record.result), result);
+	return context_push(&record);
+}
+
+static unsigned long long nexus_digest_word(const unsigned char *digest)
+{
+	unsigned long long value = 0;
+
+	for (unsigned int i = 0; i < 8; i++)
+		value = (value << 8) | digest[i];
+	return value;
+}
+
+static void nexus_context_u32_text(
+	char prefix, unsigned int value, char output[AGENT_CONTEXT_TEXT_SIZE])
+{
+	char digits[10];
+	unsigned int count = 0;
+	unsigned int written = 2;
+
+	memset(output, 0, AGENT_CONTEXT_TEXT_SIZE);
+	output[0] = prefix;
+	output[1] = '=';
+	do {
+		digits[count++] = (char)('0' + value % 10U);
+		value /= 10U;
+	} while (value != 0);
+	while (count != 0)
+		output[written++] = digits[--count];
+}
+
+int agent_nexus_artifact_context_note(
+	unsigned long long task_id, int tool_id, int status,
+	unsigned long long provenance, unsigned int handle,
+	unsigned int payload_size,
+	const unsigned char digest[AGENT_NEXUS_SHA256_SIZE])
+{
+	struct agent_context_record record;
+
+	if (task_id == 0 || handle == 0 || payload_size == 0 || digest == 0)
+		return -1;
+	memset(&record, 0, sizeof(record));
+	record.request_id = task_id;
+	record.tool_id = tool_id;
+	record.status = status;
+	record.arg0 = nexus_digest_word(digest);
+	record.value0 = nexus_digest_word(digest + 8);
+	record.value1 = nexus_digest_word(digest + 16);
+	record.value2 = nexus_digest_word(digest + 24);
+	record.flags = AGENT_CONTEXT_RECORD_F_MANUAL |
+		AGENT_CONTEXT_PROVENANCE_ENCODE(provenance);
+	nexus_context_u32_text('a', handle, record.payload);
+	nexus_context_u32_text('n', payload_size, record.result);
 	return context_push(&record);
 }

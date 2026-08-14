@@ -238,8 +238,10 @@
 #define AGENT_EVENT_MASK(type) (1ULL << (type))
 #define AGENT_IPC_EVENT_MESSAGE  AGENT_EVENT_MASK(AGENT_EVENT_MESSAGE)
 #define AGENT_IPC_EVENT_LLM_DONE AGENT_EVENT_MASK(AGENT_EVENT_LLM_DONE)
+#define AGENT_IPC_ROUTE_TASK      (1ULL << 63)
 #define AGENT_IPC_EVENT_MASK \
 	(AGENT_IPC_EVENT_MESSAGE | AGENT_IPC_EVENT_LLM_DONE)
+#define AGENT_IPC_ROUTE_MASK (AGENT_IPC_EVENT_MASK | AGENT_IPC_ROUTE_TASK)
 
 #define AGENT_IPC_ROUTE_REVOKE 0
 #define AGENT_IPC_ROUTE_GRANT  1
@@ -263,6 +265,7 @@
 #define AGENT_CAP_LLM_RELAY     (1ULL << 10)
 #define AGENT_CAP_WAIT_CANCEL   (1ULL << 11)
 #define AGENT_CAP_ROUTE_MANAGE  (1ULL << 12)
+#define AGENT_CAP_TASK_ACCEPT   (1ULL << 13)
 #define AGENT_CAP_RECOVER_STAGE AGENT_CAP_ACTION_WRITE
 #define AGENT_CAP_REPORT_WRITE  AGENT_CAP_ARTIFACT_WRITE
 #define AGENT_CAP_DEPENDENCY_UPDATE AGENT_CAP_META_WRITE
@@ -747,6 +750,12 @@ int agent_task_channel_enter(
 int agent_task_channel_resource(
 	const struct agent_task_channel_resource *request,
 	struct agent_task_channel_resource_result *result);
+int agent_task_delegate_claim(
+	const struct agent_task_delegate_claim *request,
+	struct agent_task_delegate_claim_result *result);
+int agent_task_delegate_complete(
+	const struct agent_task_delegate_complete *request,
+	struct agent_task_delegate_complete_result *result);
 int agent_resource_snapshot(struct agent_resource_snapshot *snapshot);
 int agent_performance_snapshot(struct agent_performance_snapshot *snapshot);
 int agent_scope_delegate_fd(int fd);

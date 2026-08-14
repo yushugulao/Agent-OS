@@ -118,7 +118,8 @@ static inline void exec_manifest_worker_image(const char *source,
 	  EXEC_MANIFEST_VFS_PROFILE_CONTENT_READ) \
 	X("agenttask_ucore", "agenttask_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, \
-	  EXEC_MANIFEST_ROLE_BIT(EXEC_MANIFEST_ROLE_ORCHESTRATOR), 0, \
+	  EXEC_MANIFEST_ROLE_BIT(EXEC_MANIFEST_ROLE_ORCHESTRATOR) | \
+	  EXEC_MANIFEST_ROLE_BIT(EXEC_MANIFEST_ROLE_ARTIFACT), 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
 	X("agentpublish_ucore", "agentpublish_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, \

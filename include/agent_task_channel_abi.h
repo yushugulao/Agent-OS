@@ -7,6 +7,8 @@
 #define AGENT_TASK_CHANNEL_SETUP_SYSCALL    563U
 #define AGENT_TASK_CHANNEL_ENTER_SYSCALL    564U
 #define AGENT_TASK_CHANNEL_RESOURCE_SYSCALL 565U
+#define AGENT_TASK_DELEGATE_CLAIM_SYSCALL   567U
+#define AGENT_TASK_DELEGATE_COMPLETE_SYSCALL 568U
 
 #define AGENT_TASK_CHANNEL_VERSION       1U
 #define AGENT_TASK_CHANNEL_ENTRY_VERSION 1U
@@ -15,6 +17,29 @@
 
 /* UTF-8 imports reserve one byte for a kernel-written trailing NUL. */
 #define AGENT_TASK_RESOURCE_UTF8_MAX      63U
+
+#define AGENT_TASK_DELEGATE_VERSION 1U
+#define AGENT_TASK_DELEGATE_DESCRIPTOR_VERSION 1U
+
+#define AGENT_TASK_DELEGATE_F_NONE 0U
+
+#define AGENT_TASK_DELEGATE_CLAIM_F_WAIT (1U << 0)
+#define AGENT_TASK_DELEGATE_CLAIM_F_ALL AGENT_TASK_DELEGATE_CLAIM_F_WAIT
+
+#define AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL (1U << 0)
+#define AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL (1U << 1)
+#define AGENT_TASK_DELEGATE_COMPLETE_F_ALL \
+	(AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL | \
+	 AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL)
+
+#define AGENT_TASK_DELEGATE_STATE_NONE    0U
+#define AGENT_TASK_DELEGATE_STATE_QUEUED  1U
+#define AGENT_TASK_DELEGATE_STATE_CLAIMED 2U
+#define AGENT_TASK_DELEGATE_STATE_READY   3U
+
+/* DELEGATE_TASK terminal Context value0 packs the executor identity. */
+#define AGENT_TASK_DELEGATE_EXECUTOR_PID_MASK 0xffffffffULL
+#define AGENT_TASK_DELEGATE_EXECUTOR_AGENT_SHIFT 32U
 
 #define AGENT_TASK_CHANNEL_SQ_MAGIC 0x4147545343513031ULL
 #define AGENT_TASK_CHANNEL_CQ_MAGIC 0x4147544343513031ULL
@@ -260,6 +285,101 @@ struct agent_task_channel_resource_result {
 	unsigned long long reserved_tail[2];
 };
 
+/*
+ * A delegated task carries only immutable routing and application object ids.
+ * Large input and output bytes remain in application artifacts named by the
+ * capsule. Keeping this descriptor below the frozen 63-byte resource limit
+ * preserves the V1 SQE/CQE and resource page layouts.
+ */
+struct agent_task_delegate_descriptor {
+	unsigned short version;
+	unsigned short size;
+	int target_pid;
+	unsigned int target_agent_id;
+	unsigned int task_type;
+	unsigned long long target_control_id;
+	unsigned long long task_id;
+	unsigned long long correlation_id;
+	unsigned int parent_task_id;
+	unsigned int capsule_handle;
+	unsigned int flags;
+	unsigned int reserved;
+};
+
+struct agent_task_delegate_claim {
+	unsigned int version;
+	unsigned int size;
+	unsigned int flags;
+	unsigned int reserved;
+	struct agent_workflow_lifecycle_key lifecycle;
+	unsigned long long reserved_tail[4];
+};
+
+struct agent_task_delegate_claim_result {
+	unsigned int version;
+	unsigned int size;
+	int status;
+	unsigned int state;
+	struct agent_workflow_lifecycle_key lifecycle;
+	struct agent_task_delegate_descriptor descriptor;
+	int owner_pid;
+	unsigned int owner_agent_id;
+	unsigned long long owner_control_id;
+	unsigned long long channel_generation;
+	unsigned long long request_id;
+	unsigned long long slot_generation;
+};
+
+struct agent_task_delegate_complete {
+	unsigned int version;
+	unsigned int size;
+	unsigned int flags;
+	unsigned int reserved;
+	struct agent_workflow_lifecycle_key lifecycle;
+	int owner_pid;
+	int terminal_status;
+	unsigned long long owner_control_id;
+	unsigned long long channel_generation;
+	unsigned long long request_id;
+	unsigned long long slot_generation;
+	unsigned long long task_id;
+	unsigned long long correlation_id;
+	/* ACK echoes the exact kernel offer while terminal_status stays unchanged. */
+	int ack_terminal_status;
+	unsigned int terminal_generation;
+};
+
+struct agent_task_delegate_complete_result {
+	unsigned int version;
+	unsigned int size;
+	int status;
+	unsigned int state;
+	unsigned long long channel_generation;
+	unsigned long long request_id;
+	unsigned long long slot_generation;
+	unsigned long long task_id;
+	unsigned long long correlation_id;
+	/* Kernel-selected offer; both fields must be echoed by a cleanup ACK. */
+	int terminal_status;
+	unsigned int terminal_generation;
+};
+
+/*
+ * A normal provider completion uses flags=0 and zero ACK fields. If it returns
+ * RETRY/CLAIMED, terminal_status + terminal_generation are a kernel offer:
+ * invalidate any prebound output, then repeat the same business status with
+ * ACK_TERMINAL and echo both fields. A newer RETRY offer supersedes the old
+ * one and must be ACKed without rerunning the task. Only OK/READY is terminal.
+ *
+ * A same-lifecycle controller may instead submit REQUEST_CANCEL with
+ * terminal_status=CANCELLED and zero ACK fields. The exact owner/channel/
+ * request/slot/task/correlation tuple is the cancellation capability binding;
+ * the kernel additionally requires ORCHESTRATE, WAIT_CANCEL, and a live TASK
+ * route to the owner. An OK result acknowledges the control request, not the
+ * delegated task's terminal CQE. The provider still observes and ACKs the
+ * kernel terminal offer at its effect boundary.
+ */
+
 _Static_assert(sizeof(unsigned short) == 2,
 	       "Task Channel ABI requires 16-bit unsigned short");
 _Static_assert(AGENT_TOOL_COUNT <= 0xffffU,
@@ -288,5 +408,24 @@ _Static_assert(sizeof(struct agent_task_channel_resource) == 72,
 	       "Task Channel resource ABI layout");
 _Static_assert(sizeof(struct agent_task_channel_resource_result) == 80,
 	       "Task Channel resource result ABI layout");
+_Static_assert(sizeof(struct agent_task_delegate_descriptor) == 56,
+	       "delegated task descriptor ABI layout");
+_Static_assert(__builtin_offsetof(struct agent_task_delegate_descriptor,
+				 target_control_id) == 16,
+	       "delegated task target binding ABI offset");
+_Static_assert(sizeof(struct agent_task_delegate_claim) == 64,
+	       "delegated task claim ABI layout");
+_Static_assert(sizeof(struct agent_task_delegate_claim_result) == 128,
+	       "delegated task claim result ABI layout");
+_Static_assert(sizeof(struct agent_task_delegate_complete) == 96,
+	       "delegated task completion ABI layout");
+_Static_assert(__builtin_offsetof(struct agent_task_delegate_complete,
+				 ack_terminal_status) == 88,
+	       "delegated task completion ACK ABI offset");
+_Static_assert(sizeof(struct agent_task_delegate_complete_result) == 64,
+	       "delegated task completion result ABI layout");
+_Static_assert(__builtin_offsetof(struct agent_task_delegate_complete_result,
+				 terminal_generation) == 60,
+	       "delegated task terminal offer ABI offset");
 
 #endif

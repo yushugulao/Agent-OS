@@ -50,13 +50,15 @@ struct workflow_lifecycle_key {
 
 | 角色 | 主要能力位 | Agent 调度权重 |
 | --- | --- | ---: |
-| `Sentinel` | 读取元数据和进程状态、发送消息、订阅文件、写审计记录 | 70 |
-| `Investigator` | 读取元数据和文件内容、发送消息、订阅文件、写审计记录 | 90 |
-| `Recovery` | 读取元数据和文件内容、发送消息、订阅文件、执行动作、写结果和审计记录 | 120 |
-| `Artifact` | 读取元数据和文件内容、发送消息、订阅文件、写结果和审计记录 | 100 |
-| `Orchestrator` | 13 项 Agent 能力位，可创建并管理协作者 | 110 |
+| `Sentinel` | 读取元数据和进程状态、发送消息、订阅文件、写结果和审计记录、接收 delegated task | 70 |
+| `Investigator` | 读取元数据和文件内容、发送消息、订阅文件、写结果和审计记录、接收 delegated task | 90 |
+| `Recovery` | 读取元数据和文件内容、发送消息、订阅文件、执行动作、写结果和审计记录、接收 delegated task | 120 |
+| `Artifact` | 读取元数据和文件内容、发送消息、订阅文件、写结果和审计记录、接收 delegated task | 100 |
+| `Orchestrator` | 14 项 Agent 能力位，可创建并管理协作者 | 110 |
 
 表中的权重只用于同一工作流内部选择 Agent。多个工作流之间的 EEVDF 调度对象保持等权。子进程或 `exec` 都不能扩大权限。进程最终拥有的能力集合，是角色策略、映像配置、父进程有效能力和请求掩码的交集。
+
+`Sentinel` 与 `Investigator` 具有 `AGENT_CAP_ARTIFACT_WRITE`，因为 Nexus 的 System 与 Research 是结果 artifact 的实际生产者。这项角色能力不等于任意文件写入：发布仍要通过 artifact manifest permission、当前 VFS 文件访问范围以及精确绑定到 delegated task 的 effect lease。
 
 ### 2.3 受控创建与映像绑定
 
@@ -119,7 +121,7 @@ if (record != 0 && !record->closing && record->members > 0 &&
 
 ### 3.3 按生命周期回收
 
-生命周期收尾程序按同一个键回收 Typed Watch、Metadata Catalog、Execution Contract、Task Channel、工作流记录环、Workflow Credit Domain 和调度对象。随后回收普通 VFS 文件访问范围，删除其中的文件，并从 Metadata Catalog 移除相应记录。标记 `preserve_on_retire` 的 artifact 会保留元数据、文件和存储计费，只解除与旧生命周期的绑定。各模块在释放前都比较完整键，因此旧订阅、请求、Contract 和句柄只会得到 `STALE`、`CONFLICT` 或 `NOT_FOUND`，不会落入下一次工作流。
+生命周期收尾程序按同一个键回收 Typed Watch、Metadata Catalog、Execution Contract、Task Channel、delegated task、工作流记录环、Workflow Credit Domain 和调度对象。随后回收普通 VFS 文件访问范围，删除其中的文件，并从 Metadata Catalog 移除相应记录。标记 `preserve_on_retire` 的 artifact 会保留元数据、文件和存储计费，只解除与旧生命周期的绑定。各模块在释放前都比较完整键，因此旧订阅、请求、Contract 和句柄只会得到 `STALE`、`CONFLICT` 或 `NOT_FOUND`，不会落入下一次工作流。若 delegated task 已经被目标 claim，关闭会生成协作式终态 offer 并唤醒目标；目标清理预绑定结果并确认最新 offer 后，owner 才收到唯一 terminal CQE。首版不能强制收敛永久无响应的已 claim 执行者。
 
 进程退出可能跨越一次系统调用，因而全程计入退出操作。普通 Agent 系统调用计入普通操作。Workflow Fence 不会持锁睡眠，暂时无法取得静止时点时返回 `RETRY`。
 
@@ -153,6 +155,8 @@ if (record != 0 && !record->closing && record->members > 0 &&
 
 Context 固定保存 128 条记录。写满后覆盖最旧槽位，并同步更新表头中的 `oldest_sequence`、`latest_sequence` 和 `dropped_records`。
 
+delegated task 的 terminal Context 仍由 owner 的 commit lane 发布，但会单独保存实际执行者：`result.value0 = (agent_id << 32) | (uint32_t)pid`，`value1` 是执行者 `control_id`，`value2` 是执行者 Context sequence。这样，Execution Contract 的 issuer/terminalizer 与真正运行任务的 Agent 不会混成同一个身份；应用结果正文继续保存在 capsule 绑定的 Guest artifact 中。
+
 ## 五、Context commit、读取与回滚
 
 ### 5.1 FIFO commit lane
@@ -183,6 +187,8 @@ Context 固定保存 128 条记录。写满后覆盖最旧槽位，并同步更�
 
 Guest 直接读取程序的实现位于 [`user/lib/syscall.c`](../../user/lib/syscall.c)。只有前后两次发布序号相同且为偶数时，本次读取才有效。若 commit 持续发生，接口返回 `RETRY`，调用方改用系统调用读取。
 
+Nexus Relay 用这条 active path 保持跨轮 Context。USER、已经结算的 TOOL 和成功 FINAL 进入短 Context 节点，第 7 页的 4 KiB Guest cache 只为仍位于 active path 的完整 USER/FINAL 对提供有界正文。下一轮优先直接读取映射页，必要时回退到 Context 系统调用；失败、取消和 `/reset` 通过 rollback/clear 使路径与缓存同步变化。Host ledger 可以暂存 Guest 已发布的投影用于关联检查，但不私建、补写或替换 Provider 历史，下一轮消息仍由 Guest 的 active path 重建。
+
 ### 5.3 分支与回滚
 
 `context_rollback(sequence)` 先确认目标仍在 FIFO 窗口中，并能沿父记录重建活动路径，再从工作流生命周期取得新的分支 generation。目标记录成为新的可见头；原有记录的序号和哈希都不变，后续结果从新分支继续 commit，序号不会复用。
@@ -200,7 +206,7 @@ AgentOS 使用六种 provenance label 表示数据来源，定义见 [`include/a
 | `AGENT_DERIVED` | Agent 计算或汇总的结果 |
 | `UNTRUSTED_FILE_DATA` | 文件内容或元数据派生的数据 |
 | `UNTRUSTED_TOOL_OUTPUT` | 工具输出 |
-| `CROSS_AGENT_DATA` | 跨 Agent 消息或结果 |
+| `CROSS_AGENT_DATA` | 跨 Agent 消息、delegated task artifact 或结果 |
 
 provenance label 跟随 Context、文件读取、工具 terminal state 和 IPC 传播，合并时只增不减。选择 Execution Contract 前驱时，可以加入前置记录已有的 label，但不能删除当前 label。Tool Registry 声明允许的输入 label、输出 label、所需能力位和实际副作用掩码。[`agent_provenance_authorize_tool()`](../../os/agent_provenance.c) 在工具生效前核对生命周期、Contract generation、DAG 边、provenance 集合和副作用掩码。拒绝结果写入工作流关键记录通道。
 
@@ -214,7 +220,7 @@ provenance label 跟随 Context、文件读取、工具 terminal state 和 IPC �
 2. VFS 创建动态文件访问范围和生命周期键，资源控制器建立执行/存储账户。
 3. 根 Agent 取得角色、能力位和 `control_id`，内核分配 Context、sidecar 与冷状态页。
 4. 具有 `AGENT_CAP_ORCHESTRATE` 能力位的 Agent 调用 `agent_worker_create()`；内核记录目标映像的 `dev`、`inum` 和 `incarnation`，工作进程只在 `exec` 匹配后发布受限身份。
-5. 工具结果、事件和消息按顺序 commit 到 Context，provenance label 随之传播。
+5. 工具结果、事件、消息和 delegated task 终态按顺序 commit 到 Context，provenance label 随之传播；大段跨 Agent 结果由 Guest artifact 关联。
 6. 回滚取得新的分支 generation，并重建活动路径。
 7. `exec` 重新计算映像绑定和能力位，`exit` 开始登记退出操作。
 8. 最后一个成员和后台工作结束后，生命周期收尾程序释放 Context 与关联对象。普通 VFS 文件访问范围被回收；artifact 继续保留，并解除与旧生命周期的绑定。

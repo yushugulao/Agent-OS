@@ -20,6 +20,9 @@
 #define AGENT_TASK_REQUEST_F_DEADLINE_DUE   (1U << 3)
 #define AGENT_TASK_REQUEST_F_CANCEL_DENIED  (1U << 4)
 
+/* Internal result from a deadline hook whose effect has already started. */
+#define AGENT_TASK_DEADLINE_PENDING 1
+
 struct agent_task_sq_page {
 	struct agent_task_ring_header header;
 	struct agent_task_sqe entries[AGENT_TASK_CHANNEL_CAPACITY];
@@ -297,18 +300,23 @@ agent_task_snapshot_valid(const struct agent_task_resource_import *imported)
 	uchar digest[AGENT_TASK_CHANNEL_SCHEMA_SIZE];
 	uint length;
 
-	if (imported->resource_type != AGENT_ARTIFACT_UTF8 ||
+	if ((imported->resource_type != AGENT_ARTIFACT_UTF8 &&
+	     imported->resource_type != AGENT_ARTIFACT_TASK) ||
 	    imported->length == 0 ||
 	    imported->length > AGENT_TASK_RESOURCE_UTF8_MAX)
 		return 0;
 	length = (uint)imported->length;
-	if (imported->snapshot[length] != 0)
-		return 0;
-	for (uint i = 0; i < length; i++)
-		if (imported->snapshot[i] == 0)
+	if (imported->resource_type == AGENT_ARTIFACT_UTF8) {
+		if (imported->snapshot[length] != 0)
 			return 0;
-	if (!agent_task_utf8_valid(imported->snapshot, length))
+		for (uint i = 0; i < length; i++)
+			if (imported->snapshot[i] == 0)
+				return 0;
+		if (!agent_task_utf8_valid(imported->snapshot, length))
+			return 0;
+	} else if (length != sizeof(struct agent_task_delegate_descriptor)) {
 		return 0;
+	}
 	agent_sha256(imported->snapshot, length, digest);
 	return memcmp(digest, imported->content_digest, sizeof(digest)) == 0;
 }
@@ -550,7 +558,8 @@ agent_task_resource_import_valid(
 {
 	return imported != 0 && imported->producer_control_id != 0 &&
 	       imported->producer_pid > 0 &&
-	       imported->resource_type == AGENT_ARTIFACT_UTF8 &&
+	       (imported->resource_type == AGENT_ARTIFACT_UTF8 ||
+		imported->resource_type == AGENT_ARTIFACT_TASK) &&
 	       imported->resource_flags == AGENT_TASK_HANDLE_F_OWNED &&
 	       imported->provenance_labels != 0 &&
 	       (imported->provenance_labels & ~AGENT_PROVENANCE_ALL) == 0 &&
@@ -829,7 +838,9 @@ agent_task_completion_valid_locked(
 	cancel_due =
 		((request->flags & AGENT_TASK_REQUEST_F_CANCEL_REQUESTED) != 0 ||
 		 dependency_failed) &&
-		!deadline_due;
+		!deadline_due &&
+		(completion->status != AGENT_STATUS_INDETERMINATE ||
+		 request->sqe.tool_id != AGENT_TOOL_DELEGATE_TASK);
 	/* A due hard deadline wins over a still-pending cancellation. */
 	if (deadline != deadline_due || cancelled != cancel_due)
 		return 0;
@@ -1624,6 +1635,8 @@ agent_task_channel_expire(struct proc *p, uint64 now,
 		agent_task_callback_put_locked(state);
 		intr_restore(enabled);
 		agent_task_reclaim_deferred(p, ops);
+		if (status == AGENT_TASK_DEADLINE_PENDING)
+			return (int)expired;
 		if (status < 0)
 			return expired != 0 ? (int)expired :
 			       AGENT_TASK_CHANNEL_EVIDENCE;
@@ -1666,6 +1679,8 @@ agent_task_deadline_completion(
 		return AGENT_TASK_CHANNEL_EVIDENCE;
 	memset(completion, 0, sizeof(*completion));
 	hook_status = ops->expire(p, sqe, completion);
+	if (hook_status == AGENT_TASK_HOOK_PENDING)
+		return AGENT_TASK_DEADLINE_PENDING;
 	if ((hook_status != AGENT_TASK_HOOK_COMPLETE &&
 	     hook_status != AGENT_TASK_HOOK_DENIED) ||
 	    completion->status != AGENT_STATUS_TIMEOUT ||
@@ -1785,7 +1800,9 @@ agent_task_channel_consume_one(struct proc *p, struct thread *issuer,
 		    state->ops != ops || state->private->header.callback_refs == 0)
 			panic("Task Channel cancel callback");
 		agent_task_callback_put_locked(state);
-		if ((target_sqe.flags & AGENT_TASK_SQE_F_HARD_DEADLINE) != 0 &&
+		/* A hook-complete terminal_tick is the linearized winner. */
+		if (hook_status != AGENT_TASK_HOOK_COMPLETE &&
+		    (target_sqe.flags & AGENT_TASK_SQE_F_HARD_DEADLINE) != 0 &&
 		    agent_task_now() >= target_sqe.deadline_tick) {
 			target = agent_task_request_find_locked(
 				state->private, sqe.link_request_id);
@@ -2721,6 +2738,8 @@ retry:
 				panic("Task Channel reclaim expiry callback");
 			agent_task_callback_put_locked(state);
 			intr_restore(enabled);
+			if (expire_status == AGENT_TASK_DEADLINE_PENDING)
+				return AGENT_TASK_CHANNEL_RETRY;
 			if (expire_status < 0)
 				return expire_status;
 			complete_status = agent_task_channel_complete_finish(
@@ -2871,4 +2890,126 @@ agent_task_channel_active(const struct proc *p)
 	active = agent_task_channel_owner_valid_locked(state, p);
 	intr_restore(enabled);
 	return active;
+}
+
+int
+agent_task_channel_current_issuer(struct proc *p, struct thread *thread)
+{
+	struct agent_task_channel_state *state;
+	int valid;
+	int enabled = intr_save();
+
+	state = agent_task_channel_find_locked(p);
+	valid = agent_task_channel_issuer_valid_locked(state, p, thread);
+	intr_restore(enabled);
+	return valid;
+}
+
+int
+agent_task_channel_current_issuer_cleanup(struct proc *p,
+					  struct thread *thread)
+{
+	struct agent_task_channel_state *state;
+	int valid;
+	int enabled = intr_save();
+
+	state = agent_task_channel_find_locked(p);
+	valid = agent_task_channel_owner_valid_locked(state, p) && thread != 0 &&
+		(state->state == AGENT_TASK_CHANNEL_OWNER_LIVE ||
+		 state->state == AGENT_TASK_CHANNEL_OWNER_RECLAIMING) &&
+		thread == curr_thread() && thread->process == p &&
+		thread->identity_generation != 0 &&
+		thread->tid == state->private->header.issuer_tid &&
+		thread->identity_generation ==
+			state->private->header.issuer_generation;
+	intr_restore(enabled);
+	return valid;
+}
+
+int
+agent_task_channel_notify(struct proc *p, uint64 generation)
+{
+	struct agent_task_channel_state *state;
+	struct thread *issuer;
+	int notified = 0;
+	int enabled = intr_save();
+
+	state = agent_task_channel_find_locked(p);
+	if (!agent_task_channel_owner_valid_locked(state, p) ||
+	    state->private->header.generation != generation)
+		goto out;
+	if (state->private->header.issuer_tid < 0 ||
+	    state->private->header.issuer_tid >= NTHREAD)
+		goto out;
+	issuer = &p->threads[state->private->header.issuer_tid];
+	if (issuer->process == p && issuer->identity_generation != 0 &&
+	    issuer->identity_generation ==
+		    state->private->header.issuer_generation) {
+		(void)wait_queue_interrupt(issuer);
+		notified = 1;
+	}
+out:
+	intr_restore(enabled);
+	return notified;
+}
+
+static struct agent_task_request_slot *
+agent_task_channel_delegate_cancel_request_locked(
+	struct proc *p, uint64 ring_generation, uint64 request_id,
+	uint64 slot_generation)
+{
+	struct agent_task_channel_state *state;
+	struct agent_task_request_slot *request;
+
+	if (p == 0 || ring_generation == 0 || request_id == 0 ||
+	    slot_generation == 0)
+		return 0;
+	state = agent_task_channel_find_locked(p);
+	if (!agent_task_channel_owner_valid_locked(state, p) ||
+	    state->private->header.generation != ring_generation)
+		return 0;
+	request = agent_task_request_find_locked(state->private, request_id);
+	if (request == 0 || request->state != AGENT_TASK_REQUEST_RUNNING ||
+	    request->sqe.ring_generation != ring_generation ||
+	    request->sqe.slot_generation != slot_generation ||
+	    request->sqe.tool_id != AGENT_TOOL_DELEGATE_TASK)
+		return 0;
+	return request;
+}
+
+int
+agent_task_channel_delegate_cancel_preflight_locked(
+	struct proc *p, uint64 ring_generation, uint64 request_id,
+	uint64 slot_generation)
+{
+	if (intr_get())
+		panic("Task Channel delegated cancel preflight unlocked");
+	if (p == 0 || ring_generation == 0 || request_id == 0 ||
+	    slot_generation == 0)
+		return AGENT_TASK_CHANNEL_BAD_REQUEST;
+	return agent_task_channel_delegate_cancel_request_locked(
+		       p, ring_generation, request_id, slot_generation) != 0 ?
+		AGENT_TASK_CHANNEL_OK : AGENT_TASK_CHANNEL_STALE;
+}
+
+int
+agent_task_channel_delegate_cancel_locked(
+	struct proc *p, uint64 ring_generation, uint64 request_id,
+	uint64 slot_generation)
+{
+	struct agent_task_channel_state *state;
+	struct agent_task_request_slot *request;
+
+	if (intr_get())
+		panic("Task Channel delegated cancel unlocked");
+	request = agent_task_channel_delegate_cancel_request_locked(
+		p, ring_generation, request_id, slot_generation);
+	if (request == 0)
+		return AGENT_TASK_CHANNEL_STALE;
+	state = agent_task_channel_find_locked(p);
+	/* Cooperative provider cleanup supersedes an earlier too-late SQ CANCEL. */
+	request->flags &= ~AGENT_TASK_REQUEST_F_CANCEL_DENIED;
+	request->flags |= AGENT_TASK_REQUEST_F_CANCEL_REQUESTED;
+	agent_task_channel_publish_locked(state);
+	return AGENT_TASK_CHANNEL_OK;
 }

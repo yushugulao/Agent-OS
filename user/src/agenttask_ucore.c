@@ -19,6 +19,32 @@
 #define TASK_RESOURCE_NUL_PATH    "tasknul"
 #define TASK_RESOURCE_UTF8_PATH   "taskbad"
 #define TASK_RESOURCE_RACE_PATH   "taskrace"
+#define TASK_DELEGATE_NORMAL_PATH "taskd1"
+#define TASK_DELEGATE_CANCEL_PATH "taskdc"
+#define TASK_DELEGATE_DEADLINE_PATH "taskd2"
+#define TASK_DELEGATE_LEASE_PATH "tasklease"
+#define TASK_DELEGATE_RECLAIM_PATH "taskgap"
+#define TASK_DELEGATE_LEASE_HEADER "lease-v1"
+#define TASK_DELEGATE_LEASE_PAYLOAD "delegated-lease"
+#define TASK_DELEGATE_RECLAIM_PAYLOAD "issuer-reclaimed"
+#define TASK_DELEGATE_DEADLINE_SLACK 128ULL
+#define TASK_DELEGATE_PROVIDER_ROLE AGENT_ROLE_ARTIFACT
+#define TASK_DELEGATE_CONTROLLER_ROLE AGENT_ROLE_ORCHESTRATOR
+#define TASK_DELEGATE_NORMAL_TASK_ID 610001ULL
+#define TASK_DELEGATE_CANCEL_TASK_ID 610002ULL
+#define TASK_DELEGATE_DEADLINE_TASK_ID 610003ULL
+#define TASK_DELEGATE_NORMAL_CORRELATION_ID 611001ULL
+#define TASK_DELEGATE_CANCEL_CORRELATION_ID 611002ULL
+#define TASK_DELEGATE_DEADLINE_CORRELATION_ID 611003ULL
+#define TASK_DELEGATE_CONTROLLER_CANCEL_DELAY 32ULL
+#define TASK_DELEGATE_PROVIDER_CANCEL_DELAY 64ULL
+#define TASK_DELEGATE_SIDE_EFFECTS \
+	(AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA | \
+	 AGENT_SIDE_EFFECT_IPC | AGENT_SIDE_EFFECT_PROCESS | \
+	 AGENT_SIDE_EFFECT_PERMISSION | AGENT_SIDE_EFFECT_ARTIFACT)
+#define TASK_DELEGATE_LEASE_EFFECTS \
+	(AGENT_SIDE_EFFECT_PROCESS | AGENT_SIDE_EFFECT_METADATA | \
+	 AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_ARTIFACT)
 
 static const unsigned char task_resource_embedded_nul[] = { 'a', 0, 'b' };
 static const unsigned char task_resource_invalid_utf8[] = { 0xc0, 0x80 };
@@ -71,6 +97,29 @@ struct task_resource_close_race {
 	int fd;
 };
 
+struct task_delegate_hello {
+	int pid;
+	int agent_id;
+	int role;
+	uint64 capability_mask;
+	struct agent_workflow_lifecycle_key lifecycle;
+};
+
+struct task_delegate_lease_helper {
+	int context_status;
+	int publish_status;
+	int open_status;
+	int read_status;
+	int eof_status;
+	int close_status;
+	int unlink_status;
+	int done;
+};
+
+struct task_delegate_controller_command {
+	struct agent_task_delegate_complete cancel;
+};
+
 struct ablation_metrics {
 	uint64 start_tick;
 	uint64 last_service_start_tick;
@@ -99,6 +148,38 @@ _Static_assert(sizeof(struct agent_op) == 104,
 	       "legacy batch operation ABI size");
 _Static_assert(sizeof(struct agent_result) == 120,
 	       "legacy batch result ABI size");
+_Static_assert(AGENT_TOOL_DELEGATE_TASK == 26,
+	       "delegated Task tool number");
+_Static_assert(AGENT_TASK_DELEGATE_CLAIM_SYSCALL == 567U &&
+	       AGENT_TASK_DELEGATE_COMPLETE_SYSCALL == 568U,
+	       "delegated Task syscall numbers");
+_Static_assert(sizeof(struct agent_task_delegate_descriptor) == 56,
+	       "delegated Task descriptor ABI size");
+_Static_assert(sizeof(struct agent_task_delegate_claim_result) == 128,
+	       "delegated Task claim result ABI size");
+_Static_assert(sizeof(struct agent_task_delegate_complete) == 96,
+	       "delegated Task completion request ABI size");
+_Static_assert(sizeof(struct agent_task_delegate_complete_result) == 64,
+	       "delegated Task completion result ABI size");
+_Static_assert(AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL == (1U << 1) &&
+	       AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL !=
+		       AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL,
+	       "delegated controller cancellation flag");
+_Static_assert(sizeof(struct task_delegate_controller_command) == 96,
+	       "controller receives one exact cancellation capability binding");
+_Static_assert((TASK_DELEGATE_SIDE_EFFECTS & TASK_DELEGATE_LEASE_EFFECTS) ==
+	       TASK_DELEGATE_LEASE_EFFECTS,
+	       "delegated lease covers helper process/metadata/file/artifact effects");
+_Static_assert(TASK_DELEGATE_PROVIDER_ROLE == AGENT_ROLE_ARTIFACT &&
+	       AGENT_CAP_ARTIFACT_WRITE != AGENT_CAP_TASK_ACCEPT,
+	       "delegated provider is the artifact specialist");
+_Static_assert(TASK_DELEGATE_CONTROLLER_ROLE == AGENT_ROLE_ORCHESTRATOR,
+	       "delegated controller is a separate orchestrator");
+_Static_assert(sizeof(TASK_DELEGATE_LEASE_HEADER) - 1U +
+	       sizeof(TASK_DELEGATE_LEASE_PAYLOAD) - 1U <= 32U,
+	       "delegated lease artifact remains bounded");
+_Static_assert(sizeof(TASK_DELEGATE_RECLAIM_PAYLOAD) - 1U <= 32U,
+	       "reclaimed issuer file effect remains bounded");
 
 /* SHA-256 of the frozen inline-input domain and an empty ECHO operation. */
 static const unsigned char empty_echo_fingerprint[32] = {
@@ -1448,11 +1529,1229 @@ static struct agent_workflow_lifecycle_key current_lifecycle(void)
 	return lifecycle.key;
 }
 
+static int task_lifecycle_equal(struct agent_workflow_lifecycle_key left,
+				struct agent_workflow_lifecycle_key right)
+{
+	return left.id == right.id && left.reserved == right.reserved &&
+	       left.generation == right.generation;
+}
+
+static int task_pipe_read_exact(int fd, void *buffer, uint size)
+{
+	unsigned char *out = buffer;
+	uint offset = 0;
+
+	while (offset < size) {
+		ssize_t got = read(fd, out + offset, size - offset);
+
+		if (got <= 0)
+			return -1;
+		offset += (uint)got;
+	}
+	return 0;
+}
+
+static int task_pipe_write_exact(int fd, const void *buffer, uint size)
+{
+	const unsigned char *input = buffer;
+	uint offset = 0;
+
+	while (offset < size) {
+		ssize_t wrote = write(fd, input + offset, size - offset);
+
+		if (wrote <= 0)
+			return -1;
+		offset += (uint)wrote;
+	}
+	return 0;
+}
+
+static int task_delegate_identity_lookup(int pid, int expected_agent_id,
+					 int expected_role, uint64 *control_id)
+{
+	static struct agent_audit_record records[32];
+	struct agent_audit_filter filter;
+	int count;
+
+	memset(&filter, 0, sizeof(filter));
+	memset(records, 0, sizeof(records));
+	filter.flags = AGENT_AUDIT_FILTER_PID;
+	filter.pid = pid;
+	count = agent_audit_query(&filter, records, 32);
+	if (count < 0)
+		return -1;
+	for (int i = count - 1; i >= 0; i--)
+		if (records[i].pid == pid &&
+		    records[i].agent_id == expected_agent_id &&
+		    records[i].role == expected_role &&
+		    records[i].actor_control_id != 0) {
+			*control_id = records[i].actor_control_id;
+			return 0;
+		}
+	return -1;
+}
+
+static struct agent_execution_contract_key create_delegate_contract(
+	struct agent_workflow_lifecycle_key lifecycle,
+	struct agent_execution_contract_node *queried)
+{
+	struct agent_execution_contract_control control;
+	struct agent_execution_contract_result result;
+	struct agent_execution_contract_node node;
+	struct agent_execution_contract_key key;
+	unsigned char schema = 0;
+
+	memset(&node, 0, sizeof(node));
+	node.version = AGENT_EXECUTION_CONTRACT_NODE_VERSION;
+	node.size = sizeof(node);
+	node.node_id = 0;
+	node.tool_id = AGENT_TOOL_DELEGATE_TASK;
+	node.required_capabilities = AGENT_CAP_ORCHESTRATE;
+	node.accepted_input_labels = AGENT_PROVENANCE_ALL;
+	node.output_add_labels = AGENT_PROVENANCE_AGENT_DERIVED;
+	node.side_effect_mask = TASK_DELEGATE_SIDE_EFFECTS;
+	node.input_artifact_type = AGENT_ARTIFACT_TASK;
+	node.output_artifact_type = AGENT_ARTIFACT_NONE;
+	node.max_attempts = 1;
+	node.cancel_policy = AGENT_EXECUTION_CANCEL_ALLOW;
+	node.charge_class = CHARGE_RESERVED;
+	node.exec_envelope[AGENT_RESOURCE_PROCESS] = 1;
+
+	memset(&control, 0, sizeof(control));
+	memset(&result, 0, sizeof(result));
+	control.version = AGENT_EXECUTION_CONTRACT_VERSION;
+	control.size = sizeof(control);
+	control.operation = AGENT_EXECUTION_CONTRACT_CREATE;
+	control.flags = AGENT_EXECUTION_CONTRACT_F_ENFORCE;
+	control.key.lifecycle = lifecycle;
+	control.request_id = ++next_request_id;
+	control.nodes = (uint64)&node;
+	control.node_count = 1;
+	control.node_size = sizeof(node);
+	check(agent_execution_contract(&control, &result) == 0 &&
+	      result.status == AGENT_STATUS_OK &&
+	      result.state == AGENT_EXECUTION_CONTRACT_FROZEN &&
+	      result.key.generation != 0 && result.node_count == 1,
+	      "create delegated Task contract");
+	key = result.key;
+
+	memset(queried, 0, sizeof(*queried));
+	memset(&control, 0, sizeof(control));
+	memset(&result, 0, sizeof(result));
+	control.version = AGENT_EXECUTION_CONTRACT_VERSION;
+	control.size = sizeof(control);
+	control.operation = AGENT_EXECUTION_CONTRACT_QUERY;
+	control.key = key;
+	control.request_id = ++next_request_id;
+	control.nodes = (uint64)queried;
+	control.node_count = 1;
+	control.node_size = sizeof(*queried);
+	check(agent_execution_contract(&control, &result) == 0 &&
+	      result.status == AGENT_STATUS_OK && result.node_count == 1,
+	      "query delegated Task contract");
+	for (uint j = 0; j < sizeof(queried->schema_digest); j++)
+		schema |= queried->schema_digest[j];
+	check(queried->node_id == 0 && queried->predecessor_mask == 0 &&
+	      queried->tool_id == AGENT_TOOL_DELEGATE_TASK &&
+	      queried->required_capabilities == AGENT_CAP_ORCHESTRATE &&
+	      queried->accepted_input_labels == AGENT_PROVENANCE_ALL &&
+	      queried->output_add_labels == AGENT_PROVENANCE_AGENT_DERIVED &&
+	      queried->side_effect_mask == TASK_DELEGATE_SIDE_EFFECTS &&
+	      queried->input_artifact_type == AGENT_ARTIFACT_TASK &&
+	      queried->output_artifact_type == AGENT_ARTIFACT_NONE && schema != 0,
+	      "delegated Task contract has Tool26 TASK-to-NONE schema");
+	return key;
+}
+
+static void retire_delegate_contract(
+	const struct agent_execution_contract_key *key)
+{
+	struct agent_execution_contract_control control;
+	struct agent_execution_contract_result result;
+
+	for (uint retry = 0; retry < 128; retry++) {
+		memset(&control, 0, sizeof(control));
+		memset(&result, 0, sizeof(result));
+		control.version = AGENT_EXECUTION_CONTRACT_VERSION;
+		control.size = sizeof(control);
+		control.operation = AGENT_EXECUTION_CONTRACT_RETIRE;
+		control.key = *key;
+		control.request_id = ++next_request_id;
+		check(agent_execution_contract(&control, &result) == 0,
+		      "frame delegated Task contract retirement");
+		if (result.status == AGENT_STATUS_OK &&
+		    result.state == AGENT_EXECUTION_CONTRACT_RECLAIMED)
+			return;
+		check(result.status == AGENT_STATUS_RETRY &&
+		      result.state == AGENT_EXECUTION_CONTRACT_RETIRING,
+		      "delegated contract retirement remains strictly bounded");
+		sleep(1);
+	}
+	check(0, "delegated Task contract reaches strict RECLAIMED state");
+}
+
+static int task_delegate_open_descriptor(
+	const char *path, const struct agent_task_delegate_descriptor *descriptor)
+{
+	int fd;
+
+	task_resource_create(path, descriptor, sizeof(*descriptor));
+	fd = open(path, O_RDONLY);
+	check(fd >= 0, "open delegated Task descriptor");
+	return fd;
+}
+
+static struct agent_task_resource_handle task_delegate_import_descriptor_fd(
+	const struct task_channel_view *view, int fd,
+	const struct agent_task_delegate_descriptor *descriptor)
+{
+	struct agent_task_channel_resource_result result;
+
+	task_resource_call(
+		view, AGENT_TASK_RESOURCE_IMPORT,
+		(struct agent_task_resource_handle){ 0 }, AGENT_ARTIFACT_TASK,
+		AGENT_TASK_HANDLE_F_OWNED, (uint64)(uint)fd,
+		sizeof(*descriptor), &result);
+	check(result.status == AGENT_TASK_CHANNEL_OK &&
+	      result.state == AGENT_TASK_RESOURCE_STATE_LIVE &&
+	      result.handle.slot != 0 &&
+	      result.handle.type == AGENT_ARTIFACT_TASK &&
+	      result.handle.flags == AGENT_TASK_HANDLE_F_OWNED &&
+	      result.handle.generation != 0 &&
+	      result.length == sizeof(*descriptor),
+	      "import exact 56-byte delegated TASK descriptor");
+	return result.handle;
+}
+
+static struct agent_task_resource_handle task_delegate_import_descriptor(
+	const struct task_channel_view *view, const char *path,
+	const struct agent_task_delegate_descriptor *descriptor)
+{
+	struct agent_task_resource_handle handle;
+	int fd = task_delegate_open_descriptor(path, descriptor);
+
+	handle = task_delegate_import_descriptor_fd(view, fd, descriptor);
+	check(close(fd) == 0, "close delegated Task descriptor after import");
+	return handle;
+}
+
+static void task_delegate_read_descriptor_fd(
+	int fd, const struct agent_task_delegate_descriptor *descriptor)
+{
+	struct agent_task_delegate_descriptor readback;
+	char trailing;
+
+	memset(&readback, 0, sizeof(readback));
+	check(task_pipe_read_exact(fd, &readback, sizeof(readback)) == 0 &&
+	      bytes_equal(&readback, descriptor, sizeof(readback)) &&
+	      read(fd, &trailing, 1) == 0,
+	      "regular inode read observes the exact descriptor and EOF");
+}
+
+static void task_delegate_release_descriptor(
+	const struct task_channel_view *view,
+	struct agent_task_resource_handle handle)
+{
+	struct agent_task_channel_resource_result result;
+
+	task_resource_call(view, AGENT_TASK_RESOURCE_RELEASE, handle, 0, 0, 0,
+			   0, &result);
+	check(result.status == AGENT_TASK_CHANNEL_OK &&
+	      result.state == AGENT_TASK_RESOURCE_STATE_NONE,
+	      "release borrowed delegated TASK descriptor after completion");
+}
+
+static struct agent_task_sqe task_delegate_submit(
+	struct task_channel_view *view,
+	const struct agent_execution_contract_key *contract,
+	const struct agent_execution_contract_node *node,
+	uint node_id, struct agent_task_resource_handle input, uint flags,
+	uint64 deadline_tick, uint64 reserved_request_id)
+{
+	struct agent_task_channel_enter_result result;
+	struct agent_task_sqe sqe;
+
+	memset(&sqe, 0, sizeof(sqe));
+	sqe.version = AGENT_TASK_CHANNEL_ENTRY_VERSION;
+	sqe.size = sizeof(sqe);
+	sqe.opcode = AGENT_TASK_CHANNEL_OP_SUBMIT;
+	sqe.flags = flags;
+	sqe.request_id = reserved_request_id != 0 ?
+		reserved_request_id : ++next_request_id;
+	sqe.ring_generation = view->generation;
+	sqe.slot_generation =
+		view->sq_tail / AGENT_TASK_CHANNEL_CAPACITY + 1;
+	sqe.contract = *contract;
+	sqe.node_id = node_id;
+	sqe.attempt_id = 1;
+	sqe.tool_id = AGENT_TOOL_DELEGATE_TASK;
+	sqe.deadline_tick = deadline_tick;
+	sqe.input = input;
+	sqe.input.flags = AGENT_TASK_HANDLE_F_BORROWED;
+	memcpy(sqe.schema_digest, node->schema_digest,
+	       sizeof(sqe.schema_digest));
+	write_sqe(view->sq, view->sq_tail, &sqe);
+	view->sq_tail++;
+	enter_channel(0, 1, 0, view->generation, view->sq_tail,
+		      view->cq_head, &result);
+	check(result.status == AGENT_TASK_CHANNEL_OK &&
+	      result.submitted == 1 && result.completed == 0 &&
+	      result.sq_head == view->sq_tail &&
+	      result.cq_tail == view->cq_head && result.in_flight == 1 &&
+	      result.last_accepted_request_id == sqe.request_id,
+	      "submit one pending directed Tool26 TASK request");
+	return sqe;
+}
+
+static void task_delegate_check_cqe(const struct agent_task_cqe *cqe,
+				    const struct agent_task_sqe *sqe,
+				    int status, uint flags, uint decision_reason,
+				    int provider_pid, int provider_agent_id,
+				    uint64 provider_control_id,
+				    int cleared_executor_context)
+{
+	struct agent_context_detail detail;
+	uint64 executor =
+		((uint64)(uint)provider_agent_id <<
+		 AGENT_TASK_DELEGATE_EXECUTOR_AGENT_SHIFT) |
+		((uint64)(uint)provider_pid & AGENT_TASK_DELEGATE_EXECUTOR_PID_MASK);
+
+	check(cqe->version == AGENT_TASK_CHANNEL_ENTRY_VERSION &&
+	      cqe->size == sizeof(*cqe) && cqe->status == status &&
+	      cqe->flags == flags && cqe->decision_reason == decision_reason &&
+	      cqe->request_id == sqe->request_id &&
+	      cqe->ring_generation == sqe->ring_generation &&
+	      cqe->slot_generation == sqe->slot_generation &&
+	      cqe->contract.lifecycle.id == sqe->contract.lifecycle.id &&
+	      cqe->contract.lifecycle.generation ==
+		      sqe->contract.lifecycle.generation &&
+	      cqe->contract.generation == sqe->contract.generation &&
+	      cqe->node_id == sqe->node_id && cqe->attempt_id == 1 &&
+	      cqe->tool_id == AGENT_TOOL_DELEGATE_TASK &&
+	      handle_is_null(cqe->result) && cqe->context_sequence != 0 &&
+	      cqe->evidence_ticket != 0 && cqe->provenance_labels != 0 &&
+	      (cqe->provenance_labels & AGENT_PROVENANCE_CROSS_AGENT_DATA) != 0 &&
+	      cqe->completion_tick != 0 && cqe->reserved == 0,
+	      "owner receives canonical delegated Task CQE with NONE output");
+	memset(&detail, 0, sizeof(detail));
+	check(context_detail(cqe->context_sequence, &detail) == 0 &&
+	      detail.sequence == cqe->context_sequence &&
+	      detail.op.tool_id == AGENT_TOOL_DELEGATE_TASK &&
+	      detail.op.request_id == sqe->request_id &&
+	      detail.result.status == status &&
+	      detail.result.value0 == executor &&
+	      detail.result.value1 == provider_control_id &&
+	      (cleared_executor_context ? detail.result.value2 == 0 :
+				    detail.result.value2 != 0),
+	      "owner terminal Context attributes the provider executor");
+}
+
+static struct agent_task_cqe task_delegate_wait_owner_cqe(
+	struct task_channel_view *view, const struct agent_task_sqe *sqe,
+	int status, uint flags, uint decision_reason, int provider_pid,
+	int provider_agent_id, uint64 provider_control_id,
+	int cleared_executor_context)
+{
+	struct agent_task_channel_enter_result result;
+	struct agent_task_cqe cqe;
+	int ready = 0;
+
+	for (uint retry = 0; retry < 1024; retry++) {
+		enter_channel(0, 0, 0, view->generation, view->sq_tail,
+			      view->cq_head, &result);
+		check(result.status == AGENT_TASK_CHANNEL_OK &&
+		      result.sq_head == view->sq_tail &&
+		      result.cq_tail >= view->cq_head &&
+		      result.cq_tail <= view->cq_head + 1,
+		      "poll bounded delegated Task completion");
+		if (result.cq_tail == view->cq_head + 1) {
+			ready = 1;
+			break;
+		}
+		sleep(1);
+	}
+	check(ready && result.in_flight == 0,
+	      "owner observes exactly one delegated Task completion");
+	cqe = read_cqe(view->cq, view->cq_head);
+	task_delegate_check_cqe(
+		&cqe, sqe, status, flags, decision_reason, provider_pid,
+		provider_agent_id, provider_control_id, cleared_executor_context);
+	view->cq_head++;
+	enter_channel(AGENT_TASK_CHANNEL_ENTER_F_DRAIN, 0, 0,
+		      view->generation, view->sq_tail, view->cq_head, &result);
+	check(result.status == AGENT_TASK_CHANNEL_OK &&
+	      result.sq_head == view->sq_tail &&
+	      result.cq_head == view->cq_head &&
+	      result.cq_tail == view->cq_head && result.in_flight == 0 &&
+	      result.terminal_pending == 0,
+	      "owner acknowledges the sole delegated Task CQE");
+	return cqe;
+}
+
+static void task_delegate_descriptor_init(
+	struct agent_task_delegate_descriptor *descriptor, int target_pid,
+	uint target_agent_id, uint64 target_control_id, uint task_type,
+	uint64 task_id, uint64 correlation_id)
+{
+	memset(descriptor, 0, sizeof(*descriptor));
+	descriptor->version = AGENT_TASK_DELEGATE_DESCRIPTOR_VERSION;
+	descriptor->size = sizeof(*descriptor);
+	descriptor->target_pid = target_pid;
+	descriptor->target_agent_id = target_agent_id;
+	descriptor->task_type = task_type;
+	descriptor->target_control_id = target_control_id;
+	descriptor->task_id = task_id;
+	descriptor->correlation_id = correlation_id;
+	descriptor->parent_task_id = task_id + 1000ULL;
+	descriptor->capsule_handle = task_id + 2000ULL;
+	descriptor->flags = AGENT_TASK_DELEGATE_F_NONE;
+}
+
+static void task_delegate_claim_one(
+	struct agent_workflow_lifecycle_key lifecycle, int provider_pid,
+	int provider_agent_id, uint64 task_id, uint64 correlation_id,
+	struct agent_task_delegate_claim_result *claim)
+{
+	struct agent_task_delegate_claim request;
+	int syscall_status = -1;
+	int valid = 0;
+
+	memset(&request, 0, sizeof(request));
+	request.version = AGENT_TASK_DELEGATE_VERSION;
+	request.size = sizeof(request);
+	request.flags = AGENT_TASK_DELEGATE_CLAIM_F_WAIT;
+	request.lifecycle = lifecycle;
+	for (uint retry = 0; retry < 16; retry++) {
+		memset(claim, 0, sizeof(*claim));
+		syscall_status = agent_task_delegate_claim(&request, claim);
+		if (syscall_status == 0 &&
+		    claim->status == AGENT_TASK_CHANNEL_STALE &&
+		    claim->state == AGENT_TASK_DELEGATE_STATE_NONE) {
+			(void)sched_yield();
+			continue;
+		}
+		break;
+	}
+	valid = syscall_status == 0 &&
+	      claim->version == AGENT_TASK_DELEGATE_VERSION &&
+	      claim->size == sizeof(*claim) &&
+	      claim->status == AGENT_TASK_CHANNEL_OK &&
+	      claim->state == AGENT_TASK_DELEGATE_STATE_CLAIMED &&
+	      task_lifecycle_equal(claim->lifecycle, lifecycle) &&
+	      claim->descriptor.version ==
+		      AGENT_TASK_DELEGATE_DESCRIPTOR_VERSION &&
+	      claim->descriptor.size == sizeof(claim->descriptor) &&
+	      claim->descriptor.target_pid == provider_pid &&
+	      claim->descriptor.target_agent_id == (uint)provider_agent_id &&
+	      claim->descriptor.target_control_id != 0 &&
+	      claim->descriptor.task_id == task_id &&
+	      claim->descriptor.correlation_id == correlation_id &&
+	      claim->descriptor.capsule_handle != 0 &&
+	      claim->descriptor.flags == AGENT_TASK_DELEGATE_F_NONE &&
+	      claim->owner_pid == getppid() && claim->owner_agent_id != 0 &&
+	      claim->owner_control_id != 0 && claim->channel_generation != 0 &&
+	      claim->request_id != 0 && claim->slot_generation != 0;
+	check(valid,
+	      "provider claims exact directed TASK descriptor via syscall 567");
+}
+
+static struct agent_task_delegate_complete task_delegate_completion(
+	const struct agent_task_delegate_claim_result *claim, int status)
+{
+	struct agent_task_delegate_complete complete;
+
+	memset(&complete, 0, sizeof(complete));
+	complete.version = AGENT_TASK_DELEGATE_VERSION;
+	complete.size = sizeof(complete);
+	complete.lifecycle = claim->lifecycle;
+	complete.owner_pid = claim->owner_pid;
+	complete.terminal_status = status;
+	complete.owner_control_id = claim->owner_control_id;
+	complete.channel_generation = claim->channel_generation;
+	complete.request_id = claim->request_id;
+	complete.slot_generation = claim->slot_generation;
+	complete.task_id = claim->descriptor.task_id;
+	complete.correlation_id = claim->descriptor.correlation_id;
+	return complete;
+}
+
+static int task_delegate_complete_result_matches(
+	const struct agent_task_delegate_complete *complete,
+	const struct agent_task_delegate_complete_result *result)
+{
+	return result->version == AGENT_TASK_DELEGATE_VERSION &&
+	       result->size == sizeof(*result) &&
+	       result->channel_generation == complete->channel_generation &&
+	       result->request_id == complete->request_id &&
+	       result->slot_generation == complete->slot_generation &&
+	       result->task_id == complete->task_id &&
+	       result->correlation_id == complete->correlation_id;
+}
+
+static void task_delegate_manual_context(
+	struct agent_context_record *record, uint64 request_id,
+	const char *payload, const char *result)
+{
+	memset(record, 0, sizeof(*record));
+	record->tool_id = AGENT_TOOL_CONTEXT_PUSH;
+	record->request_id = request_id;
+	record->status = AGENT_STATUS_OK;
+	strcpy(record->payload, payload);
+	strcpy(record->result, result);
+}
+
+static void task_delegate_wait_for_enforcement(void)
+{
+	struct agent_context_record record;
+	int status = AGENT_STATUS_RETRY;
+
+	for (uint retry = 0; retry < 1024; retry++) {
+		task_delegate_manual_context(
+			&record, 612000ULL + retry, "delegate-probe",
+			"await-enforce");
+		status = context_push(&record);
+		if (status == AGENT_STATUS_DENIED)
+			return;
+		check(status == AGENT_STATUS_OK || status == AGENT_STATUS_RETRY,
+		      "provider observes only pre-enforcement or publication state");
+		sleep(1);
+	}
+	check(0, "bounded provider wait observes contract enforcement");
+}
+
+static void task_delegate_wait_until(uint64 target_tick)
+{
+	struct agent_info info;
+
+	for (uint retry = 0; retry < 8192; retry++) {
+		memset(&info, 0, sizeof(info));
+		check(agent_info(&info) == 0,
+		      "sample delegated provider deadline tick");
+		if (info.current_tick >= target_tick)
+			return;
+		sleep(1);
+	}
+	check(0, "bounded provider wait reaches delegated hard deadline");
+}
+
+static struct agent_task_delegate_complete task_delegate_cancel_request(
+	struct agent_workflow_lifecycle_key lifecycle, int owner_pid,
+	uint64 owner_control_id, uint64 channel_generation, uint64 request_id,
+	uint64 slot_generation,
+	const struct agent_task_delegate_descriptor *descriptor)
+{
+	struct agent_task_delegate_complete request;
+
+	memset(&request, 0, sizeof(request));
+	request.version = AGENT_TASK_DELEGATE_VERSION;
+	request.size = sizeof(request);
+	request.flags = AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL;
+	request.lifecycle = lifecycle;
+	request.owner_pid = owner_pid;
+	request.terminal_status = AGENT_STATUS_CANCELLED;
+	request.owner_control_id = owner_control_id;
+	request.channel_generation = channel_generation;
+	request.request_id = request_id;
+	request.slot_generation = slot_generation;
+	request.task_id = descriptor->task_id;
+	request.correlation_id = descriptor->correlation_id;
+	return request;
+}
+
+static void task_delegate_wait_child(int pid, const char *message)
+{
+	int status = 0;
+
+	for (uint retry = 0; retry < 8192; retry++) {
+		int waited = waitpid(pid, &status);
+
+		if (waited == pid) {
+			check(status == 0, message);
+			return;
+		}
+		check(waited == -1,
+		      "delegated child wait is interrupted only by Task readiness");
+		(void)sched_yield();
+	}
+	check(0, message);
+}
+
+static void run_task_delegate_controller(
+	int hello_fd, int command_fd, int signal_fd)
+{
+	static struct task_delegate_controller_command command;
+	static struct agent_task_delegate_complete_result first, replay;
+	static struct task_delegate_hello hello;
+	static struct agent_info info;
+	struct agent_workflow_lifecycle_key lifecycle;
+	char ready = 'B';
+	char signal = 0;
+	uint64 signal_tick;
+
+	lifecycle = current_lifecycle();
+	memset(&info, 0, sizeof(info));
+	check(agent_info(&info) == 0 && info.is_agent == 1 &&
+	      info.agent_role == TASK_DELEGATE_CONTROLLER_ROLE &&
+	      info.agent_id > 0 &&
+	      (info.capability_mask &
+	       (AGENT_CAP_ORCHESTRATE | AGENT_CAP_WAIT_CANCEL)) ==
+		      (AGENT_CAP_ORCHESTRATE | AGENT_CAP_WAIT_CANCEL),
+	      "delegated cancellation controller has exact control capabilities");
+	memset(&hello, 0, sizeof(hello));
+	hello.pid = getpid();
+	hello.agent_id = info.agent_id;
+	hello.role = info.agent_role;
+	hello.capability_mask = info.capability_mask;
+	hello.lifecycle = lifecycle;
+	check(task_pipe_write_exact(hello_fd, &hello, sizeof(hello)) == 0 &&
+	      task_pipe_read_exact(command_fd, &command, sizeof(command)) == 0,
+	      "controller receives its exact cancellation capability binding");
+	check(command.cancel.version == AGENT_TASK_DELEGATE_VERSION &&
+	      command.cancel.size == sizeof(command.cancel) &&
+	      command.cancel.flags ==
+		      AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL &&
+	      task_lifecycle_equal(command.cancel.lifecycle, lifecycle) &&
+	      command.cancel.owner_pid == getppid() &&
+	      command.cancel.terminal_status == AGENT_STATUS_CANCELLED &&
+	      command.cancel.owner_control_id != 0 &&
+	      command.cancel.channel_generation != 0 &&
+	      command.cancel.request_id != 0 &&
+	      command.cancel.slot_generation != 0 &&
+	      command.cancel.task_id == TASK_DELEGATE_CANCEL_TASK_ID &&
+	      command.cancel.correlation_id ==
+		      TASK_DELEGATE_CANCEL_CORRELATION_ID &&
+	      command.cancel.ack_terminal_status == 0 &&
+	      command.cancel.terminal_generation == 0,
+	      "controller validates the frozen REQUEST_CANCEL shape");
+	check(task_pipe_write_exact(hello_fd, &ready, 1) == 0,
+	      "controller is ready to block before Contract CREATE");
+	check(read(signal_fd, &signal, 1) == 1 && signal == 'C',
+	      "pre-CREATE pipe reader wakes only after provider claim");
+	memset(&info, 0, sizeof(info));
+	check(agent_info(&info) == 0, "sample cancellation controller wake tick");
+	signal_tick = info.current_tick;
+	task_delegate_wait_until(
+		signal_tick + TASK_DELEGATE_CONTROLLER_CANCEL_DELAY);
+
+	memset(&first, 0, sizeof(first));
+	check(agent_task_delegate_complete(&command.cancel, &first) == 0 &&
+	      task_delegate_complete_result_matches(&command.cancel, &first) &&
+	      first.status == AGENT_TASK_CHANNEL_OK &&
+	      first.state == AGENT_TASK_DELEGATE_STATE_CLAIMED &&
+	      first.terminal_status == AGENT_STATUS_CANCELLED &&
+	      first.terminal_generation != 0,
+	      "controller overrides denied SQ cancel with REQUEST_CANCEL");
+	memset(&replay, 0, sizeof(replay));
+	check(agent_task_delegate_complete(&command.cancel, &replay) == 0 &&
+	      task_delegate_complete_result_matches(&command.cancel, &replay) &&
+	      replay.status == AGENT_TASK_CHANNEL_OK &&
+	      replay.state == first.state &&
+	      replay.terminal_status == first.terminal_status &&
+	      replay.terminal_generation == first.terminal_generation,
+	      "exact controller cancellation receipt replay is idempotent");
+	exit(0);
+}
+
+static void task_delegate_lease_worker(void *arg)
+{
+	struct task_delegate_lease_helper *helper = arg;
+	struct agent_context_record record;
+	static const char expected[] =
+		TASK_DELEGATE_LEASE_HEADER TASK_DELEGATE_LEASE_PAYLOAD;
+	char readback[sizeof(expected)];
+	char trailing;
+	uint total = sizeof(expected) - 1U;
+	int fd = -1;
+
+	task_delegate_manual_context(
+		&record, 613001ULL, "delegate-helper", "lease-active");
+	helper->context_status = context_push(&record);
+	if (helper->context_status == AGENT_STATUS_OK)
+		helper->publish_status = agent_file_publish(
+			TASK_DELEGATE_LEASE_PATH, TASK_DELEGATE_LEASE_HEADER,
+			sizeof(TASK_DELEGATE_LEASE_HEADER) - 1U,
+			TASK_DELEGATE_LEASE_PAYLOAD,
+			sizeof(TASK_DELEGATE_LEASE_PAYLOAD) - 1U);
+	if (helper->publish_status == AGENT_STATUS_OK) {
+		fd = open(TASK_DELEGATE_LEASE_PATH, O_RDONLY);
+		helper->open_status = fd >= 0 ? AGENT_STATUS_OK : -1;
+	}
+	if (fd >= 0) {
+		memset(readback, 0, sizeof(readback));
+		helper->read_status =
+			task_pipe_read_exact(fd, readback, total) == 0 &&
+				bytes_equal(readback, expected, total) ?
+				AGENT_STATUS_OK : -1;
+		helper->eof_status = read(fd, &trailing, 1) == 0 ?
+			AGENT_STATUS_OK : -1;
+		helper->close_status = close(fd);
+		fd = -1;
+	}
+	if (helper->publish_status == AGENT_STATUS_OK)
+		helper->unlink_status = unlink(TASK_DELEGATE_LEASE_PATH);
+	helper->done = 1;
+	exit(0);
+}
+
+static void task_delegate_exercise_lease(void)
+{
+	struct task_delegate_lease_helper helper;
+	int tid;
+
+	memset(&helper, 0, sizeof(helper));
+	helper.context_status = -1;
+	helper.publish_status = -1;
+	helper.open_status = -1;
+	helper.read_status = -1;
+	helper.eof_status = -1;
+	helper.close_status = -1;
+	helper.unlink_status = -1;
+	tid = thread_create(task_delegate_lease_worker, &helper);
+	check(tid > 0 && waittid(tid) == 0 && helper.done == 1 &&
+	      helper.context_status == AGENT_STATUS_OK &&
+	      helper.publish_status == AGENT_STATUS_OK &&
+	      helper.open_status == AGENT_STATUS_OK &&
+	      helper.read_status == AGENT_STATUS_OK &&
+	      helper.eof_status == AGENT_STATUS_OK &&
+	      helper.close_status == 0 && helper.unlink_status == 0,
+	      "claimed provider helper exercises the exact delegated effect lease");
+}
+
+static void task_delegate_exercise_reclaimed_issuer(void)
+{
+	static const char payload[] = TASK_DELEGATE_RECLAIM_PAYLOAD;
+	char readback[sizeof(payload)];
+	char pipe_token = 'R';
+	char observed = 0;
+	char trailing;
+	int effect_pipe[2];
+	int fd;
+
+	check(pipe(effect_pipe) == 0 &&
+	      write(effect_pipe[1], &pipe_token, 1) == 1 &&
+	      read(effect_pipe[0], &observed, 1) == 1 && observed == pipe_token &&
+	      close(effect_pipe[0]) == 0 && close(effect_pipe[1]) == 0,
+	      "strictly reclaimed issuer performs a direct pipe effect");
+	task_resource_create(
+		TASK_DELEGATE_RECLAIM_PATH, payload, sizeof(payload) - 1U);
+	fd = open(TASK_DELEGATE_RECLAIM_PATH, O_RDONLY);
+	memset(readback, 0, sizeof(readback));
+	check(fd >= 0 &&
+	      task_pipe_read_exact(fd, readback, sizeof(payload) - 1U) == 0 &&
+	      bytes_equal(readback, payload, sizeof(payload) - 1U) &&
+	      read(fd, &trailing, 1) == 0 && close(fd) == 0 &&
+	      unlink(TASK_DELEGATE_RECLAIM_PATH) == 0,
+	      "strictly reclaimed issuer performs a bounded direct file effect");
+}
+
+static void run_task_delegate_provider(
+	int hello_fd, int cancel_signal_fd, int owner_claim_fd)
+{
+	static struct agent_task_delegate_claim_result normal_claim;
+	static struct agent_task_delegate_claim_result cancel_claim;
+	static struct agent_task_delegate_claim_result deadline_claim;
+	static struct agent_task_delegate_complete normal, changed, cancel;
+	static struct agent_task_delegate_complete deadline, ack;
+	static struct agent_task_delegate_complete_result result, offer;
+	static struct agent_context_record cleanup_context;
+	static struct agent_info info;
+	static struct task_delegate_hello hello;
+	struct agent_workflow_lifecycle_key lifecycle;
+	char cancel_signal = 'C';
+	char owner_claim_signal = 'Q';
+	uint64 claim_tick;
+	int ack_ready = 0;
+
+	lifecycle = current_lifecycle();
+	prime_task_resource_context();
+	memset(&info, 0, sizeof(info));
+	check(agent_info(&info) == 0 && info.is_agent == 1 &&
+	      info.agent_role == TASK_DELEGATE_PROVIDER_ROLE &&
+	      info.agent_id > 0 &&
+	      (info.capability_mask &
+	       (AGENT_CAP_TASK_ACCEPT | AGENT_CAP_ARTIFACT_WRITE)) ==
+		      (AGENT_CAP_TASK_ACCEPT | AGENT_CAP_ARTIFACT_WRITE) &&
+	      (info.capability_mask & AGENT_CAP_ORCHESTRATE) == 0,
+	      "delegated artifact provider has accept/write but not orchestrate");
+	memset(&hello, 0, sizeof(hello));
+	hello.pid = getpid();
+	hello.agent_id = info.agent_id;
+	hello.role = info.agent_role;
+	hello.capability_mask = info.capability_mask;
+	hello.lifecycle = lifecycle;
+	check(task_pipe_write_exact(hello_fd, &hello, sizeof(hello)) == 0,
+	      "publish pre-enforcement provider identity hello");
+
+	/* A role capability is insufficient without the exact CLAIMED lease. */
+	task_delegate_wait_for_enforcement();
+	check(agent_file_publish(
+		      TASK_DELEGATE_LEASE_PATH, TASK_DELEGATE_LEASE_HEADER,
+		      sizeof(TASK_DELEGATE_LEASE_HEADER) - 1U,
+		      TASK_DELEGATE_LEASE_PAYLOAD,
+		      sizeof(TASK_DELEGATE_LEASE_PAYLOAD) - 1U) ==
+		      AGENT_STATUS_DENIED,
+	      "artifact provider publish is denied before delegated claim");
+
+	task_delegate_claim_one(
+		lifecycle, getpid(), info.agent_id, TASK_DELEGATE_NORMAL_TASK_ID,
+		TASK_DELEGATE_NORMAL_CORRELATION_ID, &normal_claim);
+	task_delegate_exercise_lease();
+	normal = task_delegate_completion(&normal_claim, AGENT_STATUS_OK);
+	memset(&result, 0, sizeof(result));
+	check(agent_task_delegate_complete(&normal, &result) == 0 &&
+	      task_delegate_complete_result_matches(&normal, &result) &&
+	      result.status == AGENT_TASK_CHANNEL_OK &&
+	      result.state == AGENT_TASK_DELEGATE_STATE_READY &&
+	      result.terminal_status == AGENT_STATUS_OK &&
+	      result.terminal_generation == 0,
+	      "provider completes normal delegated Task via syscall 568");
+
+	/* The cancel contract is submitted only after the normal result is receipted. */
+	task_delegate_claim_one(
+		lifecycle, getpid(), info.agent_id,
+		TASK_DELEGATE_CANCEL_TASK_ID,
+		TASK_DELEGATE_CANCEL_CORRELATION_ID, &cancel_claim);
+	memset(&result, 0, sizeof(result));
+	check(agent_task_delegate_complete(&normal, &result) == 0 &&
+	      task_delegate_complete_result_matches(&normal, &result) &&
+	      result.status == AGENT_TASK_CHANNEL_OK &&
+	      result.state == AGENT_TASK_DELEGATE_STATE_READY &&
+	      result.terminal_status == AGENT_STATUS_OK &&
+	      result.terminal_generation == 0,
+	      "exact delegated completion receipt replay is idempotent");
+	changed = normal;
+	changed.terminal_status = AGENT_STATUS_BAD_REQUEST;
+	memset(&result, 0, sizeof(result));
+	check(agent_task_delegate_complete(&changed, &result) == 0 &&
+	      task_delegate_complete_result_matches(&changed, &result) &&
+	      result.status == AGENT_TASK_CHANNEL_STALE &&
+	      result.state == AGENT_TASK_DELEGATE_STATE_READY &&
+	      result.terminal_status == AGENT_STATUS_OK &&
+	      result.terminal_generation == 0,
+	      "changed delegated completion receipt replay is stale");
+
+	task_delegate_manual_context(
+		&cleanup_context, 613501ULL, "cancel-result", "cleanup-required");
+	check(context_push(&cleanup_context) == AGENT_STATUS_OK,
+	      "cancelled provider mutates Context while lease is active");
+	memset(&info, 0, sizeof(info));
+	check(agent_info(&info) == 0 && info.context_path_latest != 0 &&
+	      write(cancel_signal_fd, &cancel_signal, 1) == 1 &&
+	      write(owner_claim_fd, &owner_claim_signal, 1) == 1,
+	      "claimed provider signals controller and owner cancellation readers");
+	claim_tick = info.current_tick;
+	task_delegate_wait_until(
+		claim_tick + TASK_DELEGATE_PROVIDER_CANCEL_DELAY);
+
+	cancel = task_delegate_completion(&cancel_claim, AGENT_STATUS_OK);
+	memset(&offer, 0, sizeof(offer));
+	check(agent_task_delegate_complete(&cancel, &offer) == 0 &&
+	      task_delegate_complete_result_matches(&cancel, &offer) &&
+	      offer.status == AGENT_TASK_CHANNEL_RETRY &&
+	      offer.state == AGENT_TASK_DELEGATE_STATE_CLAIMED &&
+	      offer.terminal_status == AGENT_STATUS_CANCELLED &&
+	      offer.terminal_generation != 0,
+	      "provider observes controller CANCELLED offer on business completion");
+	check(context_clear() == AGENT_STATUS_OK,
+	      "provider cleans cancelled result Context before terminal ACK");
+	memset(&info, 0, sizeof(info));
+	check(agent_info(&info) == 0 && info.context_path_latest == 0,
+	      "cancel cleanup leaves no provider result Context to publish");
+
+	ack = cancel;
+	ack.flags = AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL;
+	ack.ack_terminal_status = offer.terminal_status;
+	ack.terminal_generation = offer.terminal_generation;
+	memset(&result, 0, sizeof(result));
+	check(agent_task_delegate_complete(&ack, &result) == 0 &&
+	      task_delegate_complete_result_matches(&ack, &result) &&
+	      result.status == AGENT_TASK_CHANNEL_OK &&
+	      result.state == AGENT_TASK_DELEGATE_STATE_READY &&
+	      result.terminal_status == AGENT_STATUS_CANCELLED &&
+	      result.terminal_generation == offer.terminal_generation,
+	      "provider cleanup ACK echoes exact CANCELLED offer");
+	memset(&result, 0, sizeof(result));
+	check(agent_task_delegate_complete(&ack, &result) == 0 &&
+	      task_delegate_complete_result_matches(&ack, &result) &&
+	      result.status == AGENT_TASK_CHANNEL_OK &&
+	      result.state == AGENT_TASK_DELEGATE_STATE_READY &&
+	      result.terminal_status == AGENT_STATUS_CANCELLED &&
+	      result.terminal_generation == ack.terminal_generation,
+	      "exact cancelled terminal ACK replay is idempotent");
+	memset(&result, 0, sizeof(result));
+	check(agent_task_delegate_complete(&cancel, &result) == 0 &&
+	      task_delegate_complete_result_matches(&cancel, &result) &&
+	      result.status == AGENT_TASK_CHANNEL_STALE &&
+	      result.state == AGENT_TASK_DELEGATE_STATE_READY &&
+	      result.terminal_status == AGENT_STATUS_CANCELLED &&
+	      result.terminal_generation == ack.terminal_generation,
+	      "late business completion after cancel ACK is stale");
+
+	/* The deadline contract follows the fully receipted cancellation. */
+	task_delegate_claim_one(
+		lifecycle, getpid(), info.agent_id,
+		TASK_DELEGATE_DEADLINE_TASK_ID,
+		TASK_DELEGATE_DEADLINE_CORRELATION_ID, &deadline_claim);
+
+	memset(&info, 0, sizeof(info));
+	check(agent_info(&info) == 0, "sample claimed deadline Task tick");
+	claim_tick = info.current_tick;
+	task_delegate_manual_context(
+		&cleanup_context, 614001ULL, "deadline-result", "cleanup-required");
+	check(context_push(&cleanup_context) == AGENT_STATUS_OK,
+	      "deadline provider mutates Context while lease is active");
+	memset(&info, 0, sizeof(info));
+	check(agent_info(&info) == 0 && info.context_path_latest != 0,
+	      "deadline provider has result Context before cleanup");
+	task_delegate_wait_until(
+		claim_tick + TASK_DELEGATE_DEADLINE_SLACK + 32ULL);
+
+	deadline = task_delegate_completion(&deadline_claim, AGENT_STATUS_OK);
+	memset(&offer, 0, sizeof(offer));
+	check(agent_task_delegate_complete(&deadline, &offer) == 0 &&
+	      task_delegate_complete_result_matches(&deadline, &offer) &&
+	      offer.status == AGENT_TASK_CHANNEL_RETRY &&
+	      offer.state == AGENT_TASK_DELEGATE_STATE_CLAIMED &&
+	      offer.terminal_status == AGENT_STATUS_TIMEOUT &&
+	      offer.terminal_generation != 0,
+	      "due claimed Task returns authoritative terminal offer");
+	check(context_clear() == AGENT_STATUS_OK,
+	      "provider cleans deadline result Context before terminal ACK");
+	memset(&info, 0, sizeof(info));
+	check(agent_info(&info) == 0 && info.context_path_latest == 0,
+	      "provider cleanup leaves no result Context to publish");
+
+	for (uint retry = 0; retry < 4; retry++) {
+		ack = deadline;
+		ack.flags = AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL;
+		ack.ack_terminal_status = offer.terminal_status;
+		ack.terminal_generation = offer.terminal_generation;
+		memset(&result, 0, sizeof(result));
+		check(agent_task_delegate_complete(&ack, &result) == 0 &&
+		      task_delegate_complete_result_matches(&ack, &result),
+		      "provider sends framed terminal cleanup ACK");
+		if (result.status == AGENT_TASK_CHANNEL_RETRY) {
+			check(result.state == AGENT_TASK_DELEGATE_STATE_CLAIMED &&
+			      result.terminal_status == AGENT_STATUS_TIMEOUT &&
+			      result.terminal_generation > offer.terminal_generation,
+			      "provider observes only a newer authoritative offer");
+			offer = result;
+			continue;
+		}
+		check(result.status == AGENT_TASK_CHANNEL_OK &&
+		      result.state == AGENT_TASK_DELEGATE_STATE_READY &&
+		      result.terminal_status == offer.terminal_status &&
+		      result.terminal_generation == offer.terminal_generation,
+		      "provider cleanup ACK echoes exact terminal offer");
+		ack_ready = 1;
+		break;
+	}
+	check(ack_ready, "bounded provider terminal ACK reaches READY");
+
+	memset(&result, 0, sizeof(result));
+	check(agent_task_delegate_complete(&ack, &result) == 0 &&
+	      task_delegate_complete_result_matches(&ack, &result) &&
+	      result.status == AGENT_TASK_CHANNEL_OK &&
+	      result.state == AGENT_TASK_DELEGATE_STATE_READY &&
+	      result.terminal_status == AGENT_STATUS_TIMEOUT &&
+	      result.terminal_generation == ack.terminal_generation,
+	      "exact terminal ACK replay is idempotent before owner pump");
+	memset(&result, 0, sizeof(result));
+	check(agent_task_delegate_complete(&deadline, &result) == 0 &&
+	      task_delegate_complete_result_matches(&deadline, &result) &&
+	      result.status == AGENT_TASK_CHANNEL_STALE &&
+	      result.state == AGENT_TASK_DELEGATE_STATE_READY &&
+	      result.terminal_status == AGENT_STATUS_TIMEOUT &&
+	      result.terminal_generation == ack.terminal_generation,
+	      "late normal completion after terminal ACK is stale");
+	exit(0);
+}
+
+static void exercise_delegated_task_channel(
+	struct agent_workflow_lifecycle_key lifecycle)
+{
+	static struct agent_execution_contract_node normal_node, cancel_node;
+	static struct agent_execution_contract_node deadline_node;
+	static struct agent_execution_contract_key normal_key, cancel_key;
+	static struct agent_execution_contract_key deadline_key;
+	static struct agent_execution_contract_key setup_key;
+	static struct agent_task_delegate_descriptor normal_descriptor;
+	static struct agent_task_delegate_descriptor cancel_descriptor;
+	static struct agent_task_delegate_descriptor deadline_descriptor;
+	static struct agent_task_resource_handle normal_resource;
+	static struct agent_task_resource_handle cancel_resource;
+	static struct agent_task_resource_handle deadline_resource;
+	static struct task_delegate_hello provider_hello, controller_hello;
+	static struct task_delegate_controller_command controller_command;
+	static struct task_channel_view view;
+	static struct agent_task_channel_enter_result cancel_enter, final_result;
+	static struct agent_task_sqe normal_sqe, cancel_sqe, owner_cancel_sqe;
+	static struct agent_task_sqe deadline_sqe;
+	static struct agent_info owner_info, tick_info;
+	uint64 owner_control_id = 0;
+	uint64 provider_control_id = 0;
+	uint64 controller_control_id = 0;
+	uint64 cancel_request_id;
+	uint64 deadline_tick;
+	int provider_hello_pipe[2];
+	int controller_hello_pipe[2];
+	int controller_command_pipe[2];
+	int cancel_signal_pipe[2];
+	int owner_claim_pipe[2];
+	int provider_pid;
+	int controller_pid;
+	int cancel_descriptor_fd;
+	char controller_ready = 0;
+	char denied_signal = 'O';
+	char owner_claim_signal = 0;
+
+	memset(&owner_info, 0, sizeof(owner_info));
+	check(agent_info(&owner_info) == 0 && owner_info.is_agent == 1 &&
+	      owner_info.agent_role == AGENT_ROLE_ORCHESTRATOR &&
+	      (owner_info.capability_mask &
+	       (AGENT_CAP_ORCHESTRATE | AGENT_CAP_ROUTE_MANAGE)) ==
+		      (AGENT_CAP_ORCHESTRATE | AGENT_CAP_ROUTE_MANAGE),
+	      "delegated Task owner capabilities");
+	for (uint retry = 0; retry < 128 && owner_control_id == 0; retry++) {
+		(void)task_delegate_identity_lookup(
+			getpid(), owner_info.agent_id, owner_info.agent_role,
+			&owner_control_id);
+		if (owner_control_id == 0)
+			(void)sched_yield();
+	}
+	check(owner_control_id != 0,
+	      "resolve owner control identity for cancellation binding");
+	check(pipe(provider_hello_pipe) == 0 && pipe(cancel_signal_pipe) == 0 &&
+	      pipe(owner_claim_pipe) == 0,
+	      "create bounded delegated Task provider hello pipe");
+	check(agent_scope_delegate_fd(provider_hello_pipe[1]) == AGENT_STATUS_OK &&
+	      agent_scope_delegate_fd(cancel_signal_pipe[1]) == AGENT_STATUS_OK &&
+	      agent_scope_delegate_fd(owner_claim_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate provider hello and cancellation signal endpoints");
+	provider_pid = agent_create_role(TASK_DELEGATE_PROVIDER_ROLE);
+	check(provider_pid >= 0, "create delegated artifact provider Agent");
+	if (provider_pid == 0)
+		run_task_delegate_provider(
+			provider_hello_pipe[1], cancel_signal_pipe[1],
+			owner_claim_pipe[1]);
+	check(close(provider_hello_pipe[1]) == 0 &&
+	      close(owner_claim_pipe[1]) == 0 &&
+	      task_pipe_read_exact(provider_hello_pipe[0], &provider_hello,
+				   sizeof(provider_hello)) == 0 &&
+	      close(provider_hello_pipe[0]) == 0,
+	      "read and close pre-enforcement provider hello");
+	check(provider_hello.pid == provider_pid && provider_hello.agent_id > 0 &&
+	      provider_hello.role == TASK_DELEGATE_PROVIDER_ROLE &&
+	      task_lifecycle_equal(provider_hello.lifecycle, lifecycle) &&
+	      (provider_hello.capability_mask &
+	       (AGENT_CAP_TASK_ACCEPT | AGENT_CAP_ARTIFACT_WRITE)) ==
+		      (AGENT_CAP_TASK_ACCEPT | AGENT_CAP_ARTIFACT_WRITE) &&
+	      (provider_hello.capability_mask & AGENT_CAP_ORCHESTRATE) == 0,
+	      "provider preserves the delegated Task capability split");
+	check(agent_route_config(getpid(), provider_pid, AGENT_IPC_ROUTE_TASK,
+				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_OK,
+	      "grant directed TASK route");
+	for (uint retry = 0; retry < 128 && provider_control_id == 0; retry++) {
+		(void)task_delegate_identity_lookup(
+			provider_pid, provider_hello.agent_id, provider_hello.role,
+			&provider_control_id);
+		if (provider_control_id == 0)
+			(void)sched_yield();
+	}
+	check(provider_control_id != 0,
+	      "resolve provider control identity from kernel audit");
+
+	prime_task_resource_context();
+	memset(&setup_key, 0, sizeof(setup_key));
+	setup_key.lifecycle = lifecycle;
+	setup_task_channel(&setup_key, &view);
+	(void)unlink(TASK_DELEGATE_LEASE_PATH);
+	(void)unlink(TASK_DELEGATE_RECLAIM_PATH);
+	task_delegate_descriptor_init(
+		&normal_descriptor, provider_pid, (uint)provider_hello.agent_id,
+		provider_control_id, 1U, TASK_DELEGATE_NORMAL_TASK_ID,
+		TASK_DELEGATE_NORMAL_CORRELATION_ID);
+	normal_resource = task_delegate_import_descriptor(
+		&view, TASK_DELEGATE_NORMAL_PATH, &normal_descriptor);
+	check(unlink(TASK_DELEGATE_NORMAL_PATH) == 0,
+	      "unlink normal descriptor source before contract enforcement");
+
+	normal_key = create_delegate_contract(lifecycle, &normal_node);
+	normal_sqe = task_delegate_submit(
+		&view, &normal_key, &normal_node, 0, normal_resource, 0, 0, 0);
+	(void)task_delegate_wait_owner_cqe(
+		&view, &normal_sqe, AGENT_STATUS_OK, 0,
+		AGENT_EXECUTION_REASON_NONE, provider_pid,
+		provider_hello.agent_id,
+		provider_control_id, 0);
+	task_delegate_release_descriptor(&view, normal_resource);
+	retire_delegate_contract(&normal_key);
+	task_delegate_exercise_reclaimed_issuer();
+
+	check(pipe(controller_hello_pipe) == 0 &&
+	      pipe(controller_command_pipe) == 0,
+	      "create bounded cancellation controller pipes");
+	check(agent_scope_delegate_fd(controller_hello_pipe[1]) ==
+		      AGENT_STATUS_OK &&
+	      agent_scope_delegate_fd(controller_command_pipe[0]) ==
+		      AGENT_STATUS_OK &&
+	      agent_scope_delegate_fd(cancel_signal_pipe[0]) == AGENT_STATUS_OK,
+	      "delegate controller command, hello, and blocking reader endpoints");
+	controller_pid = agent_create_role(TASK_DELEGATE_CONTROLLER_ROLE);
+	check(controller_pid >= 0,
+	      "create separate delegated cancellation controller Agent");
+	if (controller_pid == 0)
+		run_task_delegate_controller(
+			controller_hello_pipe[1], controller_command_pipe[0],
+			cancel_signal_pipe[0]);
+	check(close(controller_hello_pipe[1]) == 0 &&
+	      close(controller_command_pipe[0]) == 0 &&
+	      task_pipe_read_exact(controller_hello_pipe[0], &controller_hello,
+				   sizeof(controller_hello)) == 0,
+	      "read cancellation controller identity hello");
+	check(controller_hello.pid == controller_pid &&
+	      controller_hello.agent_id > 0 &&
+	      controller_hello.role == TASK_DELEGATE_CONTROLLER_ROLE &&
+	      task_lifecycle_equal(controller_hello.lifecycle, lifecycle) &&
+	      (controller_hello.capability_mask &
+	       (AGENT_CAP_ORCHESTRATE | AGENT_CAP_WAIT_CANCEL)) ==
+		      (AGENT_CAP_ORCHESTRATE | AGENT_CAP_WAIT_CANCEL),
+	      "third Agent is the same-lifecycle cancellation controller");
+	for (uint retry = 0; retry < 128 && controller_control_id == 0; retry++) {
+		(void)task_delegate_identity_lookup(
+			controller_pid, controller_hello.agent_id,
+			controller_hello.role, &controller_control_id);
+		if (controller_control_id == 0)
+			(void)sched_yield();
+	}
+	check(controller_control_id != 0 &&
+	      agent_route_config(controller_pid, getpid(), AGENT_IPC_ROUTE_TASK,
+				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_OK,
+	      "grant controller-to-owner TASK cancellation route");
+	task_delegate_descriptor_init(
+		&cancel_descriptor, provider_pid, (uint)provider_hello.agent_id,
+		provider_control_id, 2U, TASK_DELEGATE_CANCEL_TASK_ID,
+		TASK_DELEGATE_CANCEL_CORRELATION_ID);
+	cancel_descriptor_fd = task_delegate_open_descriptor(
+		TASK_DELEGATE_CANCEL_PATH, &cancel_descriptor);
+	cancel_request_id = ++next_request_id;
+	memset(&controller_command, 0, sizeof(controller_command));
+	controller_command.cancel = task_delegate_cancel_request(
+		lifecycle, getpid(), owner_control_id, view.generation,
+		cancel_request_id,
+		view.sq_tail / AGENT_TASK_CHANNEL_CAPACITY + 1,
+		&cancel_descriptor);
+	check(task_pipe_write_exact(
+		      controller_command_pipe[1], &controller_command,
+		      sizeof(controller_command)) == 0 &&
+	      close(controller_command_pipe[1]) == 0 &&
+	      task_pipe_read_exact(
+		      controller_hello_pipe[0], &controller_ready, 1) == 0 &&
+	      controller_ready == 'B' && close(controller_hello_pipe[0]) == 0,
+	      "controller receives binding and begins its pre-CREATE pipe read");
+	memset(&tick_info, 0, sizeof(tick_info));
+	check(agent_info(&tick_info) == 0,
+	      "sample pre-CREATE controller blocking tick");
+	task_delegate_wait_until(tick_info.current_tick + 2ULL);
+
+	cancel_key = create_delegate_contract(lifecycle, &cancel_node);
+	check(cancel_key.generation > normal_key.generation,
+	      "blocked pipe reader permits the next Contract generation");
+	check(write(cancel_signal_pipe[1], &denied_signal, 1) ==
+		      AGENT_STATUS_DENIED,
+	      "owner pipe write is denied while Contract enforcement is active");
+	cancel_resource = task_delegate_import_descriptor_fd(
+		&view, cancel_descriptor_fd, &cancel_descriptor);
+	task_delegate_read_descriptor_fd(
+		cancel_descriptor_fd, &cancel_descriptor);
+	cancel_sqe = task_delegate_submit(
+		&view, &cancel_key, &cancel_node, 0, cancel_resource, 0, 0,
+		cancel_request_id);
+	check(read(owner_claim_pipe[0], &owner_claim_signal, 1) == 1 &&
+	      owner_claim_signal == 'Q',
+	      "owner observes exact provider CLAIMED effect boundary");
+	owner_cancel_sqe = make_cancel_sqe(
+		&cancel_sqe, ++next_request_id, view.generation, view.sq_tail);
+	write_sqe(view.sq, view.sq_tail, &owner_cancel_sqe);
+	view.sq_tail++;
+	enter_channel(0, 1, 0, view.generation, view.sq_tail, view.cq_head,
+		      &cancel_enter);
+	check(cancel_enter.status == AGENT_TASK_CHANNEL_DENIED &&
+	      cancel_enter.submitted == 1 &&
+	      cancel_enter.sq_head == view.sq_tail &&
+	      cancel_enter.cq_tail == view.cq_head &&
+	      cancel_enter.in_flight == 1,
+	      "owner SQ CANCEL is denied after provider effect claim");
+	memset(&tick_info, 0, sizeof(tick_info));
+	check(agent_info(&tick_info) == 0,
+	      "sample controller override settlement tick");
+	task_delegate_wait_until(
+		tick_info.current_tick + TASK_DELEGATE_PROVIDER_CANCEL_DELAY + 32ULL);
+	(void)task_delegate_wait_owner_cqe(
+		&view, &cancel_sqe, AGENT_STATUS_CANCELLED,
+		AGENT_TASK_CQE_F_CANCELLED,
+		AGENT_EXECUTION_REASON_CANCEL_REQUESTED, provider_pid,
+		provider_hello.agent_id, provider_control_id, 1);
+	task_delegate_release_descriptor(&view, cancel_resource);
+	retire_delegate_contract(&cancel_key);
+	check(close(cancel_descriptor_fd) == 0 &&
+	      unlink(TASK_DELEGATE_CANCEL_PATH) == 0 &&
+	      close(owner_claim_pipe[0]) == 0 &&
+	      close(cancel_signal_pipe[0]) == 0 &&
+	      close(cancel_signal_pipe[1]) == 0,
+	      "reclaimed cancel contract releases inode and pipe endpoints");
+	task_delegate_wait_child(
+		controller_pid,
+		"controller exits after exact cancellation receipt replay");
+
+	task_delegate_descriptor_init(
+		&deadline_descriptor, provider_pid, (uint)provider_hello.agent_id,
+		provider_control_id, 3U, TASK_DELEGATE_DEADLINE_TASK_ID,
+		TASK_DELEGATE_DEADLINE_CORRELATION_ID);
+	deadline_resource = task_delegate_import_descriptor(
+		&view, TASK_DELEGATE_DEADLINE_PATH, &deadline_descriptor);
+	check(unlink(TASK_DELEGATE_DEADLINE_PATH) == 0,
+	      "unlink deadline descriptor source before contract enforcement");
+	deadline_key = create_delegate_contract(lifecycle, &deadline_node);
+	check(deadline_key.generation > cancel_key.generation,
+	      "third delegated contract advances the reclaimed generation");
+
+	memset(&tick_info, 0, sizeof(tick_info));
+	check(agent_info(&tick_info) == 0,
+	      "sample delegated hard-deadline start tick");
+	deadline_tick = tick_info.current_tick + TASK_DELEGATE_DEADLINE_SLACK;
+	deadline_sqe = task_delegate_submit(
+		&view, &deadline_key, &deadline_node, 0, deadline_resource,
+		AGENT_TASK_SQE_F_HARD_DEADLINE, deadline_tick, 0);
+	task_delegate_wait_child(
+		provider_pid,
+		"provider validates receipt replay and deadline ACK before owner pump");
+	(void)task_delegate_wait_owner_cqe(
+		&view, &deadline_sqe, AGENT_STATUS_TIMEOUT,
+		AGENT_TASK_CQE_F_DEADLINE,
+		AGENT_EXECUTION_REASON_DEADLINE_EXPIRED, provider_pid,
+		provider_hello.agent_id, provider_control_id, 1);
+
+	task_delegate_release_descriptor(&view, deadline_resource);
+	retire_delegate_contract(&deadline_key);
+	enter_channel(AGENT_TASK_CHANNEL_ENTER_F_DRAIN, 0, 0,
+		      view.generation, view.sq_tail, view.cq_head, &final_result);
+	check(final_result.status == AGENT_TASK_CHANNEL_OK &&
+	      final_result.sq_head == view.sq_tail &&
+	      final_result.cq_head == view.cq_head &&
+	      final_result.cq_tail == view.cq_head &&
+	      final_result.in_flight == 0 &&
+	      final_result.terminal_pending == 0 &&
+	      final_result.resource_count == 0,
+	      "delegated Task channel is fully drained with no replay CQE");
+}
+
 #define CHILD_BATCH       1
 #define CHILD_SCALAR      2
 #define CHILD_TASK_PERF   3
 #define CHILD_TASK_STRESS 4
 #define CHILD_TASK_RESOURCE 5
+#define CHILD_TASK_DELEGATE 6
 
 static int create_isolated_workflow(void)
 {
@@ -1502,6 +2801,9 @@ static void run_child(int mode)
 			key = create_task_contract(lifecycle);
 			exercise_task_resources(
 				&key, &resource_inputs, &resource_view);
+		} else if (mode == CHILD_TASK_DELEGATE) {
+			lifecycle = current_lifecycle();
+			exercise_delegated_task_channel(lifecycle);
 		} else {
 			check(0, "known isolated orchestrator mode");
 		}
@@ -1540,6 +2842,27 @@ int main(void)
 	run_child(CHILD_TASK_PERF);
 	run_child(CHILD_TASK_STRESS);
 	run_child(CHILD_TASK_RESOURCE);
+	run_child(CHILD_TASK_DELEGATE);
+	printf("agenttask_ucore: delegated_runtime agents=3 provider=artifact "
+	       "controller=orchestrator task_route=1 task_accept=1 "
+	       "artifact_write=1 descriptor_bytes=56 claim567=1 complete568=1\n");
+	printf("agenttask_ucore: delegated_contracts=3 strict_reclaimed=1 "
+	       "reclaimed_generation_advance=1 issuer_gap_effects=pipe+file\n");
+	printf("agenttask_ucore: delegated_lease preclaim_publish_denied=1 "
+	       "thread_helper=1 context_mutation=1 bounded_publish_read=1 "
+	       "effect_gates=process+metadata+file+artifact\n");
+	printf("agenttask_ucore: delegated_normal=1 receipt_replay=1 "
+	       "changed_replay_stale=1 sole_owner_cqe=1 output_none=1\n");
+	printf("agenttask_ucore: delegated_cancel_after_claim=1 agents=3 "
+	       "controller=orchestrator owner_sq_cancel_denied=1 "
+	       "request_cancel568=1 cancelled_offer=1 cleanup_ack=1 "
+	       "cancel_receipt_replay=1 late_complete_stale=1 "
+	       "sole_owner_cqe=1\n");
+	printf("agenttask_ucore: contract_create_blocked_pipe_reader=1 "
+	       "enforce_pipe_write_denied=1 regular_inode_import_read_cut=1\n");
+	printf("agenttask_ucore: delegated_deadline_claimed=1 "
+	       "terminal_offer_timeout=1 cleanup_ack=1 ack_replay=1 "
+	       "late_complete_stale=1 sole_owner_cqe=1\n");
 	printf("agenttask_ucore: setup=1 single_issuer=1 "
 	       "resource_utf8_snapshot=1 borrowed_live=1 owned_consumed=1 "
 	       "release_stale=1 generation_aba=1\n");

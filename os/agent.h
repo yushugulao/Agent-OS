@@ -256,8 +256,10 @@
 #define AGENT_EVENT_MASK(type) (1ULL << (type))
 #define AGENT_IPC_EVENT_MESSAGE  AGENT_EVENT_MASK(AGENT_EVENT_MESSAGE)
 #define AGENT_IPC_EVENT_LLM_DONE AGENT_EVENT_MASK(AGENT_EVENT_LLM_DONE)
+#define AGENT_IPC_ROUTE_TASK      (1ULL << 63)
 #define AGENT_IPC_EVENT_MASK \
 	(AGENT_IPC_EVENT_MESSAGE | AGENT_IPC_EVENT_LLM_DONE)
+#define AGENT_IPC_ROUTE_MASK (AGENT_IPC_EVENT_MASK | AGENT_IPC_ROUTE_TASK)
 
 #define AGENT_IPC_ROUTE_REVOKE 0
 #define AGENT_IPC_ROUTE_GRANT  1
@@ -289,6 +291,7 @@
 #define AGENT_CAP_LLM_RELAY     (1ULL << 10)
 #define AGENT_CAP_WAIT_CANCEL   (1ULL << 11)
 #define AGENT_CAP_ROUTE_MANAGE  (1ULL << 12)
+#define AGENT_CAP_TASK_ACCEPT   (1ULL << 13)
 #define AGENT_CAP_RECOVER_STAGE AGENT_CAP_ACTION_WRITE
 #define AGENT_CAP_REPORT_WRITE  AGENT_CAP_ARTIFACT_WRITE
 #define AGENT_CAP_DEPENDENCY_UPDATE AGENT_CAP_META_WRITE
@@ -752,6 +755,7 @@ void agent_thread_runtime_transition(struct thread *t, int transition);
 void agent_process_image_install_locked(struct proc *p);
 void agent_observe_thread_reset(struct thread *t);
 int agent_exec_public_identity_commit(struct proc *p);
+int agent_exec_image_install_allowed(const struct proc *p);
 void agent_scope_controller_departing(struct proc *p);
 void agent_authority_bootstrap(struct proc *p);
 void agent_authority_on_exec(struct proc *p);
@@ -802,6 +806,9 @@ int sys_agent_task_channel_setup(uint64 setupaddr, uint64 resultaddr);
 int sys_agent_task_channel_enter(uint64 enteraddr, uint64 resultaddr);
 int sys_agent_task_channel_resource(uint64 controladdr, uint64 resultaddr,
 				    struct file *source_file, int source_fd);
+int sys_agent_task_delegate_claim(uint64 claimaddr, uint64 resultaddr);
+int sys_agent_task_delegate_complete(uint64 completionaddr,
+				     uint64 resultaddr);
 int sys_agent_resource_snapshot(uint64 addr, uint64 user_size);
 int sys_agent_performance_snapshot(uint64 addr, uint64 user_size);
 int sys_agent_scope_delegate_fd(int fd);

@@ -2893,7 +2893,8 @@ int proc_install_user_image(struct proc *p, struct user_image *image,
 		return -1;
 	live_exec = mode == PROC_IMAGE_INSTALL_LIVE_EXEC;
 	/* 凭据或 VM 所有权转移前拒绝畸形镜像。 */
-	if (!proc_user_image_trapframe_valid(p, image) ||
+	if ((live_exec && !agent_exec_image_install_allowed(p)) ||
+	    !proc_user_image_trapframe_valid(p, image) ||
 	    vfs_proc_exec_prepare(p, image, live_exec, &transition) < 0)
 		return -1;
 	/* 仅策略明确选择保留可信 Agent 的转换后，共享 Agent 状态才可进入

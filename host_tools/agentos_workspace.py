@@ -5,10 +5,14 @@ from __future__ import annotations
 
 import codecs
 import errno
+import hashlib
+import json
 import os
 from pathlib import Path, PurePosixPath
 import stat
 import sys
+from dataclasses import dataclass
+from typing import Mapping, Sequence
 
 try:
     import safe_host_paths
@@ -22,8 +26,13 @@ MAX_PATH_BYTES = 255
 MAX_READ_LINES = 64
 MAX_RESULTS = 8
 MAX_PROJECTION_BYTES = 2800
+MAX_MANIFEST_PROJECTION_BYTES = 12_000
+MAX_MANIFEST_JSON_STRING_BYTES = 12_500
+MAX_WORKSPACE_ARGUMENT_BYTES = 12_000
+MAX_MANIFEST_PAGE = 32
+MAX_CANDIDATES = 32
 MAX_FILE_BYTES = 1 << 20
-MAX_SCAN_BYTES = 16 << 20
+MAX_SCAN_BYTES = 64 << 20
 MAX_SCAN_FILES = 10_000
 MAX_SCAN_DIRECTORIES = 2_000
 MAX_SCAN_DEPTH = 64
@@ -56,9 +65,10 @@ _SKIPPED_DIRECTORIES = frozenset(
 
 
 class _WorkspaceInputError(ValueError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, consumed: int = 0) -> None:
         super().__init__(code)
         self.code = code
+        self.consumed = consumed
 
 
 class _ScanState:
@@ -69,6 +79,35 @@ class _ScanState:
         self.bytes = 0
         self.truncated = False
         self.stop = False
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceObject:
+    object_id: str
+    path: str
+    revision: str
+    size: int
+    kind: str = "file"
+
+    def candidate(self) -> dict[str, str]:
+        return {
+            "object_id": self.object_id,
+            "path": self.path,
+            "revision": self.revision,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceOperationResult:
+    status: str
+    workspace_generation: str
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkspaceSnapshot:
+    generation: str
+    entries: tuple[WorkspaceObject, ...]
 
 
 class _OpenedRegularFile:
@@ -456,6 +495,7 @@ class WorkspaceReader:
             raise TypeError("workspace root must be path-like")
         self._root_descriptor = -1
         self._root_handle = None
+        self._snapshot_cache: _WorkspaceSnapshot | None = None
         try:
             configured = safe_host_paths.absolute_lexical_path(Path(root).expanduser())
             before = configured.lstat()
@@ -1002,6 +1042,538 @@ class WorkspaceReader:
         yield from visit(base, base_depth, initial=True)
 
     @staticmethod
+    def _workspace_object(
+        relative: str, info: os.stat_result, content_sha256: str
+    ) -> WorkspaceObject:
+        object_id = hashlib.sha256(
+            b"agentos-workspace-object-v1\0" + relative.encode("utf-8")
+        ).hexdigest()
+        revision_source = json.dumps(
+            {
+                "identity": list(_identity_stamp(info)),
+                "mtime_ns": info.st_mtime_ns,
+                "path": relative,
+                "content_sha256": content_sha256,
+                "size": info.st_size,
+                "version": 1,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return WorkspaceObject(
+            object_id=object_id,
+            path=relative,
+            revision=hashlib.sha256(revision_source).hexdigest(),
+            size=info.st_size,
+        )
+
+    def _workspace_object_and_bytes_from_opened(
+        self, opened: _OpenedRegularFile, *, maximum_bytes: int = MAX_FILE_BYTES
+    ) -> tuple[WorkspaceObject, bytes]:
+        if opened.before.st_size > MAX_FILE_BYTES:
+            raise _WorkspaceInputError("file_too_large")
+        size = opened.before.st_size
+        if size > maximum_bytes:
+            self._verify_opened_file(opened)
+            raise _WorkspaceInputError("manifest_budget")
+        try:
+            data = _read_fd_up_to(opened.descriptor, size)
+            self._verify_opened_file(opened)
+            if len(data) != size:
+                raise _WorkspaceInputError("io_error")
+        except _WorkspaceInputError:
+            raise
+        except (OSError, ValueError) as error:
+            raise _WorkspaceInputError("io_error") from error
+        return (
+            self._workspace_object(
+                opened.relative,
+                opened.before,
+                hashlib.sha256(data).hexdigest(),
+            ),
+            data,
+        )
+
+    def _workspace_snapshot(self) -> _WorkspaceSnapshot:
+        state = _ScanState()
+        entries: list[WorkspaceObject] = []
+        try:
+            for relative in self._walk_files(state, "", ""):
+                opened = None
+                try:
+                    opened = self._open_regular_file(relative)
+                    entry, data = self._workspace_object_and_bytes_from_opened(
+                        opened, maximum_bytes=MAX_SCAN_BYTES - state.bytes
+                    )
+                    state.bytes += len(data)
+                    entries.append(entry)
+                except _WorkspaceInputError as error:
+                    state.bytes += error.consumed
+                    if error.code == "file_too_large":
+                        continue
+                    if error.code == "manifest_budget":
+                        state.truncated = state.stop = True
+                        break
+                    state.truncated = True
+                finally:
+                    if opened is not None:
+                        opened.close()
+        except _WorkspaceInputError as error:
+            raise _WorkspaceInputError("manifest_incomplete") from error
+        if state.truncated:
+            raise _WorkspaceInputError("manifest_incomplete")
+        entries.sort(key=lambda item: item.path.encode("utf-8"))
+        manifest = [
+            {
+                "kind": entry.kind,
+                "object_id": entry.object_id,
+                "path": entry.path,
+                "revision": entry.revision,
+                "size": entry.size,
+            }
+            for entry in entries
+        ]
+        generation = hashlib.sha256(
+            json.dumps(
+                manifest,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        return _WorkspaceSnapshot(generation, tuple(entries))
+
+    @staticmethod
+    def _validate_generation(value: object, *, empty: bool) -> str:
+        if not isinstance(value, str):
+            raise _WorkspaceInputError("invalid_generation")
+        if not value and empty:
+            return ""
+        if (
+            len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise _WorkspaceInputError("invalid_generation")
+        return value
+
+    @staticmethod
+    def _manifest_projection_fits(value: str) -> bool:
+        if _utf8_size(value) > MAX_MANIFEST_PROJECTION_BYTES:
+            return False
+        encoded_string = json.dumps(
+            value, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        return len(encoded_string) <= MAX_MANIFEST_JSON_STRING_BYTES
+
+    @staticmethod
+    def _search_arguments_fit(entries: Sequence[WorkspaceObject]) -> bool:
+        # Four-byte UTF-8 scalars maximize the encoded query length; quotes and
+        # backslashes expand to only two bytes in the Guest's JSON builder.
+        maximum_query = "\U0010ffff" * MAX_QUERY_BYTES
+        arguments = {
+            "query": maximum_query,
+            "candidates": [entry.candidate() for entry in entries],
+        }
+        encoded = json.dumps(
+            arguments,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return len(encoded) <= MAX_WORKSPACE_ARGUMENT_BYTES
+
+    @staticmethod
+    def _render_manifest_page(
+        cursor: int,
+        entries: Sequence[WorkspaceObject],
+        total: int,
+    ) -> str:
+        next_cursor = cursor + len(entries)
+        eof = next_cursor >= total
+        lines = [
+            "workspace_manifest_v1",
+            f"cursor={cursor}",
+            f"next_cursor={next_cursor}",
+            f"entry_count={len(entries)}",
+            f"eof={int(eof)}",
+        ]
+        for index, entry in enumerate(entries, 1):
+            lines.extend(
+                (
+                    f"entry[{index}].object_id={entry.object_id}",
+                    f"entry[{index}].path={entry.path}",
+                    f"entry[{index}].revision={entry.revision}",
+                    f"entry[{index}].size={entry.size}",
+                    f"entry[{index}].kind={entry.kind}",
+                )
+            )
+        return "\n".join(lines)
+
+    def manifest(
+        self,
+        workspace_generation: str = "",
+        cursor: int = 0,
+        limit: int = MAX_MANIFEST_PAGE,
+    ) -> WorkspaceOperationResult:
+        try:
+            generation = self._validate_generation(
+                workspace_generation, empty=cursor == 0
+            )
+            if (
+                type(cursor) is not int
+                or type(limit) is not int
+                or cursor < 0
+                or not 1 <= limit <= MAX_MANIFEST_PAGE
+                or (cursor and not generation)
+            ):
+                raise _WorkspaceInputError("invalid_manifest_page")
+            if cursor == 0:
+                snapshot = self._workspace_snapshot()
+                self._snapshot_cache = snapshot
+            else:
+                snapshot = self._snapshot_cache
+                if snapshot is None:
+                    return WorkspaceOperationResult(
+                        "stale", "0" * 64, ""
+                    )
+            if generation and generation != snapshot.generation:
+                return WorkspaceOperationResult(
+                    "stale", snapshot.generation, ""
+                )
+            if cursor > len(snapshot.entries):
+                raise _WorkspaceInputError("invalid_manifest_page")
+            visible = list(snapshot.entries[cursor : cursor + limit])
+            projection = self._render_manifest_page(
+                cursor, visible, len(snapshot.entries)
+            )
+            while visible and (
+                not self._manifest_projection_fits(projection)
+                or not self._search_arguments_fit(visible)
+            ):
+                visible.pop()
+                projection = self._render_manifest_page(
+                    cursor, visible, len(snapshot.entries)
+                )
+            if (
+                not self._manifest_projection_fits(projection)
+                or not self._search_arguments_fit(visible)
+                or (cursor < len(snapshot.entries) and not visible)
+            ):
+                raise _WorkspaceInputError("manifest_entry_too_large")
+            return WorkspaceOperationResult("ok", snapshot.generation, projection)
+        except _WorkspaceInputError as error:
+            return WorkspaceOperationResult("error", "", _error(error.code))
+        except (OSError, ValueError):
+            return WorkspaceOperationResult("error", "", _error("io_error"))
+
+    @staticmethod
+    def _validate_candidates(
+        candidates: object,
+    ) -> tuple[tuple[str, str, str], ...]:
+        if (
+            not isinstance(candidates, (list, tuple))
+            or not 1 <= len(candidates) <= MAX_CANDIDATES
+        ):
+            raise _WorkspaceInputError("invalid_candidates")
+        values: list[tuple[str, str, str]] = []
+        seen_objects: set[str] = set()
+        seen_paths: set[str] = set()
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping) or set(candidate) != {
+                "object_id",
+                "path",
+                "revision",
+            }:
+                raise _WorkspaceInputError("invalid_candidates")
+            object_id = WorkspaceReader._validate_generation(
+                candidate.get("object_id"), empty=False
+            )
+            revision = WorkspaceReader._validate_generation(
+                candidate.get("revision"), empty=False
+            )
+            path = _validate_relative_path(
+                candidate.get("path"),
+                "path",
+                MAX_PATH_BYTES,
+                empty=False,
+                trailing_slash=False,
+            )
+            if object_id in seen_objects or path in seen_paths:
+                raise _WorkspaceInputError("invalid_candidates")
+            seen_objects.add(object_id)
+            seen_paths.add(path)
+            values.append((object_id, path, revision))
+        return tuple(values)
+
+    @staticmethod
+    def _snapshot_maps(
+        snapshot: _WorkspaceSnapshot,
+    ) -> tuple[dict[str, WorkspaceObject], dict[str, WorkspaceObject]]:
+        return (
+            {entry.object_id: entry for entry in snapshot.entries},
+            {entry.path: entry for entry in snapshot.entries},
+        )
+
+    @staticmethod
+    def _render_candidate_search(
+        query: str,
+        candidate_count: int,
+        matches: list[tuple[WorkspaceObject, str, int, str]],
+        truncated: bool,
+    ) -> str:
+        visible = list(matches)
+        snippet_limit = MAX_SNIPPET_BYTES
+        projection_truncated = truncated
+        while True:
+            rendered: list[tuple[WorkspaceObject, str, int, str]] = []
+            shortened = False
+            for entry, kind, line, snippet in visible:
+                compact, did_shorten = _truncate_utf8(
+                    _one_line(snippet), snippet_limit
+                )
+                shortened |= did_shorten
+                rendered.append((entry, kind, line, compact))
+            lines = [
+                "workspace_search_v1",
+                "content_untrusted=1",
+                f"query={query}",
+                f"candidate_count={candidate_count}",
+                f"match_count={len(rendered)}",
+                f"truncated={int(projection_truncated or shortened)}",
+            ]
+            for index, (entry, kind, line, snippet) in enumerate(rendered, 1):
+                lines.extend(
+                    (
+                        f"match[{index}].object_id={entry.object_id}",
+                        f"match[{index}].path={entry.path}",
+                        f"match[{index}].revision={entry.revision}",
+                        f"match[{index}].kind={kind}",
+                        f"match[{index}].line={line}",
+                        f"match[{index}].snippet={snippet}",
+                    )
+                )
+            projection = "\n".join(lines)
+            if _utf8_size(projection) <= MAX_PROJECTION_BYTES:
+                return projection
+            projection_truncated = True
+            if snippet_limit:
+                snippet_limit = max(0, snippet_limit - 32)
+            elif visible:
+                visible.pop()
+            else:
+                return _error("projection_too_large")
+
+    def search_candidates(
+        self,
+        workspace_generation: str,
+        query: str,
+        candidates: object,
+    ) -> WorkspaceOperationResult:
+        try:
+            generation = self._validate_generation(
+                workspace_generation, empty=False
+            )
+            query = _validate_text(query, "query", MAX_QUERY_BYTES, empty=True)
+            candidate_values = self._validate_candidates(candidates)
+            snapshot = self._snapshot_cache
+            if snapshot is None:
+                return WorkspaceOperationResult("stale", "0" * 64, "")
+            if generation != snapshot.generation:
+                return WorkspaceOperationResult(
+                    "stale", snapshot.generation, ""
+                )
+            by_object, by_path = self._snapshot_maps(snapshot)
+            selected: list[WorkspaceObject] = []
+            for object_id, path, revision in candidate_values:
+                entry = by_object.get(object_id)
+                if entry is None or by_path.get(path) is not entry:
+                    return WorkspaceOperationResult(
+                        "error",
+                        snapshot.generation,
+                        _error("unauthorized_candidate"),
+                    )
+                if entry.revision != revision:
+                    return WorkspaceOperationResult(
+                        "stale", snapshot.generation, ""
+                    )
+                selected.append(entry)
+
+            state = _ScanState()
+            matches: list[tuple[WorkspaceObject, str, int, str]] = []
+            folded_query = query.casefold()
+            for entry in selected:
+                if len(matches) >= MAX_RESULTS:
+                    state.truncated = True
+                    break
+                state.files += 1
+                opened = None
+                preview: tuple[WorkspaceObject, str, int, str] | None = None
+                path_preview = (
+                    (entry, "path", 0, entry.path)
+                    if query and folded_query in entry.path.casefold()
+                    else None
+                )
+                try:
+                    opened = self._open_regular_file(entry.path)
+                    current, data = self._workspace_object_and_bytes_from_opened(
+                        opened
+                    )
+                    if current != entry:
+                        self._snapshot_cache = None
+                        return WorkspaceOperationResult(
+                            "stale",
+                            "0" * 64,
+                            "",
+                        )
+                    if not query:
+                        preview = (entry, "file", 0, "file")
+                    else:
+                        if state.bytes + len(data) > MAX_SCAN_BYTES:
+                            state.truncated = state.stop = True
+                            text = None
+                        else:
+                            state.bytes += len(data)
+                            text = (
+                                None
+                                if _prefix_is_binary(data, complete=True)
+                                else data.decode("utf-8", errors="strict")
+                            )
+                        if text is not None:
+                            for line_number, line in enumerate(_text_lines(text), 1):
+                                if folded_query in line.casefold():
+                                    preview = (entry, "content", line_number, line)
+                                    break
+                        if preview is None:
+                            preview = path_preview
+                except _WorkspaceInputError:
+                    self._snapshot_cache = None
+                    return WorkspaceOperationResult(
+                        "stale",
+                        "0" * 64,
+                        "",
+                    )
+                finally:
+                    if opened is not None:
+                        opened.close()
+                if preview is not None:
+                    matches.append(preview)
+                if state.stop:
+                    break
+            content = self._render_candidate_search(
+                query, len(selected), matches, state.truncated
+            )
+            return WorkspaceOperationResult("ok", snapshot.generation, content)
+        except _WorkspaceInputError as error:
+            return WorkspaceOperationResult("error", "", _error(error.code))
+        except (OSError, ValueError):
+            return WorkspaceOperationResult("error", "", _error("io_error"))
+
+    def read_versioned(
+        self,
+        workspace_generation: str,
+        object_id: str,
+        path: str,
+        revision: str,
+        start_line: int,
+        max_lines: int,
+    ) -> WorkspaceOperationResult:
+        try:
+            generation = self._validate_generation(
+                workspace_generation, empty=False
+            )
+            object_id = self._validate_generation(object_id, empty=False)
+            revision = self._validate_generation(revision, empty=False)
+            relative = _validate_relative_path(
+                path,
+                "path",
+                MAX_PATH_BYTES,
+                empty=False,
+                trailing_slash=False,
+            )
+            if (
+                type(start_line) is not int
+                or type(max_lines) is not int
+                or start_line < 1
+                or start_line > 0xFFFFFFFF
+                or not 1 <= max_lines <= MAX_READ_LINES
+            ):
+                raise _WorkspaceInputError("invalid_line_range")
+            snapshot = self._snapshot_cache
+            if snapshot is None:
+                return WorkspaceOperationResult("stale", "0" * 64, "")
+            if generation != snapshot.generation:
+                return WorkspaceOperationResult(
+                    "stale", snapshot.generation, ""
+                )
+            by_object, by_path = self._snapshot_maps(snapshot)
+            entry = by_object.get(object_id)
+            if entry is None or by_path.get(relative) is not entry:
+                return WorkspaceOperationResult(
+                    "error", snapshot.generation, _error("unauthorized_candidate")
+                )
+            if entry.revision != revision:
+                return WorkspaceOperationResult(
+                    "stale", snapshot.generation, ""
+                )
+            opened = None
+            try:
+                opened = self._open_regular_file(relative)
+                current, data = self._workspace_object_and_bytes_from_opened(opened)
+                if current != entry:
+                    self._snapshot_cache = None
+                    return WorkspaceOperationResult(
+                        "stale", "0" * 64, ""
+                    )
+            finally:
+                if opened is not None:
+                    opened.close()
+            if b"\x00" in data:
+                return WorkspaceOperationResult(
+                    "ok", snapshot.generation, _error("binary_file")
+                )
+            try:
+                text = data.decode("utf-8", errors="strict")
+            except UnicodeDecodeError:
+                return WorkspaceOperationResult(
+                    "ok", snapshot.generation, _error("binary_file")
+                )
+            lines = _text_lines(text)
+            if start_line > len(lines):
+                return WorkspaceOperationResult(
+                    "ok", snapshot.generation, _error("start_line_out_of_range")
+                )
+            selected = lines[start_line - 1 : start_line - 1 + max_lines]
+            while selected:
+                end_line = start_line + len(selected) - 1
+                has_more = end_line < len(lines)
+                projection_lines = [
+                    "workspace_read",
+                    "content_untrusted=1",
+                    f"path={relative}",
+                    f"start_line={start_line}",
+                    f"end_line={end_line}",
+                    f"total_lines={len(lines)}",
+                    f"returned_lines={len(selected)}",
+                    f"has_more={int(has_more)}",
+                    f"next_start_line={end_line + 1 if has_more else 0}",
+                    f"content={selected[0]}",
+                ]
+                projection_lines.extend(selected[1:])
+                projection = "\n".join(projection_lines)
+                if _utf8_size(projection) <= MAX_PROJECTION_BYTES:
+                    return WorkspaceOperationResult(
+                        "ok", snapshot.generation, projection
+                    )
+                selected.pop()
+            return WorkspaceOperationResult(
+                "ok", snapshot.generation, _error("line_too_large")
+            )
+        except _WorkspaceInputError as error:
+            return WorkspaceOperationResult("error", "", _error(error.code))
+        except (OSError, ValueError):
+            return WorkspaceOperationResult("error", "", _error("io_error"))
+
+    @staticmethod
     def _render_search(
         query: str,
         prefix: str,
@@ -1186,7 +1758,10 @@ class WorkspaceReader:
 
 
 __all__ = [
+    "MAX_CANDIDATES",
     "MAX_FILE_BYTES",
+    "MAX_MANIFEST_PAGE",
+    "MAX_MANIFEST_PROJECTION_BYTES",
     "MAX_PATH_BYTES",
     "MAX_PREFIX_BYTES",
     "MAX_PROJECTION_BYTES",
@@ -1198,5 +1773,8 @@ __all__ = [
     "MAX_SCAN_ENTRIES",
     "MAX_SCAN_ENTRIES_PER_DIRECTORY",
     "MAX_SCAN_FILES",
+    "MAX_WORKSPACE_ARGUMENT_BYTES",
+    "WorkspaceObject",
+    "WorkspaceOperationResult",
     "WorkspaceReader",
 ]

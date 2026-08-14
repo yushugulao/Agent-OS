@@ -361,11 +361,21 @@ def validate_feature_abi_constants(root):
             "AGENT_TASK_CHANNEL_SETUP_SYSCALL": 563,
             "AGENT_TASK_CHANNEL_ENTER_SYSCALL": 564,
             "AGENT_TASK_CHANNEL_RESOURCE_SYSCALL": 565,
+            "AGENT_TASK_DELEGATE_CLAIM_SYSCALL": 567,
+            "AGENT_TASK_DELEGATE_COMPLETE_SYSCALL": 568,
             "AGENT_TASK_CHANNEL_VERSION": 1,
             "AGENT_TASK_CHANNEL_ENTRY_VERSION": 1,
             "AGENT_TASK_CHANNEL_CAPACITY": 16,
             "AGENT_TASK_CHANNEL_SCHEMA_SIZE": 32,
             "AGENT_TASK_RESOURCE_UTF8_MAX": 63,
+            "AGENT_TASK_DELEGATE_VERSION": 1,
+            "AGENT_TASK_DELEGATE_DESCRIPTOR_VERSION": 1,
+            "AGENT_TASK_DELEGATE_F_NONE": 0,
+            "AGENT_TASK_DELEGATE_STATE_NONE": 0,
+            "AGENT_TASK_DELEGATE_STATE_QUEUED": 1,
+            "AGENT_TASK_DELEGATE_STATE_CLAIMED": 2,
+            "AGENT_TASK_DELEGATE_STATE_READY": 3,
+            "AGENT_TASK_DELEGATE_EXECUTOR_AGENT_SHIFT": 32,
             "AGENT_TASK_CHANNEL_OP_SUBMIT": 1,
             "AGENT_TASK_CHANNEL_OP_CANCEL": 2,
             "AGENT_TASK_RESOURCE_IMPORT": 1,
@@ -453,6 +463,9 @@ def validate_feature_abi_constants(root):
             "AGENT_TASK_CQE_F_LINK_FAILED": 3,
             "AGENT_TASK_HANDLE_F_OWNED": 0,
             "AGENT_TASK_HANDLE_F_BORROWED": 1,
+            "AGENT_TASK_DELEGATE_CLAIM_F_WAIT": 0,
+            "AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL": 0,
+            "AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL": 1,
         },
         "agent_lifecycle_abi.h": {
             "AGENT_WORKFLOW_SCHED_F_ACTIVE": 0,
@@ -474,6 +487,29 @@ def validate_feature_abi_constants(root):
     task = (include_dir / "agent_task_channel_abi.h").read_text(
         encoding="utf-8"
     )
+    # Composite acceptance masks are security boundaries, not convenience aliases.
+    if not re.search(
+        r"^#define\s+AGENT_TASK_DELEGATE_CLAIM_F_ALL\s+"
+        r"AGENT_TASK_DELEGATE_CLAIM_F_WAIT\s*$",
+        task,
+        re.MULTILINE,
+    ):
+        raise LayoutError("delegated Task claim mask is not frozen")
+    if not re.search(
+        r"^#define\s+AGENT_TASK_DELEGATE_COMPLETE_F_ALL\s+\\?\s*$\n"
+        r"\s*\(AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL\s*\|\s*\\?\s*$\n"
+        r"\s*AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL\)\s*$",
+        task,
+        re.MULTILINE,
+    ):
+        raise LayoutError("delegated Task completion mask is not frozen")
+    if not re.search(
+        r"^#define\s+AGENT_TASK_DELEGATE_EXECUTOR_PID_MASK\s+"
+        r"0xffffffffULL\s*$",
+        task,
+        re.MULTILINE,
+    ):
+        raise LayoutError("delegated Task executor identity packing drifted")
     lifecycle = (include_dir / "agent_lifecycle_abi.h").read_text(
         encoding="utf-8"
     )
@@ -494,6 +530,15 @@ def validate_feature_abi_constants(root):
         raise LayoutError("workflow lifecycle v3 no longer preserves its v2 prefix")
     for path in (root / "os" / "agent.h", root / "user" / "include" / "agent.h"):
         public = path.read_text(encoding="utf-8")
+        require_shift_define(public, "AGENT_CAP_TASK_ACCEPT", 13, str(path))
+        require_shift_define(public, "AGENT_IPC_ROUTE_TASK", 63, str(path))
+        if not re.search(
+            r"^#define\s+AGENT_IPC_ROUTE_MASK\s+"
+            r"\(AGENT_IPC_EVENT_MASK\s*\|\s*AGENT_IPC_ROUTE_TASK\)\s*$",
+            public,
+            re.MULTILINE,
+        ):
+            raise LayoutError(f"{path} delegated Task route mask is not frozen")
         for header in (
             "agent_execution_contract_abi.h",
             "agent_file_publish_abi.h",
@@ -521,6 +566,8 @@ def validate_agent_syscall_numbers(root):
         "agent_task_channel_enter": 564,
         "agent_task_channel_resource": 565,
         "agent_file_publish": 566,
+        "agent_task_delegate_claim": 567,
+        "agent_task_delegate_complete": 568,
     }
     paths = (
         root / "os" / "syscall_ids.h",
@@ -689,6 +736,9 @@ def validate_tool_protocol_schema(root):
     user_agent = (root / "user" / "include" / "agent.h").read_text(
         encoding="utf-8"
     )
+    provenance_owner = (root / "os" / "agent_provenance.c").read_text(
+        encoding="utf-8"
+    )
     kernel_caps = set(
         re.findall(r"^#define\s+(AGENT_CAP_[A-Z0-9_]+)\b", kernel_agent, re.MULTILINE)
     )
@@ -696,6 +746,29 @@ def validate_tool_protocol_schema(root):
         re.findall(r"^#define\s+(AGENT_CAP_[A-Z0-9_]+)\b", user_agent, re.MULTILINE)
     )
     capability_names |= kernel_caps & user_caps
+    capability_shifts = [
+        int(shift)
+        for shift in re.findall(
+            r"^#define\s+AGENT_CAP_[A-Z0-9_]+\s+\(1ULL\s*<<\s*(\d+)\)",
+            kernel_agent,
+            re.MULTILINE,
+        )
+    ]
+    capability_accept = re.search(
+        r"^#define\s+AGENT_PROVENANCE_CAP_ALL\s+"
+        r"\(\(1ULL\s*<<\s*(\d+)\)\s*-\s*1ULL\)",
+        provenance_owner,
+        re.MULTILINE,
+    )
+    if (
+        not capability_shifts
+        or capability_accept is None
+        or int(capability_accept.group(1)) != max(capability_shifts) + 1
+    ):
+        raise LayoutError(
+            "Agent provenance capability acceptance mask does not cover the "
+            "public capability registry"
+        )
     provenance_names = set(
         re.findall(
             r"^#define\s+((?:AGENT_PROVENANCE|PROV_)[A-Z0-9_]+)\b",

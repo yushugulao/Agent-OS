@@ -14,7 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = (
     "include/agent_task_channel_abi.h",
     "os/agent.c",
+    "os/agent.h",
     "os/agent_core.c",
+    "os/agent_context.c",
+    "os/agent_context.h",
     "os/agent_execution_contract.c",
     "os/agent_execution_contract.h",
     "os/agent_evidence_ring.c",
@@ -27,10 +30,13 @@ FILES = (
     "os/agent_task_bridge.c",
     "os/agent_task_channel.h",
     "os/agent_task_channel.c",
+    "os/agent_tool_protocol.c",
     "os/proc.c",
     "os/syscall.c",
     "os/trap.c",
     "user/src/agenttask_ucore.c",
+    "user/include/agent.h",
+    "user/lib/syscall.c",
 )
 SOURCES = {
     name: (ROOT / name).read_text(encoding="utf-8")
@@ -84,6 +90,500 @@ def require_order(source: str, needles: tuple[str, ...], message: str) -> None:
         cursor = found
 
 
+def validate_delegated_task(sources: dict[str, str]) -> None:
+    abi = sources["include/agent_task_channel_abi.h"]
+    facade = sources["os/agent.c"]
+    kernel_agent = sources["os/agent.h"]
+    user_agent = sources["user/include/agent.h"]
+    core = sources["os/agent_core.c"]
+    context = sources["os/agent_context.c"]
+    execution = sources["os/agent_execution_contract.c"]
+    bridge = sources["os/agent_task_bridge.c"]
+    channel = sources["os/agent_task_channel.c"]
+    proc = sources["os/proc.c"]
+    syscall = sources["os/syscall.c"]
+    user_syscall = sources["user/lib/syscall.c"]
+    protocol = sources["os/agent_tool_protocol.c"]
+
+    for token in (
+        "#define AGENT_TASK_DELEGATE_CLAIM_SYSCALL   567U",
+        "#define AGENT_TASK_DELEGATE_COMPLETE_SYSCALL 568U",
+        "#define AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL (1U << 0)",
+        "#define AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL (1U << 1)",
+        "struct agent_task_delegate_descriptor",
+        "int ack_terminal_status;",
+        "unsigned int terminal_generation;",
+        "sizeof(struct agent_task_delegate_descriptor) == 56",
+        "sizeof(struct agent_task_delegate_claim_result) == 128",
+        "sizeof(struct agent_task_delegate_complete_result) == 64",
+    ):
+        require(abi, token, f"delegated Task ABI missing: {token}")
+    for public in (kernel_agent, user_agent):
+        require(public, "#define AGENT_CAP_TASK_ACCEPT", "TASK_ACCEPT is not public")
+        require(public, "#define AGENT_IPC_ROUTE_TASK", "TASK route is not public")
+    for token in (
+        "SYS_agent_task_delegate_claim",
+        "SYS_agent_task_delegate_complete",
+        "sys_agent_task_delegate_claim(trapframe->a0",
+        "sys_agent_task_delegate_complete(trapframe->a0",
+    ):
+        require(syscall, token, f"delegated Task syscall dispatch missing: {token}")
+    for token in (
+        "int agent_task_delegate_claim(",
+        "SYS_agent_task_delegate_claim",
+        "int agent_task_delegate_complete(",
+        "SYS_agent_task_delegate_complete",
+    ):
+        require(user_syscall, token, f"delegated Task user wrapper missing: {token}")
+
+    target = function_body(bridge, "agent_task_delegate_target_locked")
+    require_order(
+        target,
+        (
+            "proc_teardown_live(owner)",
+            "AGENT_CAP_ORCHESTRATE",
+            "agent_task_delegate_find_proc_locked(",
+            "agent_task_delegate_lifecycle_matches(target, lifecycle)",
+            "AGENT_CAP_TASK_ACCEPT",
+            "agent_ipc_task_route_allows_locked(owner, target)",
+            "agent_task_delegate_roles_compatible_locked(owner, target, ignore)",
+        ),
+        "delegate target must bind live identities, lifecycle, capability, and route",
+    )
+    roles = function_body(bridge, "agent_task_delegate_roles_compatible_locked")
+    for token in (
+        "owner == target",
+        "slot == ignore",
+        "owner, slot->descriptor.target_pid",
+        "target, slot->owner_pid",
+    ):
+        require(roles, token, f"delegation role-cycle guard missing: {token}")
+    for effect in (
+        "AGENT_SIDE_EFFECT_FILE",
+        "AGENT_SIDE_EFFECT_METADATA",
+        "AGENT_SIDE_EFFECT_IPC",
+        "AGENT_SIDE_EFFECT_PROCESS",
+        "AGENT_SIDE_EFFECT_PERMISSION",
+        "AGENT_SIDE_EFFECT_ARTIFACT",
+    ):
+        require(
+            protocol,
+            effect,
+            f"DELEGATE_TASK manifest lost provider effect: {effect}",
+        )
+    require(
+        protocol,
+        "X(AGENT_CAP_ORCHESTRATE, PROV_ACCEPT_AGENT_LOOP, PROV_DERIVED, "
+        "AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA | "
+        "AGENT_SIDE_EFFECT_IPC | AGENT_SIDE_EFFECT_PROCESS | "
+        "AGENT_SIDE_EFFECT_PERMISSION | AGENT_SIDE_EFFECT_ARTIFACT)",
+        "DELEGATE_TASK must freeze the complete provider-effect envelope",
+    )
+    delegate_input = function_body(bridge, "agent_task_bridge_delegate_input")
+    for token in (
+        "AGENT_TOOL_DELEGATE_TASK",
+        "AGENT_ARTIFACT_TASK",
+        "AGENT_TASK_HANDLE_F_OWNED",
+        "AGENT_TASK_HANDLE_F_BORROWED",
+        "input->length != sizeof(descriptor)",
+        "agent_task_bridge_delegate_descriptor_valid(&descriptor)",
+    ):
+        require(delegate_input, token, f"binary delegated input lost check: {token}")
+
+    submit = function_body(bridge, "agent_task_bridge_delegate_submit")
+    require_order(
+        submit,
+        (
+            "curr_thread() != &p->threads[0]",
+            "slot->state = AGENT_TASK_DELEGATE_SLOT_PREPARING",
+            "agent_execution_task_begin_pending(",
+            "agent_task_delegate_target_locked(",
+            "slot->state = AGENT_TASK_DELEGATE_SLOT_QUEUED",
+            "agent_task_delegate_wake_target_locked(",
+            "return AGENT_TASK_HOOK_PENDING",
+        ),
+        "delegate submit must publish only a real pending Contract task",
+    )
+    validate = function_body(bridge, "agent_task_bridge_validate")
+    require_order(
+        validate,
+        (
+            "agent_task_bridge_op(sqe, input, &op)",
+            "agent_task_delegate_owner_busy_locked(p)",
+            "agent_execution_contract_preflight(",
+        ),
+        "an admitted detached lease must backpressure every later owner submit",
+    )
+
+    claim_prepare = function_body(bridge, "agent_task_delegate_claim_prepare")
+    require_order(
+        claim_prepare,
+        (
+            "thread != &worker->threads[0]",
+            "workflow_lifecycle_active(lifecycle)",
+            "AGENT_CAP_TASK_ACCEPT",
+            "slot->state != AGENT_TASK_DELEGATE_SLOT_CLAIMED",
+            "slot->state != AGENT_TASK_DELEGATE_SLOT_QUEUED",
+            "agent_task_delegate_target_locked(",
+            "selected->state = AGENT_TASK_DELEGATE_SLOT_CLAIMING",
+            "wait_queue_sleep_irq(",
+        ),
+        "claim must replay committed claims and revalidate queued target authority",
+    )
+    claim_finish = function_body(bridge, "agent_task_delegate_claim_finish")
+    require_order(
+        function_body(bridge, "agent_task_delegate_terminal_intent_locked"),
+        (
+            "!slot->terminal_pending",
+            "status == AGENT_STATUS_TIMEOUT",
+            "slot->terminal_status != AGENT_STATUS_TIMEOUT",
+            "++slot->terminal_generation",
+            "slot->terminal_status = status",
+            "slot->terminal_tick = agent_task_bridge_now()",
+        ),
+        "PREPARING/CLAIMING terminal arbitration must preserve one versioned winner",
+    )
+    require_order(
+        claim_finish,
+        (
+            "if (slot->terminal_pending)",
+            "agent_task_delegate_target_locked(",
+            "agent_task_bridge_now() >= slot->sqe.deadline_tick",
+            "agent_provenance_merge_current(",
+            "slot->claim.manifest.accepted_input_labels",
+            "worker->agent_current_cause_sequence",
+            "agent_execution_contract_effect_begin(&slot->claim)",
+            "slot->claim.executor_pid = worker->pid",
+            "slot->state = AGENT_TASK_DELEGATE_SLOT_CLAIMED",
+        ),
+        "claim must authorize provenance and effect before exposing an executor",
+    )
+    effect_pin = function_body(bridge, "agent_task_bridge_effect_pin_locked")
+    require_order(
+        effect_pin,
+        (
+            "slot->state != AGENT_TASK_DELEGATE_SLOT_CLAIMED",
+            "slot->worker_thread_generation",
+            "slot->helper_thread_generation",
+            "~slot->claim.manifest.side_effect_mask",
+            "slot->effect_refs++",
+            "*generation_out = slot->enqueue_sequence",
+        ),
+        "delegated effects need an exact identity/thread/manifest-bound pin",
+    )
+    thread_lease = function_body(
+        bridge, "agent_task_bridge_thread_runtime_transition"
+    )
+    require_order(
+        thread_lease,
+        (
+            "AGENT_THREAD_RUNTIME_ACTIVATE",
+            "parent != &worker->threads[0]",
+            "AGENT_SIDE_EFFECT_PROCESS",
+            "slot->helper_thread_generation =",
+            "AGENT_THREAD_RUNTIME_RELEASE",
+            "slot->helper_thread_generation = 0",
+        ),
+        "artifact helper inheritance must be exact and released",
+    )
+    require(
+        thread_lease,
+        "slot->helper_thread_generation =\n\t\t\t\t\t"
+        "thread->identity_generation;",
+        "artifact helper lease must bind the exact child thread generation",
+    )
+    direct_enter = function_body(
+        execution, "agent_execution_contract_direct_enter"
+    )
+    require_order(
+        direct_enter,
+        (
+            "agent_execution_record_enforced(record, lifecycle)",
+            "agent_task_bridge_effect_pin_locked(",
+            "side_effect_mask",
+            "guard->delegated_active = 1",
+            "record->denial_count++",
+        ),
+        "ENFORCE direct effects must use the exact delegated lease before denial",
+    )
+    release = function_body(execution, "agent_execution_contract_release")
+    require_order(
+        release,
+        (
+            "if (claim->delegated_active)",
+            "agent_task_bridge_effect_unpin_locked(",
+            "claim->active = 0",
+        ),
+        "nested provider tools must release the delegated pin",
+    )
+    sys_claim = function_body(bridge, "sys_agent_task_delegate_claim")
+    require_order(
+        sys_claim,
+        (
+            "agent_task_delegate_claim_prepare(",
+            "agent_task_delegate_claim_finish(",
+            "An OK descriptor is visible only after effect and provenance commit",
+            "copyout(p->pagetable, resultaddr",
+        ),
+        "actionable claim descriptor escaped before the effect barrier",
+    )
+
+    complete = function_body(bridge, "agent_task_delegate_complete_ready")
+    for token in (
+        "AGENT_TASK_DELEGATE_COMPLETE_F_ALL",
+        "complete->ack_terminal_status",
+        "complete->terminal_generation",
+        "agent_task_delegate_receipt_binding_matches(",
+        "slot->worker_completion_recorded",
+        "agent_task_delegate_terminal_intent_locked(",
+        "AGENT_TASK_CHANNEL_RETRY",
+        "AGENT_TASK_DELEGATE_STATE_CLAIMED",
+        "slot->completion_ack_pending = 0",
+        "slot->state = AGENT_TASK_DELEGATE_SLOT_READY",
+        "agent_task_delegate_wake_owner_locked(slot)",
+        "slot->effect_refs != 0",
+        "slot->helper_thread_generation != 0",
+    ):
+        require(complete, token, f"delegated completion/ACK contract missing: {token}")
+    require_order(
+        complete,
+        (
+            "now >= slot->sqe.deadline_tick",
+            "agent_task_delegate_terminal_intent_locked(",
+            "complete->ack_terminal_status != slot->terminal_status",
+            "complete->terminal_generation != slot->terminal_generation",
+            "AGENT_TASK_CHANNEL_RETRY",
+            "slot->terminal_tick = now",
+            "slot->state = AGENT_TASK_DELEGATE_SLOT_READY",
+        ),
+        "ACK must echo the latest deadline-arbitrated offer before READY",
+    )
+    cancel_control = function_body(
+        bridge, "agent_task_delegate_cancel_request_ready"
+    )
+    for token in (
+        "complete->flags != AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL",
+        "complete->terminal_status != AGENT_STATUS_CANCELLED",
+        "AGENT_CAP_ORCHESTRATE",
+        "AGENT_CAP_WAIT_CANCEL",
+        "agent_task_delegate_cancel_receipt_binding_matches(",
+        "agent_ipc_task_route_allows_locked(requester, owner)",
+        "AGENT_TASK_DELEGATE_SLOT_PREPARING",
+        "AGENT_TASK_DELEGATE_SLOT_CLAIMING",
+        "agent_task_channel_delegate_cancel_preflight_locked(",
+        "agent_execution_contract_delegate_cancel_preflight_locked(",
+        "admission == AGENT_EXECUTION_DELEGATE_CANCEL_TIMEOUT",
+        "slot->state == AGENT_TASK_DELEGATE_SLOT_QUEUED",
+        "agent_task_channel_delegate_cancel_locked(",
+        "agent_execution_contract_delegate_cancel_commit_locked(",
+        "agent_task_delegate_terminal_intent_locked(slot, AGENT_STATUS_CANCELLED)",
+        "agent_task_delegate_cancel_receipt_record_locked(",
+        "slot->state = AGENT_TASK_DELEGATE_SLOT_READY",
+    ):
+        require(cancel_control, token, f"delegated cancel control missing: {token}")
+    require_order(
+        cancel_control,
+        (
+            "agent_task_delegate_cancel_receipt_binding_matches(",
+            "agent_task_channel_delegate_cancel_preflight_locked(",
+            "agent_execution_contract_delegate_cancel_preflight_locked(",
+            "agent_task_channel_delegate_cancel_locked(",
+            "agent_execution_contract_delegate_cancel_commit_locked(",
+            "agent_task_delegate_terminal_intent_locked(slot, AGENT_STATUS_CANCELLED)",
+            "agent_task_delegate_cancel_receipt_record_locked(",
+        ),
+        "cancel receipt replay must precede unique terminal arbitration",
+    )
+    require_order(
+        cancel_control,
+        (
+            "admission == AGENT_EXECUTION_DELEGATE_CANCEL_TIMEOUT",
+            "agent_task_delegate_terminal_intent_locked(",
+            "slot->state == AGENT_TASK_DELEGATE_SLOT_QUEUED",
+            "slot->state = AGENT_TASK_DELEGATE_SLOT_READY",
+            "result->status = AGENT_TASK_CHANNEL_STALE",
+        ),
+        "a due unclaimed delegation must expose an authoritative READY timeout",
+    )
+    forbid(
+        cancel_control,
+        'panic("delegated Task control cancel binding")',
+        "a denied owner SQ CANCEL followed by exact control cancel must not panic",
+    )
+    channel_preflight = function_body(
+        channel, "agent_task_channel_delegate_cancel_preflight_locked"
+    )
+    for token in (
+        "agent_task_channel_delegate_cancel_request_locked(",
+        "AGENT_TASK_CHANNEL_OK",
+        "AGENT_TASK_CHANNEL_STALE",
+    ):
+        require(
+            channel_preflight,
+            token,
+            f"cancel control preflight missing: {token}",
+        )
+    channel_cancel = function_body(
+        channel, "agent_task_channel_delegate_cancel_locked"
+    )
+    require_order(
+        channel_cancel,
+        (
+            "agent_task_channel_delegate_cancel_request_locked(",
+            "request->flags &= ~AGENT_TASK_REQUEST_F_CANCEL_DENIED",
+            "request->flags |= AGENT_TASK_REQUEST_F_CANCEL_REQUESTED",
+            "agent_task_channel_publish_locked(state)",
+        ),
+        "cancel control must bind and publish the exact RUNNING Task request",
+    )
+    channel_cancel_binding = function_body(
+        channel, "agent_task_channel_delegate_cancel_request_locked"
+    )
+    require_order(
+        channel_cancel_binding,
+        (
+            "request->state != AGENT_TASK_REQUEST_RUNNING",
+            "request->sqe.tool_id != AGENT_TOOL_DELEGATE_TASK",
+            "return request",
+        ),
+        "cancel control must resolve only the exact delegated RUNNING request",
+    )
+    contract_cancel = function_body(
+        execution, "agent_execution_contract_delegate_cancel_preflight_locked"
+    )
+    require(
+        contract_cancel,
+        "node->cancel_policy != AGENT_EXECUTION_CANCEL_ALLOW",
+        "cooperative delegated cancellation must honor the frozen node policy",
+    )
+    forbid(
+        contract_cancel,
+        "AGENT_EXECUTION_RUNTIME_F_EFFECT_STARTED) != 0",
+        "cooperative cancellation cannot reject an effect that has an ACK boundary",
+    )
+    contract_cancel_commit = function_body(
+        execution, "agent_execution_contract_delegate_cancel_commit_locked"
+    )
+    require_order(
+        contract_cancel_commit,
+        (
+            "runtime->flags |= AGENT_EXECUTION_RUNTIME_F_CANCEL_REQUESTED",
+            "claim->decision_reason = AGENT_EXECUTION_REASON_CANCEL_REQUESTED",
+            "claim->retry_forbidden = 1",
+        ),
+        "cancel admission must commit Contract state only after both preflights",
+    )
+    pump = function_body(bridge, "agent_task_bridge_delegate_pump")
+    require_order(
+        pump,
+        (
+            "slot->state = AGENT_TASK_DELEGATE_SLOT_FINALIZING",
+            "agent_execution_task_finish_pending(",
+            "agent_task_channel_complete(",
+            "agent_task_delegate_receipt_record_locked(slot)",
+            "agent_task_delegate_slot_reset_locked(slot)",
+        ),
+        "only the owner pump may materialize the sole terminal CQE",
+    )
+    completion_valid = function_body(bridge, "agent_task_bridge_completion_valid")
+    require(
+        completion_valid,
+        "agent_task_bridge_handle_null(completion->result)",
+        "delegated CQ output must remain NONE",
+    )
+
+    lifecycle_closed = function_body(bridge, "agent_task_bridge_lifecycle_closed")
+    require_order(
+        lifecycle_closed,
+        (
+            "wait_queue_wake_all(&agent_task_delegate_waiters[i])",
+            "slot->state == AGENT_TASK_DELEGATE_SLOT_CLAIMED",
+            "agent_task_delegate_terminal_intent_locked(",
+            "agent_task_delegate_wake_target_locked(",
+        ),
+        "lifecycle close must wake waiters and request cooperative provider cleanup",
+    )
+    reclaim = function_body(bridge, "agent_task_bridge_reclaim")
+    require_order(
+        reclaim,
+        (
+            "slot->state == AGENT_TASK_DELEGATE_SLOT_READY",
+            "p->teardown_state == PROC_TEARDOWN_QUIESCING",
+            "agent_task_delegate_terminal_intent_locked(",
+            "agent_provenance_current_labels(p)",
+            "slot->state = AGENT_TASK_DELEGATE_SLOT_READY",
+        ),
+        "target completion must wait for the post-sibling-quiescence reclaim pass",
+    )
+    proc_teardown = function_body(facade, "agent_proc_teardown")
+    require_order(
+        proc_teardown,
+        (
+            "agent_core_proc_teardown(p)",
+            "agent_task_bridge_reclaim(p)",
+            "agent_task_bridge_endpoint_active(p)",
+            "agent_task_bridge_reclaim(p)",
+        ),
+        "teardown must publish lifecycle departure then finalize quiesced endpoints",
+    )
+    exit_body = function_body(proc, "exit")
+    require_order(
+        exit_body,
+        (
+            "while (agent_proc_teardown(p) < 0)",
+            "proc_interrupt_siblings(p, t)",
+            "proc_siblings_quiescent(p, t)",
+            "proc_teardown_run(p, t, 1)",
+        ),
+        "target endpoint must not finalize before sibling quiescence",
+    )
+    completion_check = function_body(channel, "agent_task_completion_valid_locked")
+    require(
+        completion_check,
+        "request->sqe.tool_id != AGENT_TOOL_DELEGATE_TASK",
+        "owner teardown INDETERMINATE exception must be tool-scoped",
+    )
+    finish = function_body(core, "agent_execution_task_finish_pending")
+    require_order(
+        finish,
+        (
+            "final_provenance = *provenance_decision",
+            "agent_provenance_current_labels(p)",
+            "claim->executor_agent_id",
+            "result->value0 =",
+            "result->value1 = claim->executor_control_id",
+            "result->value2 = claim->executor_context_sequence",
+            "agent_provenance_commit_tool_output(",
+            "outcome->output_provenance_labels =",
+            "outcome->terminal_tick = now",
+        ),
+        "terminal Context/cache must preserve exact labels and executor attribution",
+    )
+    append_terminal = function_body(core, "agent_execution_append_terminal")
+    require_order(
+        append_terminal,
+        (
+            "agent_context_append_reserved_ticket(",
+            "&context_provenance_labels",
+            "outcome->output_provenance_labels =",
+            "context_provenance_labels",
+            "agent_execution_contract_complete(claim, res, outcome)",
+        ),
+        "Contract cache/CQ labels must equal the labels written to Context",
+    )
+    append_flags = function_body(context, "agent_context_append_flags")
+    require_order(
+        append_flags,
+        (
+            "record.flags = agent_provenance_context_flags(",
+            "*provenance_labels_out =",
+            "AGENT_CONTEXT_PROVENANCE_DECODE(record.flags)",
+            "agent_context_write_record(p, slot, &record)",
+        ),
+        "Context append must return the exact encoded provenance snapshot",
+    )
+
+
 def validate_task_channel(sources: dict[str, str]) -> None:
     abi = sources["include/agent_task_channel_abi.h"]
     facade = sources["os/agent.c"]
@@ -104,6 +604,8 @@ def validate_task_channel(sources: dict[str, str]) -> None:
     syscall = sources["os/syscall.c"]
     trap = sources["os/trap.c"]
     guest = sources["user/src/agenttask_ucore.c"]
+
+    validate_delegated_task(sources)
 
     require(
         abi,
@@ -652,8 +1154,22 @@ def validate_task_channel(sources: dict[str, str]) -> None:
         ),
         "only accepted Tasks may wait uninterruptibly for the Context lane",
     )
-    if core.count("agent_lifecycle_context_lane_enter_accepted_task(") != 1:
-        raise ContractError("accepted-Task lane must have exactly one core call site")
+    accepted_callers = (
+        "agent_execution_task_submit_sync",
+        "agent_execution_task_begin_pending",
+        "agent_execution_task_finish_pending",
+    )
+    for caller in accepted_callers:
+        if function_body(core, caller).count(
+            "agent_lifecycle_context_lane_enter_accepted_task("
+        ) != 1:
+            raise ContractError(
+                f"accepted-Task lane must have one exact call in {caller}"
+            )
+    if core.count("agent_lifecycle_context_lane_enter_accepted_task(") != len(
+        accepted_callers
+    ):
+        raise ContractError("accepted-Task lane leaked outside execution entry points")
     for name, source in sources.items():
         if not name.endswith(".c") or name in (
             "os/agent_core.c",
@@ -1111,7 +1627,9 @@ def validate_task_channel(sources: dict[str, str]) -> None:
         completion_valid,
         r"cancel_due\s*=\s*\(\(request->flags\s*&\s*"
         r"AGENT_TASK_REQUEST_F_CANCEL_REQUESTED\)\s*!=\s*0\s*\|\|\s*"
-        r"dependency_failed\)\s*&&\s*!deadline_due;",
+        r"dependency_failed\)\s*&&\s*!deadline_due\s*&&\s*"
+        r"\(completion->status\s*!=\s*AGENT_STATUS_INDETERMINATE\s*\|\|\s*"
+        r"request->sqe\.tool_id\s*!=\s*AGENT_TOOL_DELEGATE_TASK\);",
         "unlinked dependency cancellation must still be terminal",
     )
     forbid(
@@ -1637,13 +2155,24 @@ def validate_task_channel(sources: dict[str, str]) -> None:
         (
             "workflow_lifecycle_operation_enter(lifecycle)",
             "operation_entered = 1",
-            "id == SYS_agent_task_channel_resource",
-            "agent_execution_contract_file_pin_enter(",
             "ret = syscall_slow_path(",
             "agent_execution_contract_file_pin_leave(&file_pin_guard)",
             "workflow_lifecycle_operation_leave(lifecycle)",
         ),
         "Task import pin/read/settlement must stay inside lifecycle and contract cuts",
+    )
+    slow_path = function_body(syscall, "syscall_slow_path")
+    require_order(
+        slow_path,
+        (
+            "syscall_transaction_prepare(",
+            "id == SYS_agent_task_channel_resource",
+            "transaction->file->type == FD_INODE",
+            "agent_execution_contract_file_pin_enter(",
+            "syscall_transaction_begin(",
+            "syscall_transaction_finish(",
+        ),
+        "Task import inode pin must cover dispatch through transaction settlement",
     )
     rollback = function_body(channel, "agent_task_channel_rollback_import")
     require_order(
@@ -1738,8 +2267,9 @@ def validate_task_channel(sources: dict[str, str]) -> None:
             "while (agent_task_channel_deadline_due(p))",
             "agent_task_channel_expire(",
             "p, agent_task_bridge_now(), &agent_task_bridge_ops",
+            "if (status < 0)",
             "status == 0 && agent_task_channel_deadline_due(p)",
-            "AGENT_TASK_CHANNEL_EVIDENCE",
+            "return expired",
         ),
         "safe point must drain only the scheduled current process",
     )
@@ -1799,24 +2329,21 @@ def validate_task_channel(sources: dict[str, str]) -> None:
         "rollback must reclaim Task state before process resources",
     )
     public_commit = function_body(facade, "agent_exec_public_identity_commit")
-    require(
-        public_commit,
-        "if (agent_task_bridge_active(p))",
-        "PUBLIC exec must test the active channel without a bypass predicate",
-    )
     require_order(
         public_commit,
         (
             "agent_task_bridge_active(p)",
+            "agent_task_bridge_endpoint_active(p)",
             "return -1",
             "agent_core_exec_public_commit(p)",
         ),
-        "PUBLIC exec must reject an active Task Channel before identity commit",
+        "PUBLIC exec must reject a local channel or delegated endpoint before identity commit",
     )
     image_install = function_body(proc, "proc_install_user_image")
     require_order(
         image_install,
         (
+            "agent_exec_image_install_allowed(p)",
             "transition.identity_policy == VFS_EXEC_IDENTITY_PUBLIC",
             "agent_exec_public_identity_commit(p)",
             "vfs_proc_exec_commit(p, &transition)",
@@ -1920,9 +2447,11 @@ def validate_task_channel(sources: dict[str, str]) -> None:
         (
             "agent_task_bridge_handle_null(input->handle)",
             "agent_task_bridge_resource_input(sqe, input)",
-            "memmove(op->payload, input->snapshot, (uint)input->length + 1U)",
+            "memmove(op->payload, input->snapshot, (uint)input->length)",
+            "input->handle.type == AGENT_ARTIFACT_UTF8",
+            "op->payload[input->length] = 0",
         ),
-        "ECHO must receive the immutable resource snapshot as its payload",
+        "Task payload copies must preserve binary descriptors and terminate only UTF-8",
     )
     bridge_resource_input = function_body(
         bridge, "agent_task_bridge_resource_input"
@@ -2480,6 +3009,128 @@ class RetiringContractModel:
         return "DENIED" if task_binding else "CANCELLED"
 
 
+@dataclass
+class DelegatedTaskModel:
+    state: str = "QUEUED"
+    effect_started: bool = False
+    terminal_pending: bool = False
+    terminal_status: str = "OK"
+    terminal_generation: int = 0
+    submitted_status: str | None = None
+    ack_pending: bool = False
+    receipt: tuple[str, str, int] | None = None
+    cancel_receipt: tuple[str, str, int] | None = None
+    channel_cancel_denied: bool = False
+    cqes: int = 0
+
+    def claim(self, *, route: bool, owner_cap: bool, worker_cap: bool,
+              lifecycle: bool, provider_labels_accepted: bool) -> str:
+        if self.state == "CLAIMED":
+            return "OK_REPLAY"
+        if self.state != "QUEUED":
+            return "STALE"
+        if not (route and owner_cap and worker_cap and lifecycle and
+                provider_labels_accepted):
+            self.state = "READY"
+            self.terminal_status = "DENIED"
+            return "STALE"
+        self.effect_started = True
+        self.state = "CLAIMED"
+        return "OK"
+
+    def intent(self, status: str) -> None:
+        if self.state == "READY":
+            return
+        if not self.terminal_pending or (
+            status == "TIMEOUT" and self.terminal_status != "TIMEOUT"
+        ):
+            self.terminal_pending = True
+            self.terminal_status = status
+            self.terminal_generation += 1
+
+    def complete(
+        self,
+        submitted: str,
+        *,
+        ack: bool = False,
+        offered_status: str = "OK",
+        offered_generation: int = 0,
+        deadline_due: bool = False,
+    ) -> tuple[str, str, int]:
+        if self.receipt is not None:
+            expected = (submitted, offered_status, offered_generation)
+            return ("OK" if expected == self.receipt else "STALE",
+                    self.terminal_status, self.terminal_generation)
+        if self.state == "READY":
+            return "STALE", self.terminal_status, self.terminal_generation
+        if self.state != "CLAIMED":
+            return "STALE", self.terminal_status, self.terminal_generation
+        if deadline_due:
+            self.intent("TIMEOUT")
+        if self.ack_pending:
+            if submitted != self.submitted_status:
+                return "STALE", self.terminal_status, self.terminal_generation
+            if not ack:
+                return "RETRY", self.terminal_status, self.terminal_generation
+            if (offered_status != self.terminal_status or
+                    offered_generation != self.terminal_generation):
+                return "RETRY", self.terminal_status, self.terminal_generation
+            self.state = "READY"
+            self.ack_pending = False
+            self.terminal_pending = False
+            self.receipt = (submitted, offered_status, offered_generation)
+            return "OK", self.terminal_status, self.terminal_generation
+        if ack:
+            return "STALE", self.terminal_status, self.terminal_generation
+        self.submitted_status = submitted
+        if self.terminal_pending:
+            self.ack_pending = True
+            return "RETRY", self.terminal_status, self.terminal_generation
+        self.terminal_status = submitted
+        self.state = "READY"
+        self.receipt = (submitted, "OK", 0)
+        return "OK", self.terminal_status, self.terminal_generation
+
+    def request_cancel(
+        self, *, authorized: bool, deadline_due: bool = False
+    ) -> tuple[str, str, int]:
+        if self.cancel_receipt is not None:
+            return self.cancel_receipt
+        if not authorized:
+            return "DENIED", self.terminal_status, self.terminal_generation
+        if self.state == "READY":
+            return "STALE", self.terminal_status, self.terminal_generation
+        if self.state not in ("QUEUED", "CLAIMED"):
+            return "RETRY", self.terminal_status, self.terminal_generation
+        if deadline_due:
+            self.intent("TIMEOUT")
+            if self.state == "QUEUED":
+                self.state = "READY"
+                self.terminal_pending = False
+            return "STALE", self.terminal_status, self.terminal_generation
+        self.channel_cancel_denied = False
+        self.intent("CANCELLED")
+        if self.state == "QUEUED":
+            self.state = "READY"
+            self.terminal_pending = False
+        self.cancel_receipt = (
+            "OK", self.terminal_status, self.terminal_generation
+        )
+        return self.cancel_receipt
+
+    def owner_sq_cancel(self) -> str:
+        if self.state == "CLAIMED":
+            self.channel_cancel_denied = True
+            return "DENIED"
+        return "PENDING"
+
+    def pump(self) -> bool:
+        if self.state != "READY" or self.cqes != 0:
+            return False
+        self.cqes = 1
+        return True
+
+
 class TaskChannelTests(unittest.TestCase):
     def assert_mutation_rejected(
         self, path: str, old: str, new: str, *, count: int = 1
@@ -2489,6 +3140,216 @@ class TaskChannelTests(unittest.TestCase):
 
     def test_current_implementation_satisfies_contract(self) -> None:
         validate_task_channel(SOURCES)
+
+    def test_delegate_claim_authority_and_copyout_replay_model(self) -> None:
+        for missing in ("route", "owner_cap", "worker_cap", "lifecycle",
+                        "provider_labels_accepted"):
+            model = DelegatedTaskModel()
+            gates = dict(route=True, owner_cap=True, worker_cap=True,
+                         lifecycle=True, provider_labels_accepted=True)
+            gates[missing] = False
+            self.assertEqual(model.claim(**gates), "STALE")
+            self.assertFalse(model.effect_started)
+            self.assertEqual(model.terminal_status, "DENIED")
+        model = DelegatedTaskModel()
+        gates = dict(route=True, owner_cap=True, worker_cap=True,
+                     lifecycle=True, provider_labels_accepted=True)
+        self.assertEqual(model.claim(**gates), "OK")
+        self.assertTrue(model.effect_started)
+        self.assertEqual(model.claim(**gates), "OK_REPLAY")
+
+    def test_delegate_deadline_offer_ack_and_unique_cqe_model(self) -> None:
+        model = DelegatedTaskModel()
+        self.assertEqual(model.claim(
+            route=True, owner_cap=True, worker_cap=True, lifecycle=True,
+            provider_labels_accepted=True), "OK")
+        model.intent("INDETERMINATE")
+        self.assertEqual(model.complete("OK"), ("RETRY", "INDETERMINATE", 1))
+        self.assertEqual(
+            model.complete("OK", ack=True, offered_status="INDETERMINATE",
+                           offered_generation=1, deadline_due=True),
+            ("RETRY", "TIMEOUT", 2),
+        )
+        self.assertEqual(
+            model.complete("OK", ack=True, offered_status="TIMEOUT",
+                           offered_generation=2),
+            ("OK", "TIMEOUT", 2),
+        )
+        self.assertTrue(model.pump())
+        self.assertFalse(model.pump())
+        self.assertEqual(model.cqes, 1)
+        self.assertEqual(
+            model.complete("OK", ack=True, offered_status="TIMEOUT",
+                           offered_generation=2),
+            ("OK", "TIMEOUT", 2),
+        )
+        self.assertEqual(
+            model.complete("BAD_REQUEST", ack=True, offered_status="TIMEOUT",
+                           offered_generation=2)[0],
+            "STALE",
+        )
+
+    def test_delegate_ready_winner_is_immutable_model(self) -> None:
+        model = DelegatedTaskModel()
+        self.assertEqual(model.claim(
+            route=True, owner_cap=True, worker_cap=True, lifecycle=True,
+            provider_labels_accepted=True), "OK")
+        self.assertEqual(model.complete("OK"), ("OK", "OK", 0))
+        model.intent("TIMEOUT")
+        self.assertEqual(model.state, "READY")
+        self.assertEqual(model.receipt, ("OK", "OK", 0))
+        self.assertTrue(model.pump())
+        self.assertEqual(model.cqes, 1)
+
+    def test_delegate_cancel_control_receipt_and_terminal_races_model(self) -> None:
+        model = DelegatedTaskModel()
+        self.assertEqual(model.request_cancel(authorized=False)[0], "DENIED")
+        self.assertEqual(model.claim(
+            route=True, owner_cap=True, worker_cap=True, lifecycle=True,
+            provider_labels_accepted=True), "OK")
+        accepted = model.request_cancel(authorized=True)
+        self.assertEqual(accepted, ("OK", "CANCELLED", 1))
+        model.intent("TIMEOUT")
+        self.assertEqual(
+            model.request_cancel(authorized=True), accepted,
+            "lost cancel result must replay even after deadline precedence changes",
+        )
+        self.assertEqual(model.complete("OK"), ("RETRY", "TIMEOUT", 2))
+
+        override = DelegatedTaskModel()
+        self.assertEqual(override.claim(
+            route=True, owner_cap=True, worker_cap=True, lifecycle=True,
+            provider_labels_accepted=True), "OK")
+        self.assertEqual(override.owner_sq_cancel(), "DENIED")
+        self.assertTrue(override.channel_cancel_denied)
+        self.assertEqual(
+            override.request_cancel(authorized=True), ("OK", "CANCELLED", 1)
+        )
+        self.assertFalse(override.channel_cancel_denied)
+
+        completed = DelegatedTaskModel()
+        self.assertEqual(completed.claim(
+            route=True, owner_cap=True, worker_cap=True, lifecycle=True,
+            provider_labels_accepted=True), "OK")
+        self.assertEqual(completed.complete("OK"), ("OK", "OK", 0))
+        self.assertEqual(
+            completed.request_cancel(authorized=True), ("STALE", "OK", 0)
+        )
+
+        queued_due = DelegatedTaskModel()
+        self.assertEqual(
+            queued_due.request_cancel(authorized=True, deadline_due=True),
+            ("STALE", "TIMEOUT", 1),
+        )
+        self.assertEqual(queued_due.state, "READY")
+        self.assertFalse(queued_due.terminal_pending)
+        self.assertTrue(queued_due.pump())
+        self.assertEqual(queued_due.cqes, 1)
+
+    def test_delegate_security_barrier_and_ack_mutations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "!agent_identity_has_cap(target, AGENT_CAP_TASK_ACCEPT)",
+                "!agent_identity_has_cap(target, AGENT_CAP_ORCHESTRATE)",
+            ),
+            (
+                "!agent_ipc_task_route_allows_locked(owner, target)",
+                "!agent_ipc_route_allows_locked(owner, target)",
+            ),
+            (
+                "agent_provenance_merge_current(\n\t\t    worker, provenance_labels)",
+                "AGENT_STATUS_OK",
+            ),
+            (
+                "~slot->claim.manifest.accepted_input_labels",
+                "~AGENT_PROVENANCE_ALL",
+            ),
+            (
+                "effect = agent_execution_contract_effect_begin(&slot->claim);",
+                "effect = AGENT_EXECUTION_EFFECT_ALLOWED;",
+            ),
+            (
+                "complete->terminal_generation != slot->terminal_generation",
+                "complete->terminal_generation == slot->terminal_generation",
+            ),
+            (
+                "agent_task_channel_complete(",
+                "agent_task_channel_enter(",
+            ),
+            (
+                "p->teardown_state == PROC_TEARDOWN_QUIESCING",
+                "p->teardown_state != PROC_TEARDOWN_QUIESCING",
+            ),
+            (
+                "!agent_identity_has_cap(requester, AGENT_CAP_WAIT_CANCEL)",
+                "!agent_identity_has_cap(requester, AGENT_CAP_TASK_ACCEPT)",
+            ),
+            (
+                "!agent_ipc_task_route_allows_locked(requester, owner)",
+                "!agent_ipc_task_route_allows_locked(owner, requester)",
+            ),
+            (
+                "channel_status = agent_task_channel_delegate_cancel_preflight_locked(",
+                "channel_status = AGENT_TASK_CHANNEL_OK; /* bypass */ (",
+            ),
+        )
+        for old, new in mutations:
+            with self.subTest(mutation=old):
+                self.assert_mutation_rejected(
+                    "os/agent_task_bridge.c", old, new
+                )
+
+        self.assert_mutation_rejected(
+            "os/agent_task_channel.c",
+            "request->flags &= ~AGENT_TASK_REQUEST_F_CANCEL_DENIED;",
+            "request->flags |= AGENT_TASK_REQUEST_F_CANCEL_DENIED;",
+        )
+
+    def test_delegate_effect_lease_mutations_are_rejected(self) -> None:
+        mutations = (
+            (
+                "os/agent_task_bridge.c",
+                "if (owner == 0 || target == 0 || owner == target)",
+                "if (owner == 0 || target == 0)",
+            ),
+            (
+                "os/agent_task_bridge.c",
+                "~slot->claim.manifest.side_effect_mask",
+                "~AGENT_PROVENANCE_ALL",
+            ),
+            (
+                "os/agent_execution_contract.c",
+                "if (agent_task_bridge_effect_pin_locked(",
+                "if (0 && task_bridge_effect_pin_locked(",
+            ),
+            (
+                "os/agent_task_bridge.c",
+                "slot->helper_thread_generation =\n\t\t\t\t\t"
+                "thread->identity_generation;",
+                "slot->helper_thread_generation = 0;",
+            ),
+            (
+                "os/agent_task_bridge.c",
+                "slot->effect_refs != 0 || slot->helper_thread_generation != 0",
+                "slot->effect_refs != 0",
+            ),
+            (
+                "os/agent_core.c",
+                "outcome->output_provenance_labels =\n\t\t\t"
+                "context_provenance_labels;",
+                "outcome->output_provenance_labels = 0;",
+            ),
+            (
+                "os/agent_tool_protocol.c",
+                "AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA | "
+                "AGENT_SIDE_EFFECT_IPC | AGENT_SIDE_EFFECT_PROCESS | "
+                "AGENT_SIDE_EFFECT_PERMISSION | AGENT_SIDE_EFFECT_ARTIFACT)",
+                "AGENT_SIDE_EFFECT_IPC)",
+            ),
+        )
+        for path, old, new in mutations:
+            with self.subTest(path=path, mutation=old):
+                self.assert_mutation_rejected(path, old, new)
 
     def test_sqe_width_mutation_is_rejected(self) -> None:
         self.assert_mutation_rejected(
@@ -2708,7 +3569,13 @@ class TaskChannelTests(unittest.TestCase):
         )
         for path, old, new in mutations:
             with self.subTest(path=path, old=old):
-                self.assert_mutation_rejected(path, old, new)
+                if path == "os/agent_core.c" and old == "outcome->terminal_tick = now;":
+                    with self.assertRaises(ContractError):
+                        validate_task_channel(
+                            mutated_occurrence(path, old, new, 3)
+                        )
+                else:
+                    self.assert_mutation_rejected(path, old, new)
 
     def test_dependency_link_truth_table_mutations_are_rejected(self) -> None:
         mutations = (
@@ -2885,7 +3752,9 @@ class TaskChannelTests(unittest.TestCase):
 
     def test_deadline_precedence_mutation_is_rejected(self) -> None:
         self.assert_mutation_rejected(
-            "os/agent_task_channel.c", "\t\t!deadline_due;", "\t\tdeadline_due;"
+            "os/agent_task_channel.c",
+            "\t\t!deadline_due &&",
+            "\t\tdeadline_due &&",
         )
 
     def test_validate_terminal_is_deferred_to_submit(self) -> None:
@@ -2896,8 +3765,10 @@ class TaskChannelTests(unittest.TestCase):
         )
         self.assert_mutation_rejected(
             "os/agent_task_bridge.c",
-            "return AGENT_TASK_HOOK_PENDING;",
-            "return AGENT_TASK_HOOK_COMPLETE;",
+            "validation->output_provenance_labels = 0;\n"
+            "\treturn AGENT_TASK_HOOK_PENDING;",
+            "validation->output_provenance_labels = 0;\n"
+            "\treturn AGENT_TASK_HOOK_COMPLETE;",
         )
 
     def test_due_dependency_terminal_mutation_is_rejected(self) -> None:
@@ -3037,10 +3908,11 @@ class TaskChannelTests(unittest.TestCase):
     def test_public_exec_active_channel_mutation_is_rejected(self) -> None:
         self.assert_mutation_rejected(
             "os/agent.c",
-            "if (agent_task_bridge_active(p))\n"
+            "if (agent_task_bridge_active(p) ||\n"
+            "\t    agent_task_bridge_endpoint_active(p))\n"
             "\t\treturn -1;\n"
             "\treturn agent_core_exec_public_commit(p);",
-            "if (0 && agent_task_bridge_active(p))\n"
+            "if (agent_task_bridge_active(p))\n"
             "\t\treturn -1;\n"
             "\treturn agent_core_exec_public_commit(p);",
         )
@@ -3159,7 +4031,7 @@ class TaskChannelTests(unittest.TestCase):
             ),
             (
                 "id == SYS_read || id == SYS_write || id == SYS_fstat ||\n"
-                "\t\t    id == SYS_agent_task_channel_resource",
+                "\t     id == SYS_agent_task_channel_resource",
                 "id == SYS_read || id == SYS_write || id == SYS_fstat",
             ),
         )
@@ -3213,7 +4085,7 @@ class TaskChannelTests(unittest.TestCase):
                 "imported->producer_control_id = control->source_handle;",
             ),
             (
-                "memmove(op->payload, input->snapshot, (uint)input->length + 1U);",
+                "memmove(op->payload, input->snapshot, (uint)input->length);",
                 "memset(op->payload, 0, sizeof(op->payload));",
             ),
             (

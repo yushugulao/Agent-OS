@@ -89,6 +89,7 @@ void agent_ipc_thread_sched_snapshot(struct thread *,
 int agent_ipc_watch_set(struct proc *, int, char *);
 int agent_ipc_deliver_pid(int, struct proc *, int, uint64, uint64, char *,
 			  int, int *);
+int agent_ipc_task_route_allows_locked(struct proc *, struct proc *);
 int agent_ipc_deliver_watchers(struct proc *, int, uint64, uint64, char *);
 int agent_ipc_deliver_live_event(struct proc *, struct proc *, int, uint64,
 				 uint64, char *, int);
@@ -143,6 +144,9 @@ struct agent_execution_direct_guard;
 struct agent_execution_outcome;
 struct agent_execution_binding;
 struct agent_execution_preflight_result;
+struct agent_execution_claim;
+struct agent_provenance_decision;
+struct resource_phase_lease;
 struct agent_op;
 struct agent_result;
 uint64 agent_observe_commit_context_reserved_ticket(
@@ -160,6 +164,18 @@ int agent_execution_task_submit_sync(
 	struct proc *, struct agent_op *,
 	const struct agent_execution_binding *, uint64, uint,
 	struct agent_result *, struct agent_execution_outcome *);
+#define AGENT_EXECUTION_TASK_BEGIN_PENDING  0
+#define AGENT_EXECUTION_TASK_BEGIN_COMPLETE 1
+#define AGENT_EXECUTION_TASK_BEGIN_DENIED   2
+int agent_execution_task_begin_pending(
+	struct proc *, struct agent_op *, const struct agent_execution_binding *,
+	uint64, uint, struct agent_execution_claim *,
+	struct agent_provenance_decision *, struct resource_phase_lease *,
+	struct agent_result *, struct agent_execution_outcome *);
+int agent_execution_task_finish_pending(
+	struct proc *, struct agent_op *, struct agent_execution_claim *,
+	const struct agent_provenance_decision *, struct resource_phase_lease *,
+	int, uint64, struct agent_result *, struct agent_execution_outcome *);
 int agent_execution_force_cancel_sync(
 	struct proc *, const struct agent_execution_cancel_request *,
 	struct agent_result *, struct agent_execution_outcome *);

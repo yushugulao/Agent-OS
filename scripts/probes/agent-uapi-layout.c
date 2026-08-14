@@ -288,11 +288,51 @@ ABI_OFFSET(struct agent_file_publish_request, payload_size,
 ABI_VALUE(AGENT_TASK_CHANNEL_SETUP_SYSCALL, task_channel_setup_syscall);
 ABI_VALUE(AGENT_TASK_CHANNEL_ENTER_SYSCALL, task_channel_enter_syscall);
 ABI_VALUE(AGENT_TASK_CHANNEL_RESOURCE_SYSCALL, task_channel_resource_syscall);
+ABI_VALUE(AGENT_TASK_DELEGATE_CLAIM_SYSCALL, task_delegate_claim_syscall);
+ABI_VALUE(AGENT_TASK_DELEGATE_COMPLETE_SYSCALL,
+	  task_delegate_complete_syscall);
 ABI_VALUE(AGENT_TASK_CHANNEL_VERSION, task_channel_version);
 ABI_VALUE(AGENT_TASK_CHANNEL_ENTRY_VERSION, task_channel_entry_version);
 ABI_VALUE(AGENT_TASK_CHANNEL_CAPACITY, task_channel_capacity);
 ABI_VALUE(AGENT_TASK_CHANNEL_SCHEMA_SIZE, task_channel_schema_size);
 ABI_VALUE(AGENT_TASK_RESOURCE_UTF8_MAX, task_resource_utf8_max);
+ABI_VALUE(AGENT_TASK_DELEGATE_VERSION, task_delegate_version);
+ABI_VALUE(AGENT_TASK_DELEGATE_DESCRIPTOR_VERSION,
+	  task_delegate_descriptor_version);
+ABI_VALUE(AGENT_TASK_DELEGATE_CLAIM_F_WAIT,
+	  task_delegate_claim_f_wait);
+ABI_VALUE(AGENT_TASK_DELEGATE_CLAIM_F_ALL,
+	  task_delegate_claim_f_all);
+ABI_VALUE(AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL,
+	  task_delegate_complete_f_ack_terminal);
+ABI_VALUE(AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL,
+	  task_delegate_complete_f_request_cancel);
+ABI_VALUE(AGENT_TASK_DELEGATE_COMPLETE_F_ALL,
+	  task_delegate_complete_f_all);
+ABI_VALUE(((AGENT_IPC_ROUTE_MASK >> 0) & 0xffU) + 1U,
+	  agent_ipc_route_mask_byte0_plus_one);
+ABI_VALUE(((AGENT_IPC_ROUTE_MASK >> 8) & 0xffU) + 1U,
+	  agent_ipc_route_mask_byte1_plus_one);
+ABI_VALUE(((AGENT_IPC_ROUTE_MASK >> 16) & 0xffU) + 1U,
+	  agent_ipc_route_mask_byte2_plus_one);
+ABI_VALUE(((AGENT_IPC_ROUTE_MASK >> 24) & 0xffU) + 1U,
+	  agent_ipc_route_mask_byte3_plus_one);
+ABI_VALUE(((AGENT_IPC_ROUTE_MASK >> 32) & 0xffU) + 1U,
+	  agent_ipc_route_mask_byte4_plus_one);
+ABI_VALUE(((AGENT_IPC_ROUTE_MASK >> 40) & 0xffU) + 1U,
+	  agent_ipc_route_mask_byte5_plus_one);
+ABI_VALUE(((AGENT_IPC_ROUTE_MASK >> 48) & 0xffU) + 1U,
+	  agent_ipc_route_mask_byte6_plus_one);
+ABI_VALUE(((AGENT_IPC_ROUTE_MASK >> 56) & 0xffU) + 1U,
+	  agent_ipc_route_mask_byte7_plus_one);
+ABI_VALUE(AGENT_TASK_DELEGATE_STATE_QUEUED,
+	  task_delegate_state_queued);
+ABI_VALUE(AGENT_TASK_DELEGATE_STATE_CLAIMED,
+	  task_delegate_state_claimed);
+ABI_VALUE(AGENT_TASK_DELEGATE_STATE_READY,
+	  task_delegate_state_ready);
+ABI_VALUE(AGENT_TASK_DELEGATE_EXECUTOR_AGENT_SHIFT,
+	  task_delegate_executor_agent_shift);
 ABI_VALUE(AGENT_TASK_CHANNEL_RING_F_ALL, task_channel_ring_f_all);
 ABI_VALUE(AGENT_TASK_CHANNEL_SETUP_F_SINGLE_ISSUER,
 	  task_channel_setup_f_single_issuer);
@@ -471,6 +511,102 @@ ABI_OFFSET(struct agent_task_channel_resource_result, generation,
 	   task_channel_resource_result);
 ABI_OFFSET(struct agent_task_channel_resource_result, references,
 	   task_channel_resource_result);
+ABI_RECORD(struct agent_task_delegate_descriptor, task_delegate_descriptor,
+	   version, reserved);
+ABI_OFFSET(struct agent_task_delegate_descriptor, size,
+	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, target_pid,
+	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, target_agent_id,
+	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, task_type,
+	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, target_control_id,
+	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, task_id,
+	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, correlation_id,
+	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, parent_task_id,
+	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, capsule_handle,
+	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, flags,
+	   task_delegate_descriptor);
+ABI_RECORD(struct agent_task_delegate_claim, task_delegate_claim,
+	   version, reserved_tail);
+ABI_OFFSET(struct agent_task_delegate_claim, size, task_delegate_claim);
+ABI_OFFSET(struct agent_task_delegate_claim, flags, task_delegate_claim);
+ABI_OFFSET(struct agent_task_delegate_claim, lifecycle,
+	   task_delegate_claim);
+ABI_RECORD(struct agent_task_delegate_claim_result,
+	   task_delegate_claim_result, version, slot_generation);
+ABI_OFFSET(struct agent_task_delegate_claim_result, size,
+	   task_delegate_claim_result);
+ABI_OFFSET(struct agent_task_delegate_claim_result, status,
+	   task_delegate_claim_result);
+ABI_OFFSET(struct agent_task_delegate_claim_result, state,
+	   task_delegate_claim_result);
+ABI_OFFSET(struct agent_task_delegate_claim_result, lifecycle,
+	   task_delegate_claim_result);
+ABI_OFFSET(struct agent_task_delegate_claim_result, descriptor,
+	   task_delegate_claim_result);
+ABI_OFFSET(struct agent_task_delegate_claim_result, owner_pid,
+	   task_delegate_claim_result);
+ABI_OFFSET(struct agent_task_delegate_claim_result, owner_agent_id,
+	   task_delegate_claim_result);
+ABI_OFFSET(struct agent_task_delegate_claim_result, owner_control_id,
+	   task_delegate_claim_result);
+ABI_OFFSET(struct agent_task_delegate_claim_result, channel_generation,
+	   task_delegate_claim_result);
+ABI_OFFSET(struct agent_task_delegate_claim_result, request_id,
+	   task_delegate_claim_result);
+ABI_RECORD(struct agent_task_delegate_complete, task_delegate_complete,
+	   version, terminal_generation);
+ABI_OFFSET(struct agent_task_delegate_complete, size,
+	   task_delegate_complete);
+ABI_OFFSET(struct agent_task_delegate_complete, flags,
+	   task_delegate_complete);
+ABI_OFFSET(struct agent_task_delegate_complete, lifecycle,
+	   task_delegate_complete);
+ABI_OFFSET(struct agent_task_delegate_complete, owner_pid,
+	   task_delegate_complete);
+ABI_OFFSET(struct agent_task_delegate_complete, terminal_status,
+	   task_delegate_complete);
+ABI_OFFSET(struct agent_task_delegate_complete, owner_control_id,
+	   task_delegate_complete);
+ABI_OFFSET(struct agent_task_delegate_complete, channel_generation,
+	   task_delegate_complete);
+ABI_OFFSET(struct agent_task_delegate_complete, request_id,
+	   task_delegate_complete);
+ABI_OFFSET(struct agent_task_delegate_complete, slot_generation,
+	   task_delegate_complete);
+ABI_OFFSET(struct agent_task_delegate_complete, task_id,
+	   task_delegate_complete);
+ABI_OFFSET(struct agent_task_delegate_complete, correlation_id,
+	   task_delegate_complete);
+ABI_OFFSET(struct agent_task_delegate_complete, ack_terminal_status,
+	   task_delegate_complete);
+ABI_RECORD(struct agent_task_delegate_complete_result,
+	   task_delegate_complete_result, version, terminal_generation);
+ABI_OFFSET(struct agent_task_delegate_complete_result, terminal_status,
+	   task_delegate_complete_result);
+ABI_OFFSET(struct agent_task_delegate_complete_result, size,
+	   task_delegate_complete_result);
+ABI_OFFSET(struct agent_task_delegate_complete_result, status,
+	   task_delegate_complete_result);
+ABI_OFFSET(struct agent_task_delegate_complete_result, state,
+	   task_delegate_complete_result);
+ABI_OFFSET(struct agent_task_delegate_complete_result, channel_generation,
+	   task_delegate_complete_result);
+ABI_OFFSET(struct agent_task_delegate_complete_result, request_id,
+	   task_delegate_complete_result);
+ABI_OFFSET(struct agent_task_delegate_complete_result, slot_generation,
+	   task_delegate_complete_result);
+ABI_OFFSET(struct agent_task_delegate_complete_result, task_id,
+	   task_delegate_complete_result);
+ABI_OFFSET(struct agent_task_delegate_complete_result, correlation_id,
+	   task_delegate_complete_result);
 ABI_VALUE(AGENT_RUN_F_FENCE, agent_run_f_fence);
 ABI_VALUE(AGENT_WORKFLOW_FENCE_VERSION, workflow_fence_version);
 ABI_VALUE(AGENT_WORKFLOW_FENCE_RECEIPT_F_PARTIAL_COVERAGE,

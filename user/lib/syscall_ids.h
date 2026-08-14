@@ -356,3 +356,5 @@
 #define SYS_agent_task_channel_enter 564
 #define SYS_agent_task_channel_resource 565
 #define SYS_agent_file_publish 566
+#define SYS_agent_task_delegate_claim 567
+#define SYS_agent_task_delegate_complete 568

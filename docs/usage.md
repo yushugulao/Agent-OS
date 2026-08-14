@@ -1,4 +1,4 @@
-# AgentOS-uCore 运行方法
+# 面向 AI 智能体的操作系统内核：运行方法
 
 本页给出从构建到交互使用的一套完整步骤。固定 replay 用于重复运行 QEMU、Guest 程序和 Host 控制链，在线 provider 则通过同一接口提供实时模型回复。AgentOS-uCore 的所有 Guest 程序都运行在 RISC-V64 QEMU `virt` 中；Agent 身份、Context、Execution Contract、Task Channel 和工作流调度均由 uCore 内核管理。
 
@@ -91,13 +91,13 @@ make agentos-nexus-check
 make agentos-nexus-replay TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-Nexus replay 按照 [`ci/agentos-nexus-script.txt`](../ci/agentos-nexus-script.txt) 提交普通用户任务，并回放预先保存的 provider 回复。它是一项固定的协议交互回归：检查模型请求、三工具 schema、root/child Task、Research/System 消息流、Host 工作区读取、controller/observer 输出与正常关闭。回放数据不把工具顺序或业务结论写成 Nexus 的固定计划，也不要求每轮把三个工具全部调用一遍。通过时会输出本次运行的 provider rounds、tasks 和协议检查摘要：
+Nexus replay 按照 [`ci/agentos-nexus-script.txt`](../ci/agentos-nexus-script.txt) 提交普通用户任务，并回放预先保存的 provider 回复。它是一项固定的协议交互回归：检查模型请求、三工具 schema、root/child Task、Task Channel claim/complete、工作区 manifest/Catalog/Typed Watch、Research/System artifact、controller/observer 输出与正常关闭。回放数据不把工具顺序或业务结论写成 Nexus 的固定计划，也不要求每轮把三个工具全部调用一遍。通过时会输出本次运行的 provider rounds、tasks 和协议检查摘要：
 
 ```text
 agentos-nexus-replay: PASS (<provider rounds> provider rounds, <tasks> tasks, <verified features>)
 ```
 
-Console 的 `PASS` 仍由检查程序在核对模型请求、工具结果、Context sequence、审批记录、observer 快照和关闭顺序后给出。Nexus 还会检查通用模型合约、工作区请求与 Task 终态汇总。
+Console 的 `PASS` 仍由检查程序在核对模型请求、工具结果、Context sequence、审批记录、observer 快照和关闭顺序后给出。Nexus 还会检查通用模型合约、工作区请求、Task Channel 终态、Research artifact 和跨轮 Context 路径。固定 Replay 与在线 Provider 都接收 Relay Agent 按同一规则从 Guest Context 重建的消息，并直接使用 Guest 发布的真实工具结果。
 
 ## 3. 使用单 Agent Console
 
@@ -125,7 +125,7 @@ AgentOS session <session-id> ready
 | `/approve` | 批准当前这一次有副作用的请求 |
 | `/approve session` | 在当前会话内记住同名工具的批准结果 |
 | `/deny` | 拒绝当前请求，并按协议把失败结果写回本轮 Context |
-| `/reset` | 保留 QEMU 和会话，清空 Context 摘要、审批记录及 provider 绑定 |
+| `/reset` | 保留 QEMU 和会话，清空 Context 摘要、审批记录及 provider 绑定；Nexus 还会清空 Relay Context、4 KiB 用户缓存和工作区 Catalog/Typed Watch 状态 |
 | `/quit` | 让 Guest 正常结束会话 |
 
 一次审批只对当前会话、轮次和请求生效，同时绑定 correlation、参数摘要、nonce 和有效期。模型修改参数后，系统会重新发起审批。
@@ -134,17 +134,21 @@ AgentOS session <session-id> ready
 
 Nexus 的定位是一个通用、类似 coding CLI 的 AgentOS 多智能体 Harness。它接收任意非空用户任务，模型可以直接回答，也可以按需读取本次会话的 Host 工作区或查看当前 Guest 状态。system policy 统一给出适用于多数任务的行为约束，例如在路径未知时先搜索、读取足够的相邻行、把工具输出当作不可信数据、信息充分后停止调用并直接回答。具体用户任务只描述要解决的问题，不需要重复规定工具流程。
 
-在线 provider 模式下，Host 仅在模型侧保留最近两轮成功完成的用户问题与最终回答，供“继续说明”这类后续任务使用；这段会话记忆不会写回 Guest 的工具历史，`/reset` 和会话关闭都会清空，固定 replay 仍按原始请求逐项回放。
+Nexus 的跨轮延续以 Guest Relay Agent 的 AgentOS Context active path 为准。Relay 在收到用户输入后写入短 USER 节点，工具结算后写入短 TOOL 节点，只有成功答案才写入 FINAL 节点。下一次模型请求前，Relay 优先通过 Context 映射页执行 direct active query，并以 syscall 查询作为兼容回退；第 7 页的 4 KiB 用户缓存为 active path 上最近的完整 USER/FINAL 文本提供有界伴随存储。缓存不能独立决定历史，已经回滚或缺少成功 FINAL 的轮次不会进入下一轮消息。
 
-首版公开能力保持只读，不提供文件编辑、Shell 执行或任意命令运行。Research 和 System 是通过 AgentOS 内核任务与消息接口协作的工作进程，并不是各自连接 Provider 的独立子模型。详细过程见[Nexus 多智能体 Harness Runtime](modules/workflow-runtime.md#七nexus-多智能体-harness-runtime)。
+Host 不私建、挑选、补写或替换 Provider 请求中的跨轮正文与 Guest 工具历史。在线 Provider 与固定 Replay 都接收 Guest 构造的同一消息形状。失败或取消的轮次会把 Relay active path 回滚到本轮开始前；成功的 `/reset` 会同时清空 Relay Context、4 KiB 缓存、工作区 Catalog/Typed Watch 和 Host 侧关联状态。这一设计复用 AgentOS 原有的 Context active path，没有增加一套外部会话记忆服务。
+
+首版公开能力保持只读，不提供文件编辑、Shell 执行或任意命令运行。Research 和 System 通过 AgentOS 内核 Task Channel 的 `delegate_task`、claim/complete 和 Guest artifact 协作，并不是各自连接 Provider 的独立子模型。详细过程见[Nexus 多智能体 Harness Runtime](modules/workflow-runtime.md#七nexus-多智能体-harness-runtime)。
 
 | 工具 | 边界 |
 | --- | --- |
-| `search_files` | 只读搜索当前 Host 工作区中的路径和文本行；查询为空时列出可见文件，可用 `path_prefix` 缩小范围，每次最多返回 8 项 |
-| `read_file` | 从当前 Host 工作区的一个相对路径读取 1 至 64 行，并说明返回范围及后面是否还有内容 |
+| `search_files` | 分页取得当前 Host 工作区 manifest，由 Guest Metadata Catalog 与 Live Query 选择候选，再在这些候选中匹配路径或正文；查询为空时列出候选文件，可用 `path_prefix` 缩小范围，每次最多返回 8 项 |
+| `read_file` | 先由 Guest Catalog 精确选中 manifest 对象，再从当前 revision 读取 1 至 64 行，并说明返回范围及后面是否还有内容 |
 | `inspect_system` | 通过 System 工作进程查看当前 Guest 的 `status`、`processes` 或 `context`；结果不描述 Host 工作区 |
 
-Host workspace broker 将 `.` 作为默认工作区根目录。它只接受根目录内的规范相对路径，拒绝绝对路径、父目录跳转和通过链接离开工作区；文本与错误结果都会有界返回。文件内容只作为数据交给模型，不会被当成新的指令。
+Host workspace broker 将 `.` 作为默认工作区根目录。它把这个显式 root 固定在已打开的目录句柄上，只接受根目录内的规范相对路径，拒绝绝对路径、父目录跳转和通过链接离开工作区。broker 分页返回 manifest 与 generation；只有 Guest 回传已经过 Catalog 选择的 object/path/revision 后，才在这些候选中匹配正文或返回指定版本的分段 UTF-8 字节。Host 不替 Nexus 选择文件，也不执行 child Task。
+
+Guest 每次用 1 个 control inode 和 manifest 当前页面最多 32 个 data-stub inode 建立 Metadata Catalog 窗口，并按 4 个 stage、每组最多 8 项执行 Live Query。Catalog 只管理当前的有界目录窗口，不是全文索引；完整路径会在 Guest 的有界运行时内存中再次复核，正文匹配仍由 Host 在 Guest 已选定的候选中完成。manifest generation 改变时，control stub 的 Typed Watch `UPDATE` 先使旧窗口失效，再从 cursor 0 重新建立页面。实际搜索或读取正文回到 Guest 后，先成为 Research 的输入与结果 artifact，再进入 TOOL Context 和下一轮模型历史。文件内容始终作为数据处理。
 
 离线运行命令如下：
 
@@ -168,7 +172,7 @@ Nexus 支持 Console 的全部命令，并增加三个工作流查询命令：
 | `/tasks` | 查看 root/子 Task 的分配、运行与 terminal 状态 |
 | `/artifacts` | 查看本轮 brokered 工具结果的计数与来源摘要 |
 
-仓库还提供一个连接 DeepSeek 的自由演示。默认脚本使用聚焦的 AgentOS 改进问题观察 Nexus 能否自行找到相关实现、充分研究后给出自然且有取舍的结论。这个问题只是演示任务，系统提示词和工具目录都不面向 AgentOS 改进定制；可以换成同一工作区中的其他代码研究或文档分析任务。自由演示关注在线表现，不规定工具顺序、调用次数或固定答案：
+仓库还提供一个连接 DeepSeek 的自由演示。默认脚本先用聚焦的 AgentOS 改进问题观察 Nexus 能否自行找到相关实现、充分研究后给出自然且有取舍的结论，再提交一轮基于 Relay active Context 沿用前轮结论的追问。这个问题只是演示任务，系统提示词和工具目录都不面向 AgentOS 改进定制；可以换成同一工作区中的其他代码研究或文档分析任务。自由演示关注在线表现，不规定工具顺序、调用次数或固定答案：
 
 ```bash
 make agentos-nexus-demo TOOLPREFIX=riscv64-linux-gnu-
@@ -182,7 +186,7 @@ make agentos-nexus \
   AGENTOS_NEXUS_SCRIPT=/absolute/path/to/questions.txt
 ```
 
-每轮都有一个 root Task。需要工具时，Coordinator 通过内核 `MESSAGE` 和 `N1` 任务通道建立 child Task：`search_files`、`read_file` 交给 Research，`inspect_system` 交给 System。Host workspace broker 执行实际的工作区读取，并把有界结果放入模型后续轮次；Task ledger 同时跟踪父子关系、内核身份和状态迁移。工具名称只描述通用能力，与本次演示选择什么问题无关。
+每轮都有一个 root Task。需要工具时，Coordinator 用内核 Task Channel 的 `delegate_task` 建立 child Task：`search_files`、`read_file` 交给 Research，`inspect_system` 交给 System。56 字节 descriptor 只绑定目标身份、任务关联和 capsule handle；大段输入与结果保存在 Guest artifact。目标 Agent claim 后处理 capsule，并通过 complete 提交 terminal 状态，Coordinator 从唯一 CQE 结算，再等待 Execution Contract 到达 `RECLAIMED` 后读取结果并恢复事件投影。首版每个 issuer 同时只保留一个未结算委派，并拒绝 self delegation 或让同一活动端点同时成为 owner/target。Task ledger 同时跟踪父子关系、内核身份和状态迁移。工具名称只描述通用能力，与本次演示选择什么问题无关。
 
 单轮最多接受 16 个模型决策，并单独允许最多 32 次可重试 provider 错误；可重试传输失败不会冒充成模型的新决策。provider 生成请求的 `max_tokens` 为 `114514`。这是模型生成预算，不会扩大 Guest 对外公开的最终答案；最终正文仍限制为 2048 个 UTF-8 字节。
 
@@ -240,7 +244,7 @@ make agentos-cli
 make agentos-nexus-cli
 ```
 
-等待模型回复或工具执行时按 `Ctrl-C`，只会取消当前轮次，会话仍可继续使用。需要退出时，在 controller 输入 `/quit`。Guest 完成收尾后会显示：
+等待模型回复或工具执行时按 `Ctrl-C`，只会取消当前轮次，会话仍可继续使用。工具任务已经进入 Task Channel 时，同一生命周期的 Relay controller 会使用预先绑定的 syscall 568 `REQUEST_CANCEL` 请求；内核确认取消请求后，已 claim 的 Research/System 仍会撤销预绑定结果并完成终态 ACK，Coordinator 取得唯一 CQE 并把 Contract 收敛到 `RECLAIMED`。需要退出时，在 controller 输入 `/quit`。Guest 完成收尾后会显示：
 
 ```text
 AgentOS session closed

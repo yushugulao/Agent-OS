@@ -47,6 +47,7 @@ WIRE_V2_HOST_KINDS = frozenset(
         "CONTROL_REQUEST",
         "CANCEL",
         "SESSION_CLOSE",
+        "WORKSPACE_RESULT",
     )
 )
 WIRE_V2_GUEST_KINDS = frozenset(
@@ -58,6 +59,7 @@ WIRE_V2_GUEST_KINDS = frozenset(
         "CONTROL_RESULT",
         "TELEMETRY",
         "SESSION_CLOSED",
+        "WORKSPACE_REQUEST",
     )
 )
 WIRE_V2_KINDS = WIRE_V2_HOST_KINDS | WIRE_V2_GUEST_KINDS

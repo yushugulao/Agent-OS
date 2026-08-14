@@ -1,7 +1,7 @@
 /tools
 In one sentence, explain what makes an engineering agent autonomous. Answer directly from general knowledge without using a tool.
 /status
-请阅读当前工作区中的 README.md，用一个自然段向第一次接触项目的开发者说明 AgentOS 主要解决什么问题、Nexus 如何运行，以及用哪个 make 目标开始体验 Nexus 在线自由演示。不要引用其他文件或列出无关的控制台命令。
+请阅读当前工作区中的 README.md，用一个自然段向第一次接触项目的开发者说明 AgentOS 主要解决什么问题、Nexus 如何运行，以及用哪个 make 目标开始体验 Nexus 在线自由演示；如果文档列出多个 make 目标，以明确标注为 Nexus 在线自由演示的那个为准。不要引用其他文件或列出无关的控制台命令。
 /context
 /tasks
 /agents

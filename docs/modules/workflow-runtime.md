@@ -96,6 +96,8 @@ struct agent_event {
 
 跨 Agent 的 `MESSAGE` 先确认发送方和接收方都仍是有效 Agent，再比较文件访问范围和完整生命周期键。每个接收方最多保存 16 条消息路由。每条路由以发送方 `control_id` 为键，并记录允许的事件类型。普通发送者需要 `MESSAGE_SEND` 能力位。替他人配置路由需要 `ROUTE_MANAGE`，而且控制进程必须同时控制发送方与接收方。
 
+Task Channel 的跨 Agent 委派使用独立的 `AGENT_IPC_ROUTE_TASK`，不把 task capsule 当作 `MESSAGE` 事件。目标还必须具有 `AGENT_CAP_TASK_ACCEPT`。发起者的 `delegate_task` SQE 进入内核 pending 队列后，目标用 `agent_task_delegate_claim()` 取得不可变 descriptor，再以 `agent_task_delegate_complete()` 提交 terminal 状态；发起者从自己的 CQ 取得唯一的 terminal CQE。任务正文和结果由 Guest artifact 承载，descriptor 只保存身份、关联编号和 capsule handle。首版拒绝 self delegation，并让活动委派端点保持二分无环。
+
 发送成功后，内核队列项会保存发送方 PID、`control_id`、起因序号、调用跨度和 provenance（来源追溯）标记。公开的 `agent_event` 只返回事件字段，控制编号和来源信息留在内核附加区。接收方处理事件时，内核会先把 `CROSS_AGENT_DATA` 等标记合并到当前 provenance 状态，再追加一条带因果关系的 Context 记录。
 
 常用接口如下：
@@ -241,27 +243,47 @@ workflow_credit_domain_fence(key, exec, storage, &credit);
 
 DeepSeek V4 provider 请求显式设置 `thinking.type=enabled` 和 `reasoning_effort=max`。工具轮次之间需要的 provider-private `reasoning_content` 由 Host relay 向 provider 原样回传，用于保持 provider 自身的思考上下文。该字段不进入 Guest wire，也不出现在 controller 输出或 telemetry 中。
 
-最后一个决策槽用于收束回答。Host 把已经得到的工具结果整理为普通研究笔记后交给 provider 综合，避免模型在应当作答时继续输出调用格式；若回复仍是工具标记或超出公开正文上限，中继只做一次有界的简短重答。
+最后一个决策槽用于收束回答。Host 向 provider 原样转发 Guest 已经结算的工具调用与工具结果投影，但不再提供新工具，避免模型在应当作答时继续扩展调查；若回复仍是工具标记或超出公开正文上限，中继只做一次有界的简短重答。
 
-### 7.2 三个公开工具与工作进程
+### 7.2 Context 主导的跨轮路径
+
+跨轮上下文的权威路径位于 Guest Relay Agent 自己的 AgentOS Context，不在 Host 的 Python 会话对象中。Relay 收到一轮用户输入后，先记住本轮开始前的可见头，再用 `context_push()` 追加一个短 USER 节点。每次工具结果完成结算后追加短 TOOL 节点；只有成功完成的答案才追加 FINAL 节点。节点保存关联和紧凑状态，完整用户问题与最终正文则进入 Context 第 7 页的 4 KiB 用户缓存。
+
+构造下一次模型请求时，Relay 优先用 `context_direct_header_snapshot()` 和 `context_direct_active_query()` 直接读取映射页，读取期间会复核 header 是否稳定；映射路径暂时不可用时，再用 `context_snapshot()` 和 `context_query()` 回退。4 KiB 缓存只是完整文本的有界伴随区：Relay 只有在同一轮的 USER 与 FINAL 节点都仍位于 active path 时才采用对应正文。它最多保留两个完整轮次的最新后缀；空间连最新一轮也容纳不下时不缓存正文，绝不截断。因此 active path 决定“哪些轮次可见”，缓存只回答“这些可见轮次的完整文本是什么”。
+
+每次模型请求只携带当时可完整装入的先前成功轮次后缀，不会截断或重排所保留的轮次。成功 FINAL 节点位于本轮所有已经结算且仍可见的 TOOL 节点之后。
+
+成功轮次把 USER/FINAL 正文对发布到缓存；只有 FINAL 节点与缓存提交完成后，Relay 才确认 Coordinator 将本轮 root Task 置为完成。提交失败时 root Task 以失败结束，Relay 随即回滚本轮 Context，不会留下“任务已完成但上下文未保存”的分叉状态。失败或取消同样调用 Context rollback 回到本轮开始前的可见头，目标为零、已经失效或无法恢复时清空 Context 与缓存。成功的 `/reset` 也会同时清空 Relay Context、这一个用户页以及工作区 Catalog/Typed Watch 状态。Host 不私建、补写或替换 Provider 请求中的跨轮正文，只核对 turn、request、Context sequence 等关联，并把正文留在 Guest 生成的标准消息中。在线 Provider 与固定 Replay 因而接收相同的消息形状；observer 不接收跨轮正文，controller 只在 Guest 完成工具 artifact 复核和结算后收到 Guest 发布的 `TOOL_EVENT` 投影。
+
+这条路径把跨轮延续接在 AgentOS 已有的 Context active path 上；工具协作通过真正的内核 Task Channel 和 Guest artifact 完成，`MESSAGE` 只保留为一般进程通信，不传输 child Task 的 payload 或状态。它不是与内核并列的外部记忆或任务系统，也不会绕过已有的生命周期。
+
+### 7.3 三个公开工具与工作进程
 
 | 公开工具 | 执行路径 | 结果边界 |
 | --- | --- | --- |
-| `search_files` | Coordinator 通过 `MESSAGE` 和 `N1` 把 child Task 交给 Research，再由 Host workspace broker 搜索 | 在当前 Host 工作区中匹配路径或文本行；空查询列出文件，可用 `path_prefix` 缩小范围，最多返回 8 项 |
-| `read_file` | Coordinator 通过 `MESSAGE` 和 `N1` 把 child Task 交给 Research，再由 Host workspace broker 读取 | 从一个工作区相对路径读取 1 至 64 行，返回实际范围及是否还有后续内容 |
-| `inspect_system` | Coordinator 通过 `MESSAGE` 和 `N1` 把 child Task 交给 System | 只观察当前 Guest 的 `status`、`processes` 或 `context`，不描述 Host 文件 |
+| `search_files` | Guest 分页接收 manifest，用 Metadata Catalog/Live Query 选出候选；Host 只扫描这些候选；实际结果作为 artifact 通过 Task Channel 交给 Research | 匹配路径或文本行；空查询列出候选文件，可用 `path_prefix` 缩小范围，聚合后最多返回 8 项 |
+| `read_file` | Guest 先以完整路径找到 manifest 对象并用 Catalog 精确复核；Host 返回 object/path/revision 绑定的字节；实际结果作为 artifact 通过 Task Channel 交给 Research | 从一个工作区相对路径读取 1 至 64 行，返回实际范围及是否还有后续内容 |
+| `inspect_system` | Coordinator 通过 Task Channel 把 capsule 交给 System | 只观察当前 Guest 的 `status`、`processes` 或 `context`，不描述 Host 文件 |
 
-工具只有在模型选中时才建立 child Task。Coordinator 发送 task capsule，并只允许一个子任务处于活动 dispatch；Research 或 System 依次返回 `ACCEPT`、`PROGRESS` 和单一 terminal 结果。这些进程用于展示 AgentOS 内核中的身份、任务和消息协作，并非三个分别连接模型 Provider 的智能体。
+工具只有在模型选中时才建立 child Task。Coordinator 为目标身份、task/correlation、parent task 和 capsule handle 构造 56 字节不可变 descriptor，以 `AGENT_ARTIFACT_TASK` 导入自己的 Task Channel，并把 `delegate_task` SQE 置入 Execution Contract。内核进入 pending 后，Research 或 System 调用 claim；内核在返回 descriptor 前标记任务已经开始产生作用。该 effect lease 只绑定当前 worker 身份、线程 generation 与 channel/request/slot 代次，并只允许 Contract manifest 声明的 side-effect mask，不是 workflow 范围的额外权限。System/Sentinel 与 Research/Investigator 持有写 result artifact 所需的 `AGENT_CAP_ARTIFACT_WRITE`，但仍要同时通过 artifact manifest permission、VFS 文件访问范围和这项 lease。目标处理 Guest capsule 和输入 artifact，发布预先绑定 handle 的结果 artifact，再调用 complete。CQE 本身不携带大段输入或输出。
 
-文件 child Task 在 Guest 中完成请求路由，实际工作区内容由 Host workspace broker 读取并提供给模型的后续决策。broker 以启动会话时指定的目录为根，只接受规范相对路径，拒绝绝对路径、父目录跳转、反斜杠以及通过链接离开工作区。搜索与读取都是只读操作，结果长度有界，缺失、二进制或不可读取的文件返回结构化错误。文件与系统输出始终作为数据处理。
+Guest 在提交 SQE 前把完整取消绑定交给同一生命周期的 Relay controller。用户取消到达后，controller 以 syscall 568 的 `REQUEST_CANCEL`、`CANCELLED` 和零 ACK 字段回传 owner/channel/request/slot/task/correlation，并同时满足 `ORCHESTRATE`、`WAIT_CANCEL` 与 caller 到 owner 的 TASK route。`OK` 只确认控制请求已经线性化：QUEUED 由 owner lane 终结，CLAIMED 的 Research/System 仍会在 complete 时收到 `CANCELLED` 或优先级更高的 `TIMEOUT` offer，先撤销预绑定结果再 `ACK_TERMINAL`；READY 的先到结果不被迟到取消覆盖。PREPARING/CLAIMING 时 controller 重试同一绑定，结果 copyout 丢失也由内核回执支持相同重试。
 
-### 7.3 Host 协作与测试方式
+Coordinator 从唯一 CQE 取得 terminal 状态后，先确认 CQ、释放 Task resource，再调用 `RETIRE`。Contract 首先进入 `RETIRING` 并停止新准入；直接调用和运行引用全部归零后才返回 `OK/RECLAIMED`。Coordinator 只在这个边界后恢复 observer、读取结果 artifact、发布 `TASK_EVENT`/`TOOL_EVENT` 并允许下一代 Contract。CREATE 的发布边界只固定普通 inode 操作，长期阻塞的 pipe/device 控制读取不会阻止 Contract 建立；活动 Contract 内的普通 pipe write 仍按 IPC 副作用检查，因此 observer/Host 事件输出不会成为旁路。正常 complete、cleanup ACK 或目标 quiescence 会在活动作用返回后撤销 delegated lease。首版每个 issuer 同时只允许一个未结算的委派，也不会强制终止永久无响应的执行者。
+
+每次 `search_files` 或 `read_file` 都从 cursor 0 和空 generation 开始取得 Host manifest，一条工具链最多使用 8,192 个 wire attempt，包括 stale 后的重启。Host 每页最多返回 32 个带 object id、path、revision 和 size 的项目；generation 绑定一次目录快照，object id 稳定绑定相对路径，revision 绑定同一已打开对象的实际内容。Guest 在有界运行时 arena 中保留页面的完整字段，同时建立 1 个 control inode 和最多 32 个 data-stub inode；data stub 以 `host/<object_id>` 作为 logical path，按 4 个 stage、每组最多 8 项登记 project、workflow、generation-derived run、kind 和 status。每个 stage 都通过 `agent_file_query()` 选择，Guest 要求返回数量精确且 `truncated=0`，随后再用运行时 arena 中的完整路径检查 prefix 或 exact match。因此 Metadata Catalog 是当前页面的有界目录窗口，不是整仓全文索引。
+
+control stub 由 Typed Watch 订阅。manifest generation 改变时，Guest 先把旧 data window 标为 stale，更新 control metadata，并实际消费 `FILE_QUERY UPDATE`，之后才把新页面视为当前窗口。搜索遍历全部 manifest 页面；某一页没有 Catalog 候选时不会请求 Host 扫描，有候选时只发送最多 32 个 object/path/revision。读取先在 manifest 中找到完整路径，再以 `host/<object_id>` 对 Catalog 做精确查询。Host 强制 manifest 的 cursor 顺序，候选页面必须处理完成后才能前进，read 对象也必须来自同一 correlation 已经交付的 Catalog 页面。Host 返回 `stale` 时，Guest 清除当前 generation 与已累积结果，从 cursor 0 重试。
+
+Host workspace broker 只持有会话显式指定并固定在目录句柄上的 root，通过 V2 `WORKSPACE_REQUEST`/`WORKSPACE_RESULT` 负责有界目录枚举、manifest generation、候选正文扫描和指定 revision 的 UTF-8 字节传输。它拒绝绝对路径、父目录跳转、反斜杠和链接逃逸，不替 Guest 选择候选，也不执行 Nexus child Task。manifest 页正文最多 12,000 字节；候选搜索或读取结果最多 2,800 字节。实际搜索/读取正文回到 Guest 后，Coordinator 先把它发布为 `HOST_WORKSPACE` TOOL_INPUT artifact，并通过 Task capsule 交给 Research；Research 将处理后的字节发布为 RESEARCH_RESULT，complete 后由 Coordinator 复核 artifact，再写入 TOOL Context、模型历史和 `TOOL_EVENT`。Host 不私建、补写或替换 Provider 请求中的这段工具历史。原始 Host workspace event 和 telemetry 只记录绑定、摘要、字节数与 manifest cursor，不携带正文；controller 可在 Guest 完成 artifact 复核和结算后收到 Guest `TOOL_EVENT` 中的 `model_projection`。
+
+### 7.4 Host 协作与测试方式
 
 Guest 为每轮 root Task 和每个 child Task 发出 `TASK_EVENT`。Host 的 [`agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py) 跟踪 lifecycle/turn、root-child DAG、内核 PID/agent/control identity 与任务状态迁移，用于确认每个工具请求由预期的工作进程完成。它不判断某个 AgentOS 改进结论是否正确，也不把演示题目固化为运行时流程。
 
-固定 Nexus replay 使用保存的 provider 回复重复运行同一套 QEMU、串口、三工具和 Task 消息路径，属于协议交互回归。Nexus 自由演示连接在线 DeepSeek，关注模型能否针对用户问题自行研究并给出自然合理的结论。模型表现不理想时，改进方向应是通用 system policy、文件导航、结果回注或多智能体消息协作，而不是增加只服务某道演示题的专用工具。
+固定 Nexus replay 使用保存的 provider 回复重复运行同一套 QEMU、串口、三工具、Task Channel、Metadata Catalog、Typed Watch、artifact 和 Relay Context 路径，属于协议交互回归。在线模式与 replay 都直接使用 Guest 重建的同一消息与真实 TOOL artifact 投影；Host ledger 只核对关联和 Guest 投影，不把自己作为跨轮正文来源，也不私下补写工具结果。Nexus 自由演示连接在线 DeepSeek，关注模型能否针对用户问题自行研究并给出自然合理的结论。模型表现不理想时，改进方向应是通用 system policy、文件导航、Context 路径、结果回注或多智能体任务协作，而不是增加只服务某道演示题的专用工具。
 
-当前版本是只读 Harness：它可以搜索和读取 Host 工作区、检查 Guest 状态，但不编辑文件、不执行 Shell，也没有独立子模型。Guest 主程序位于 [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)，共用协议见 [`user/include/agent_nexus_protocol.h`](../../user/include/agent_nexus_protocol.h)，Host 合约、工作区访问与 Task ledger 分别位于 [`host_tools/agentos_nexus_contract.py`](../../host_tools/agentos_nexus_contract.py)、[`host_tools/agentos_workspace.py`](../../host_tools/agentos_workspace.py) 和 [`host_tools/agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py)。运行方法见[运行指南](../usage.md#4-使用-nexus-多智能体-harness)。
+当前版本是只读 Harness：它可以搜索和读取 Host 工作区、检查 Guest 状态，但不编辑文件、不执行 Shell，也没有独立子模型。`/reset` 与会话关闭都会使 Guest 的工作区 Catalog/Typed Watch 状态失效，下一次工具调用从新的 manifest 开始。Guest 主程序位于 [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)，共用协议见 [`user/include/agent_nexus_protocol.h`](../../user/include/agent_nexus_protocol.h)，Host 合约、工作区访问与 Task ledger 分别位于 [`host_tools/agentos_nexus_contract.py`](../../host_tools/agentos_nexus_contract.py)、[`host_tools/agentos_workspace.py`](../../host_tools/agentos_workspace.py) 和 [`host_tools/agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py)。运行方法见[运行指南](../usage.md#4-使用-nexus-多智能体-harness)。
 
 ## 八、源码位置与测试
 
@@ -273,7 +295,7 @@ Guest 为每轮 root Task 和每个 child Task 发出 `TASK_EVENT`。Host 的 [`
 | 工作流 EEVDF | [`os/workflow_scheduler.c`](../../os/workflow_scheduler.c)、[`os/proc.c`](../../os/proc.c) |
 | 运行记录环与 Workflow Fence | [`os/agent_workflow_fence.c`](../../os/agent_workflow_fence.c) 及相邻运行记录模块 |
 | 运行时间线 | [`os/agent_observe_timeline.c`](../../os/agent_observe_timeline.c) |
-| Nexus 通用合约、工作区 broker、Task ledger 与 Research/System 消息协作 | [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)、[`user/lib/agent_nexus.c`](../../user/lib/agent_nexus.c)、[`host_tools/agentos_nexus_contract.py`](../../host_tools/agentos_nexus_contract.py)、[`host_tools/agentos_workspace.py`](../../host_tools/agentos_workspace.py) 和 [`host_tools/agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py) |
+| Nexus 通用合约、Catalog 工作区窗口、Task Channel 委派、工作区 broker 与 Task ledger | [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)、[`user/lib/agent_nexus.c`](../../user/lib/agent_nexus.c)、[`os/agent_task_bridge.c`](../../os/agent_task_bridge.c)、[`host_tools/agentos_nexus_contract.py`](../../host_tools/agentos_nexus_contract.py)、[`host_tools/agentos_workspace.py`](../../host_tools/agentos_workspace.py) 和 [`host_tools/agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py) |
 
 Runtime 测试覆盖无丢失唤醒、慢订阅者隔离、心跳、消息路由、Workflow Credit Domain、运行记录环票号、Workflow Fence 重试、EEVDF 和 Nexus Replay：
 

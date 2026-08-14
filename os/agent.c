@@ -29,13 +29,23 @@ agent_proc_teardown(struct proc *p)
 	if (p == 0)
 		return -1;
 	if (p->teardown_state == PROC_TEARDOWN_QUIESCING) {
+		/* Publish controller/lifecycle departure before waiting on providers. */
+		agent_core_proc_teardown(p);
 		status = agent_task_bridge_reclaim(p);
 		if (status == AGENT_TASK_CHANNEL_RETRY)
 			return -1;
 		if (status != AGENT_TASK_CHANNEL_OK)
 			panic("Task Channel teardown");
-	} else if (agent_task_bridge_active(p)) {
-		panic("Task Channel teardown phase");
+		return 0;
+	} else {
+		if (agent_task_bridge_active(p))
+			panic("Task Channel teardown phase");
+		/* Sibling user execution is quiescent before RECLAIMING begins. */
+		if (agent_task_bridge_endpoint_active(p)) {
+			status = agent_task_bridge_reclaim(p);
+			if (status != AGENT_TASK_CHANNEL_OK)
+				panic("delegated Task endpoint teardown");
+		}
 	}
 	agent_core_proc_teardown(p);
 	return 0;
@@ -44,6 +54,7 @@ agent_proc_teardown(struct proc *p)
 void agent_thread_runtime_transition(struct thread *t, int transition)
 {
 	agent_ipc_thread_runtime_transition(t, transition);
+	agent_task_bridge_thread_runtime_transition(t, transition);
 }
 
 void agent_process_image_install_locked(struct proc *p)
@@ -52,9 +63,16 @@ void agent_process_image_install_locked(struct proc *p)
 int
 agent_exec_public_identity_commit(struct proc *p)
 {
-	if (agent_task_bridge_active(p))
+	if (agent_task_bridge_active(p) ||
+	    agent_task_bridge_endpoint_active(p))
 		return -1;
 	return agent_core_exec_public_commit(p);
+}
+
+int
+agent_exec_image_install_allowed(const struct proc *p)
+{
+	return p != 0 && !agent_task_bridge_endpoint_active(p);
 }
 
 void

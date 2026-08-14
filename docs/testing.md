@@ -1,4 +1,4 @@
-# AgentOS-uCore 测试说明
+# 面向 AI 智能体的操作系统内核：测试说明
 
 项目测试按实际调用顺序分三步进行：先检查公开 `ABI` 和模块调用关系，再检查 Host 协议与状态机，最后在 RISC-V64 QEMU Guest 中执行真实的系统调用、文件系统、调度、资源管理和工作流。随后运行故障注入和双平台对照，检查异常恢复与最终结果。
 
@@ -65,10 +65,10 @@ make local-host-selftests
 | Execution Contract | DAG 前驱关系、attempt、deadline、retry、effect 和 provenance 字段 |
 | Context 与 provenance | 原子 commit、active path、snapshot 读取、provenance sequence，以及系统调用的来源记录 |
 | Live Query | lifecycle generation、inode incarnation、索引调用、mutation barrier，以及 traversal/indexed 结果是否一致 |
-| Task Channel | `SQ/CQ` 协议、传输、single issuer、cancel、backpressure 和 resync 流程 |
+| Task Channel | `SQ/CQ` 协议、single issuer、cancel、backpressure、resync、TASK route、claim/complete、终态 offer 确认和唯一 CQE |
 | 工作流调度 | 资源账户、scheduler model、阻塞唤醒和资源记账 |
-| Console 与 Nexus | 串口消息、本地 socket、controller/observer、任意用户任务、三工具自主选择、Task、工作区结果与运行记录协议 |
-| Nexus Host 工作区 | Host/Guest 系统策略和工具目录一致性、工作区路径约束、有界搜索与分段读取、Task ledger 转换与身份绑定 |
+| Console 与 Nexus | 串口消息、本地 socket、controller/observer、任意用户任务、三工具自主选择、Task Channel 委派、Guest artifact、工作区结果与运行记录协议 |
+| Nexus Host 工作区 | 显式 root、版本化 manifest、候选对象约束、stale 重启、有界搜索与分段读取，以及在线/replay 使用相同 Guest 工具历史 |
 | 双平台工具 | 普通 uCore 与 AgentOS-uCore 的状态提取、结果比较和来源清单 |
 
 每项自测都会自行构造输入。测试失败时会直接列出缺失字段、错误的状态变化或有问题的源码调用点。
@@ -200,13 +200,21 @@ Console replay 检查脚本化多轮会话中 `query_file`、`echo` 和 `send_me
 
 Nexus replay 是固定的协议交互回归。它接受“不用工具直接回答”和“模型自行选择工具”两类路径；对后者逐轮检查模型只返回一个工具调用或最终答案，不把回放数据中的顺序、调用次数或业务结论当成 runtime 策略。公开表面只包含 `search_files`、`read_file` 和 `inspect_system` 三个通用只读工具，也不要求在同一次回归中巡游全部工具。
 
-文件请求由 Coordinator 通过内核 `MESSAGE` 和 `N1` 子 Task 交给 Research，系统请求则交给 System。Host workspace broker 在本次会话指定的根目录内执行实际的只读搜索或分段读取，并把结果提供给模型继续决策；Task ledger 检查 root/child 关系、执行者身份和状态迁移。回归同时覆盖路径跳转、链接逃逸、二进制文件、缺失文件和输出上限等 Host 边界。
+child Task 由 Coordinator 通过真正的内核 Task Channel `delegate_task` 交给 Research 或 System。回归检查 56 字节 descriptor、`AGENT_ARTIFACT_TASK` resource、目标 claim/complete、结果 artifact 和唯一 terminal CQE，也确认 self delegation 与让同一活动端点同时成为 owner/target 的组合被拒绝。任务在 claim 后遇到 cancel、deadline、owner 退出或生命周期关闭时，测试覆盖 `RETRY/CLAIMED` offer、清理预绑定结果、`ACK_TERMINAL` 准确回传，以及更高 generation 的 `TIMEOUT` offer 不会重跑业务。
+
+controller 取消回归使用 syscall 568 的 `REQUEST_CANCEL`，检查同一生命周期、`ORCHESTRATE`/`WAIT_CANCEL`、caller 到 owner 的 TASK route 和 owner/channel/request/slot/task/correlation 完整绑定；`OK` 只代表控制请求线性化。QUEUED 由 owner lane 终结，CLAIMED 仍需 provider cleanup ACK，PREPARING/CLAIMING 返回 `RETRY`，READY 的先到结果不被迟到取消覆盖，同一绑定可恢复丢失的 copyout。任务正文不经 `MESSAGE` 传递；Task descriptor 只绑定目标身份、任务关联和 capsule handle。首版每个 issuer 同时只允许一个未结算委派，也不承诺永久无响应的已 claim 执行者会自动收敛。
+
+Nexus 还检查 Contract `RETIRE` 从 `RETRY/RETIRING` 到 `OK/RECLAIMED` 的两阶段收敛：只有直接调用与运行引用归零后，Coordinator 才恢复 observer/Host event 输出、读取结果 artifact 并发布任务投影。普通 inode 操作参与 CREATE 发布边界，阻塞的 pipe/device 控制读取不参与；活动 Contract 中的普通 pipe write 仍须通过 IPC 副作用检查。System/Sentinel 和 Research/Investigator 的结果发布同时要求 `AGENT_CAP_ARTIFACT_WRITE`、artifact manifest permission、VFS 文件访问范围与 delegated effect lease。
+
+工作区回归从 Host 的版本化 manifest 开始：Guest 用 1 个 control inode 和最多 32 个 data-stub inode 建立 Metadata Catalog 窗口，按 4 个 stage 执行返回不截断的 Live Query，并在有界运行时内存中再次核对完整路径。control stub 的 Typed Watch 必须收到 generation `UPDATE`，旧窗口才会失效并从 cursor 0 重建。Host 搜索只能接收 Guest Catalog 选出的候选，读取必须绑定 object/path/revision；stale 结果要清空累积并重试。真实正文回到 Guest 后依次成为 Research 输入 artifact、Research 结果 artifact、TOOL Context 和模型历史。回归还覆盖路径跳转、链接逃逸、二进制文件、缺失文件和输出上限等 Host 边界。
+
+跨轮测试以 Relay Agent 的 Context active path 为主线：USER、已结算 TOOL 和成功 FINAL 必须形成短 Context 节点；4 KiB 用户缓存只为仍在 active path 上的成功 USER/FINAL 对补充完整正文。测试分别覆盖映射页 direct active query、syscall 回退、缓存容量不足时按整轮淘汰、失败或取消后的路径回滚，以及 `/reset` 同时清空 Relay Context、缓存和工作区 Catalog/watch 状态。Host 测试确认中继不私建、补写或替换 Provider 请求中的对话与工具结果；在线 Provider 和固定 Replay 都直接接收 Guest 构造的消息及真实工具 artifact 投影。
 
 会话协商的上限为每轮 16 个模型决策与 32 次可重试 provider 错误。Nexus 生成请求必须保持 `max_tokens=114514`；DeepSeek V4 还要求 `thinking.type=enabled` 和 `reasoning_effort=max`。测试确认工具轮次间的 provider-private `reasoning_content` 只原样回传给 provider，不出现在 Guest、controller 或 telemetry。生成预算与公开输出界限分开：Guest 返回的最终正文仍不得超过 2048 个 UTF-8 字节。
 
-两项 replay 都会真正启动 QEMU Guest。固定数据只替换在线 provider 回复；工具执行、Context sequence、Task 与运行记录、controller/observer 投影和会话关闭都由本次运行产生。具体操作见[运行方法](usage.md)。
+两项 replay 都会真正启动 QEMU Guest。固定数据只替换在线 provider 回复；工具执行、Context sequence、Task Channel、Metadata Catalog、Typed Watch、artifact、运行记录、controller/observer 投影和会话关闭都由本次运行产生。Nexus 的跨轮消息仍由本次 Guest 的 Context active path 和 4 KiB 用户缓存重建，Host 不额外补写历史正文或工具结果。具体操作见[运行方法](usage.md)。
 
-Nexus 自由演示也属于交互会话测试，但目的不同。它连接在线 DeepSeek，使用 AgentOS 改进问题作为一类示例，直接观察模型能否自己选择通用工具、读到相关实现并给出一整段自然、有道理的结论。这里不要求答案的每个细节完全一致，也不检查预设的工具顺序；如果回答持续偏离问题，应优先调整通用 system policy、工作区读取或消息协作能力，而不是增加只服务该题目的专用模块。
+Nexus 自由演示也属于交互会话测试，但目的不同。它连接在线 DeepSeek，先用 AgentOS 改进问题作为一类示例观察模型能否自己选择通用工具、读到相关实现并给出自然、有道理的结论，再用一轮基于 active Context 的追问观察跨轮延续。这里不要求答案的每个细节完全一致，也不检查预设的工具顺序；如果回答持续偏离问题，应优先调整通用 system policy、工作区读取或消息协作能力，而不是增加只服务该题目的专用模块。
 
 ```bash
 make agentos-nexus-demo TOOLPREFIX=riscv64-linux-gnu-

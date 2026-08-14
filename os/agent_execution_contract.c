@@ -3,6 +3,7 @@
 #include "agent_internal.h"
 #include "agent_provenance.h"
 #include "agent_sha256.h"
+#include "agent_task_bridge.h"
 #include "defs.h"
 #include "exec_policy.h"
 #include "timer.h"
@@ -17,7 +18,8 @@
 	 AGENT_CAP_ACTION_WRITE | AGENT_CAP_ARTIFACT_WRITE | \
 	 AGENT_CAP_AUDIT_WRITE | AGENT_CAP_META_WRITE | \
 	 AGENT_CAP_ORCHESTRATE | AGENT_CAP_LLM_RELAY | \
-	 AGENT_CAP_WAIT_CANCEL | AGENT_CAP_ROUTE_MANAGE)
+	 AGENT_CAP_WAIT_CANCEL | AGENT_CAP_ROUTE_MANAGE | \
+	 AGENT_CAP_TASK_ACCEPT)
 
 struct agent_execution_node_internal {
 	uint64 predecessor_mask;
@@ -565,7 +567,8 @@ agent_execution_contract_generation(struct workflow_lifecycle_key lifecycle)
 
 int
 agent_execution_contract_direct_enter(
-	struct proc *p, struct agent_execution_direct_guard *guard)
+	struct proc *p, uint64 side_effect_mask,
+	struct agent_execution_direct_guard *guard)
 {
 	struct agent_execution_contract_record *record;
 	struct workflow_lifecycle_key lifecycle;
@@ -577,7 +580,9 @@ agent_execution_contract_direct_enter(
 	memset(guard, 0, sizeof(*guard));
 	guard->lifecycle = workflow_lifecycle_none();
 	guard->slot = -1;
-	if (p == 0)
+	guard->delegated_slot = -1;
+	if (p == 0 || side_effect_mask == 0 ||
+	    (side_effect_mask & ~AGENT_SIDE_EFFECT_ALL) != 0)
 		return AGENT_STATUS_BAD_PARAM;
 	/* The measured bootstrap remains the sole workflow factory escape. */
 	if (!p->is_agent && p->resource_domain_admin &&
@@ -602,6 +607,16 @@ agent_execution_contract_direct_enter(
 		return AGENT_STATUS_RETRY;
 	}
 	if (agent_execution_record_enforced(record, lifecycle)) {
+		if (agent_task_bridge_effect_pin_locked(
+			    p, curr_thread(), side_effect_mask,
+			    &guard->delegated_slot,
+			    &guard->delegated_generation)) {
+			guard->lifecycle = lifecycle;
+			guard->active = 1;
+			guard->delegated_active = 1;
+			intr_restore(enabled);
+			return AGENT_STATUS_OK;
+		}
 		record->denial_count++;
 		intr_restore(enabled);
 		return AGENT_STATUS_DENIED;
@@ -627,6 +642,15 @@ agent_execution_contract_direct_leave(
 
 	if (guard == 0 || !guard->active)
 		return;
+	if (guard->delegated_active) {
+		enabled = intr_save();
+		agent_task_bridge_effect_unpin_locked(
+			guard->delegated_slot, guard->delegated_generation);
+		guard->active = 0;
+		guard->delegated_active = 0;
+		intr_restore(enabled);
+		return;
+	}
 	if (guard->slot < 0 || guard->slot >= WORKFLOW_LIFECYCLE_CAP)
 		panic("execution direct gate slot");
 	enabled = intr_save();
@@ -1054,6 +1078,7 @@ agent_execution_contract_admit(
 	if (outcome != 0)
 		memset(outcome, 0, sizeof(*outcome));
 	claim->slot = -1;
+	claim->delegated_slot = -1;
 	if (p == 0 || op == 0 || result == 0 || !p->is_agent) {
 		agent_execution_result_error(
 			result, AGENT_STATUS_NOT_AGENT, "not_agent",
@@ -1127,8 +1152,26 @@ agent_execution_contract_admit(
 				AGENT_EXECUTION_REASON_CONTRACT_INVALID, claim);
 			goto denied_counted;
 		}
-		if (agent_execution_record_enforced(record, current) ||
-		    record->state == AGENT_EXECUTION_STATE_BUILDING) {
+		if (agent_execution_record_enforced(record, current)) {
+			if (agent_task_bridge_effect_pin_locked(
+				    p, curr_thread(),
+				    tool_manifest.provenance.side_effect_mask,
+				    &claim->delegated_slot,
+				    &claim->delegated_generation)) {
+				claim->legacy = 1;
+				claim->delegated_active = 1;
+				claim->active = 1;
+				intr_restore(enabled);
+				return AGENT_EXECUTION_ADMISSION_EXECUTE;
+			}
+			record->denial_count++;
+			agent_execution_result_error(
+				result, AGENT_STATUS_DENIED,
+				"execution_contract_required",
+				AGENT_EXECUTION_REASON_CONTRACT_REQUIRED, claim);
+			goto denied;
+		}
+		if (record->state == AGENT_EXECUTION_STATE_BUILDING) {
 			record->denial_count++;
 			agent_execution_result_error(
 				result, AGENT_STATUS_DENIED,
@@ -1831,6 +1874,66 @@ agent_execution_contract_effect_begin(struct agent_execution_claim *claim)
 	return AGENT_EXECUTION_EFFECT_ALLOWED;
 }
 
+enum agent_execution_delegate_cancel_admission
+agent_execution_contract_delegate_cancel_preflight_locked(
+	struct agent_execution_claim *claim, uint64 now)
+{
+	struct agent_execution_contract_record *record;
+	struct agent_execution_node_internal *node;
+	struct agent_execution_node_runtime *runtime;
+
+	if (intr_get())
+		panic("execution delegated cancel unlocked");
+	if (claim == 0 || !claim->active || claim->legacy ||
+	    claim->slot < 0 || claim->slot >= WORKFLOW_LIFECYCLE_CAP ||
+	    claim->node_id >= AGENT_EXECUTION_CONTRACT_MAX_NODES)
+		return AGENT_EXECUTION_DELEGATE_CANCEL_STALE;
+	record = &agent_execution_contracts[claim->slot];
+	if (!agent_execution_record_matches(record, claim->lifecycle) ||
+	    record->generation != claim->contract_generation ||
+	    claim->node_id >= record->node_count)
+		return AGENT_EXECUTION_DELEGATE_CANCEL_STALE;
+	node = &record->nodes[claim->node_id];
+	runtime = &record->runtime[claim->node_id];
+	if (runtime->state != AGENT_EXECUTION_NODE_RUNNING ||
+	    runtime->request_id != claim->request_id ||
+	    runtime->attempt_id != claim->attempt_id ||
+	    !agent_execution_digest_equal(runtime->request_digest,
+				  claim->request_digest))
+		return AGENT_EXECUTION_DELEGATE_CANCEL_STALE;
+	if ((runtime->flags & AGENT_EXECUTION_RUNTIME_F_TIMEOUT_REQUESTED) != 0 ||
+	    (claim->deadline_tick != 0 && now >= claim->deadline_tick)) {
+		claim->decision_reason = AGENT_EXECUTION_REASON_DEADLINE_EXPIRED;
+		claim->retry_forbidden = 1;
+		return AGENT_EXECUTION_DELEGATE_CANCEL_TIMEOUT;
+	}
+	if (node->cancel_policy != AGENT_EXECUTION_CANCEL_ALLOW)
+		return AGENT_EXECUTION_DELEGATE_CANCEL_DENIED;
+	return AGENT_EXECUTION_DELEGATE_CANCEL_ALLOWED;
+}
+
+void
+agent_execution_contract_delegate_cancel_commit_locked(
+	struct agent_execution_claim *claim)
+{
+	struct agent_execution_contract_record *record;
+	struct agent_execution_node_runtime *runtime;
+
+	if (intr_get())
+		panic("execution delegated cancel commit unlocked");
+	/*
+	 * The bridge calls this only after an ALLOWED policy preflight and exact
+	 * Task request commit in the same interrupts-disabled transaction.  The
+	 * claimed provider's cleanup/ACK boundary keeps the owner CQE pending
+	 * until that provider has removed its prebound output.
+	 */
+	record = &agent_execution_contracts[claim->slot];
+	runtime = &record->runtime[claim->node_id];
+	runtime->flags |= AGENT_EXECUTION_RUNTIME_F_CANCEL_REQUESTED;
+	claim->decision_reason = AGENT_EXECUTION_REASON_CANCEL_REQUESTED;
+	claim->retry_forbidden = 1;
+}
+
 void
 agent_execution_contract_complete(struct agent_execution_claim *claim,
 				  const struct agent_result *result,
@@ -1999,6 +2102,14 @@ agent_execution_contract_release(struct agent_execution_claim *claim)
 	    claim->slot >= WORKFLOW_LIFECYCLE_CAP)
 		return;
 	enabled = intr_save();
+	if (claim->delegated_active) {
+		agent_task_bridge_effect_unpin_locked(
+			claim->delegated_slot, claim->delegated_generation);
+		claim->delegated_active = 0;
+		claim->active = 0;
+		intr_restore(enabled);
+		return;
+	}
 	record = &agent_execution_contracts[claim->slot];
 	if (!agent_execution_record_matches(record, claim->lifecycle) ||
 	    record->bare_inflight == 0)
@@ -2086,7 +2197,11 @@ agent_execution_contract_build_node(
 	     node->deadline_tick > record->deadline_tick) ||
 	    agent_tool_protocol_manifest_query(node->tool_id, &manifest) !=
 		    AGENT_STATUS_OK ||
-	    (manifest.flags & AGENT_TOOL_F_CALLABLE) == 0 ||
+	    ((manifest.flags & AGENT_TOOL_F_CALLABLE) == 0 &&
+	     !(node->tool_id == AGENT_TOOL_DELEGATE_TASK &&
+	       manifest.flags == AGENT_TOOL_F_SYSCALL_ONLY &&
+	       node->input_artifact_type == AGENT_ARTIFACT_TASK &&
+	       node->output_artifact_type == AGENT_ARTIFACT_NONE)) ||
 	    (node->required_capabilities &
 	     manifest.provenance.required_capabilities) !=
 		    manifest.provenance.required_capabilities ||
@@ -2293,6 +2408,7 @@ sys_agent_execution_contract(uint64 controladdr, uint64 resultaddr)
 	int slot;
 	int status = AGENT_STATUS_OK;
 	int enabled;
+	int query_pinned = 0;
 
 	if (copyin(p->pagetable, (char *)&control, controladdr,
 		   sizeof(control)) < 0 ||
@@ -2347,6 +2463,12 @@ sys_agent_execution_contract(uint64 controladdr, uint64 resultaddr)
 			status = AGENT_STATUS_RETRY;
 			intr_restore(enabled);
 			goto fill_result;
+		}
+		/* A quiescent RECLAIMED record is an exact RETIRE receipt until the
+		 * controller deliberately starts the next contract generation. */
+		if (record->state == AGENT_EXECUTION_CONTRACT_RECLAIMED) {
+			memset(record, 0, sizeof(*record));
+			record->lifecycle = lifecycle;
 		}
 		if (record->state != AGENT_EXECUTION_CONTRACT_EMPTY) {
 			int replay = record->state ==
@@ -2458,7 +2580,9 @@ build_failed:
 	}
 	enabled = intr_save();
 	record = &agent_execution_contracts[slot];
-	if (!agent_execution_record_enforced(record, lifecycle))
+	if (!agent_execution_record_matches(record, lifecycle) ||
+	    record->state == AGENT_EXECUTION_CONTRACT_EMPTY ||
+	    record->state == AGENT_EXECUTION_STATE_BUILDING)
 		status = AGENT_STATUS_NOT_FOUND;
 	else if (record->generation != control.key.generation)
 		status = AGENT_STATUS_STALE;
@@ -2466,10 +2590,26 @@ build_failed:
 		if (control.nodes != 0 || control.node_count != 0 ||
 		    control.node_size != 0)
 			status = AGENT_STATUS_BAD_PARAM;
-		else if (record->running_count != 0)
-			status = AGENT_STATUS_RETRY;
-		else
+		else if (record->state == AGENT_EXECUTION_CONTRACT_RECLAIMED)
+			status = AGENT_STATUS_OK;
+		else if (!agent_execution_record_enforced(record, lifecycle))
+			status = AGENT_STATUS_NOT_FOUND;
+		else {
+			/* RETIRING closes admission before observing the last direct or
+			 * admitted execution reference.  The same request can poll until
+			 * both counters drain, then receives the durable RECLAIMED receipt. */
 			record->state = AGENT_EXECUTION_CONTRACT_RETIRING;
+			if (record->bare_inflight != 0 ||
+			    record->running_count != 0)
+				status = AGENT_STATUS_RETRY;
+			else
+				record->state =
+					AGENT_EXECUTION_CONTRACT_RECLAIMED;
+		}
+	} else if (record->state == AGENT_EXECUTION_CONTRACT_RECLAIMED) {
+		/* QUERY preserves the exact terminal snapshot until CREATE
+		 * intentionally recycles this lifecycle slot. */
+		status = AGENT_STATUS_OK;
 	} else if ((control.nodes == 0 &&
 		    (control.node_count != 0 || control.node_size != 0)) ||
 		   (control.nodes != 0 &&
@@ -2477,6 +2617,16 @@ build_failed:
 			    sizeof(struct agent_execution_contract_node) ||
 		     control.node_count < record->node_count)))
 		status = AGENT_STATUS_BAD_SIZE;
+	if (status == AGENT_STATUS_OK &&
+	    control.operation == AGENT_EXECUTION_CONTRACT_QUERY &&
+	    control.nodes != 0) {
+		if (record->bare_inflight == (uint)-1)
+			status = AGENT_STATUS_RETRY;
+		else {
+			record->bare_inflight++;
+			query_pinned = 1;
+		}
+	}
 	agent_execution_contract_result_fill(record, &control, &result, status);
 	intr_restore(enabled);
 	if (status == AGENT_STATUS_OK &&
@@ -2486,17 +2636,30 @@ build_failed:
 			    p->pagetable, control.nodes,
 			    (uint64)record->node_count * control.node_size,
 			    PTE_W) < 0)
-			return -1;
+			status = -1;
 		for (uint i = 0; i < record->node_count; i++) {
 			struct agent_execution_contract_node node;
 
+			if (status == -1)
+				break;
 			agent_execution_contract_node_export(record, i, &node);
 			if (copyout(p->pagetable,
 				    control.nodes + (uint64)i * control.node_size,
 				    (char *)&node, sizeof(node)) < 0)
-				return -1;
+				status = -1;
 		}
 	}
+	if (query_pinned) {
+		enabled = intr_save();
+		if (!agent_execution_record_matches(record, lifecycle) ||
+		    record->generation != control.key.generation ||
+		    record->bare_inflight == 0)
+			panic("execution contract query pin");
+		record->bare_inflight--;
+		intr_restore(enabled);
+	}
+	if (status == -1)
+		return -1;
 	goto copy_result;
 
 fill_result:

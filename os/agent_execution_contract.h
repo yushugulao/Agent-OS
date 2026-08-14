@@ -34,6 +34,13 @@ enum agent_execution_effect_admission {
 	AGENT_EXECUTION_EFFECT_ALLOWED = 1,
 };
 
+enum agent_execution_delegate_cancel_admission {
+	AGENT_EXECUTION_DELEGATE_CANCEL_STALE = -1,
+	AGENT_EXECUTION_DELEGATE_CANCEL_DENIED = 0,
+	AGENT_EXECUTION_DELEGATE_CANCEL_ALLOWED = 1,
+	AGENT_EXECUTION_DELEGATE_CANCEL_TIMEOUT = 2,
+};
+
 #define AGENT_EXECUTION_CANCEL_SYNC_ERROR    (-1)
 #define AGENT_EXECUTION_CANCEL_SYNC_PENDING  0
 #define AGENT_EXECUTION_CANCEL_SYNC_COMPLETE 1
@@ -107,6 +114,9 @@ struct agent_execution_direct_guard {
 	struct workflow_lifecycle_key lifecycle;
 	int slot;
 	int active;
+	int delegated_slot;
+	int delegated_active;
+	uint64 delegated_generation;
 };
 
 struct agent_execution_preflight_result {
@@ -129,11 +139,18 @@ struct agent_execution_claim {
 	uint64 source_control_id;
 	uint64 input_provenance_labels;
 	uint64 producer_control_id;
+	uint64 executor_control_id;
+	uint64 executor_context_sequence;
 	uint node_id;
 	uint source_node_id;
 	uint attempt_id;
 	int source_pid;
 	int producer_pid;
+	int executor_pid;
+	int executor_agent_id;
+	int delegated_slot;
+	int delegated_active;
+	uint64 delegated_generation;
 	uint input_artifact_type;
 	uint output_artifact_type;
 	uint charge_class;
@@ -169,7 +186,7 @@ void agent_execution_inline_input_fingerprint(
 int agent_execution_contract_enforced(struct workflow_lifecycle_key);
 uint64 agent_execution_contract_generation(struct workflow_lifecycle_key);
 int agent_execution_contract_direct_enter(
-	struct proc *, struct agent_execution_direct_guard *);
+	struct proc *, uint64, struct agent_execution_direct_guard *);
 void agent_execution_contract_direct_leave(
 	struct agent_execution_direct_guard *);
 int agent_execution_contract_file_pin_enter(
@@ -205,6 +222,13 @@ int agent_execution_contract_claim_cached(
 	struct agent_execution_claim *, struct agent_result *,
 	struct agent_execution_outcome *);
 enum agent_execution_effect_admission agent_execution_contract_effect_begin(
+	struct agent_execution_claim *);
+/* Interrupts-disabled cooperative-cancel policy check; does not commit. */
+enum agent_execution_delegate_cancel_admission
+agent_execution_contract_delegate_cancel_preflight_locked(
+	struct agent_execution_claim *, uint64);
+/* Commit immediately after an ALLOWED preflight in the same IRQ-off section. */
+void agent_execution_contract_delegate_cancel_commit_locked(
 	struct agent_execution_claim *);
 void agent_execution_contract_release(struct agent_execution_claim *);
 

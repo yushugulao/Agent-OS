@@ -42,7 +42,7 @@ enum syscall_class {
 #define SYSCALL_REGISTERED(X) \
 	X(write, DESCRIPTOR, ALWAYS) \
 	X(read, DESCRIPTOR, ALWAYS) \
-	X(fstat, FAST, ALWAYS) \
+	X(fstat, DESCRIPTOR, ALWAYS) \
 	X(openat, BLOCK_IO, ALWAYS) \
 	X(unlinkat, BLOCK_IO_FS_EPOCH, ALWAYS) \
 	X(close, DESCRIPTOR, ALWAYS) \
@@ -86,6 +86,8 @@ enum syscall_class {
 	X(agent_task_channel_setup, FAST, ALWAYS) \
 	X(agent_task_channel_enter, BLOCK_IO_FS_EPOCH, ALWAYS) \
 	X(agent_task_channel_resource, BLOCK_IO_FS_EPOCH, ALWAYS) \
+	X(agent_task_delegate_claim, FAST, ALWAYS) \
+	X(agent_task_delegate_complete, FAST, ALWAYS) \
 	X(agent_resource_snapshot, FAST, ALWAYS) \
 	X(agent_performance_snapshot, FAST, ALWAYS) \
 	X(agent_info, FAST, ALWAYS) \

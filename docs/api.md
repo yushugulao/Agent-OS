@@ -44,7 +44,7 @@ V2 的检查顺序固定为：请求头和身份、工具编号和名称、仅�
 | --- | --- | --- |
 | `tool_call()`、`tool_call_v3()` | ABI 数据能否正常复制 | `response.status`、`sequence`、工具结果和 V3 的决定原因（`decision_reason`）等字段 |
 | `agent_execution_contract()` | 请求和结果能否正常传输 | `result.status`、Execution Contract 状态和 generation |
-| `agent_task_channel_*()` | 请求和结果能否正常传输 | `result.status`、ring 标志和内核记录的水位 |
+| `agent_task_channel_*()`、`agent_task_delegate_*()` | 请求和结果能否正常传输 | `result.status`、ring 标志、内核记录的水位或 delegated task 状态 |
 | `agent_file_query()` | 命中条数或负值 | `agent_file_query_result` 中的查询方式、更新序号和命中项 |
 | Context 或 Runtime 快照 | 记录条数或接口状态 | 调用方提供的表头、记录或快照 |
 
@@ -55,7 +55,7 @@ V2 的检查顺序固定为：请求头和身份、工具编号和名称、仅�
 1. 带版本号的结构先填写 `version`，再按定义填写 `size` 或 `struct_size`；所有保留字段都应置零。
 2. 指针、数组和字符串会由内核重新复制。固定长度字符串必须在字段容量内以 NUL 结尾。
 3. 工作流对象必须使用完整的 `{id, generation}`。只保存数值编号，无法识别槽位是否已经复用。
-4. Task Channel 对象同时带有通道 generation、`slot_generation` 和类型化句柄 generation。SQE 中的 `ring_generation` 必须等于当前通道 generation。
+4. Task Channel 对象同时带有通道 generation、`slot_generation` 和类型化句柄 generation。SQE 中的 `ring_generation` 必须等于当前通道 generation；delegated task 的 claim/complete 还要逐项回传 owner、channel、request 与 slot 绑定。
 5. 任务命令的 `request_id` 必须严格递增。Workflow Fence 支持相同 `request_id` 的 Replay；普通工具请求中的 `request_id` 则按各接口规定用于关联请求或识别重放。
 6. 直接读取 Context 映射时，要用发布序号检查前后是否一致。回退和查询还要继续核对分支与 generation。
 
@@ -67,7 +67,7 @@ ABI 检查程序使用 RISC-V64 探针、`_Static_assert` 和冻结清单，核�
 make agent-uapi-check
 ```
 
-冻结清单位于 [`ci/agent-uapi-layout.json`](../ci/agent-uapi-layout.json)，探针位于 [`scripts/probes/agent-uapi-layout.c`](../scripts/probes/agent-uapi-layout.c)。当前检查覆盖 560 项结构大小、字段偏移、枚举值和系统调用号合约，其中包含系统调用 566 及 64 字节的结果文件发布请求。
+冻结清单位于 [`ci/agent-uapi-layout.json`](../ci/agent-uapi-layout.json)，探针位于 [`scripts/probes/agent-uapi-layout.c`](../scripts/probes/agent-uapi-layout.c)。当前检查覆盖 640 项结构大小、字段偏移、枚举值和系统调用号合约，其中包含结果文件发布以及 delegated task 的描述符、claim/complete、controller cancel 和协作式终态确认布局。
 
 ## 系统调用索引
 
@@ -83,7 +83,7 @@ make agent-uapi-check
 | 事件与进程通信 | 510 至 513、518、520、540、552、553 | `agent_watch()`、`agent_live_watch/unwatch()`、`agent_wait()`、`agent_wait_cancel()`、`agent_wake()`、`agent_route_config()`、心跳接口 |
 | 调度与运行记录 | 521 至 525、528 至 534、557、559、560 | 调度、跟踪、审计、时间线、来源、计费、资源和性能接口 |
 | Execution Contract | 562 | `agent_execution_contract()` |
-| Task Channel | 563 至 565 | `agent_task_channel_setup/enter/resource()` |
+| Task Channel | 563 至 565、567、568 | `agent_task_channel_setup/enter/resource()`、`agent_task_delegate_claim/complete()` |
 
 `tool_call_v3()` 与 V2 共用 `SYS_tool_call`，内核依据请求中的版本号选择布局。`agent_workflow_fence()` 复用 `SYS_agent_run`，调用时要求 `count == 0`，并设置 `flags == AGENT_RUN_F_FENCE`。
 
@@ -126,7 +126,7 @@ int tool_call(struct agent_request_v2 *req,
 int tool_list(struct agent_tool_desc_v2 *out, int max);
 ```
 
-这组接口实现工具调用协议：请求以工具名称/编号和 typed 键值参数表示，响应给出状态码、序号和结构化结果。V1 使用固定布局的请求。V2 用一组带类型信息的键值参数表示调用内容。一次 V2 请求最多包含 8 个 `agent_param_v2`，每项分别填写键名、类型和值的长度。Tool Registry 登记了 25 个名称和编号均不重复的工具，同时注明所需能力、允许的 provenance 和副作用类型。详见[Agent-OS 内核结构化交互接口与工具调用协议](modules/tool-execution.md#tool-registry-与-typed-schema)。
+这组接口实现工具调用协议：请求以工具名称/编号和 typed 键值参数表示，响应给出状态码、序号和结构化结果。V1 使用固定布局的请求。V2 用一组带类型信息的键值参数表示调用内容。一次 V2 请求最多包含 8 个 `agent_param_v2`，每项分别填写键名、类型和值的长度。Tool Registry 登记了 26 个名称和编号均不重复的工具，同时注明所需能力、允许的 provenance 和副作用类型；其中 `delegate_task` 标记为 `AGENT_TOOL_F_SYSCALL_ONLY`，只能通过 Task Channel 提交，不能作为普通 V2/V3 调用执行。详见[Agent-OS 内核结构化交互接口与工具调用协议](modules/tool-execution.md#tool-registry-与-typed-schema)。
 
 ### V3 与 Execution Contract 管理
 
@@ -140,6 +140,10 @@ int agent_execution_contract(
 ```
 
 Execution Contract 可以 `CREATE`、`QUERY` 或 `RETIRE`。每个生命周期最多登记 24 个按依赖顺序排列的节点，每个节点最多尝试 4 次，一份 Execution Contract 最多保留 48 条已经接受的执行结果。`predecessor_mask` 只能引用编号更小的节点。
+
+`RETIRE` 是两阶段操作。第一次调用先把当前代改为 `RETIRING` 并关闭新准入；`bare_inflight` 或 `running_count` 尚未归零时返回 `RETRY/RETIRING`，调用方使用同一 Contract key 继续轮询。引用全部退出后返回 `OK/RECLAIMED`，这时 `ENFORCE` 才解除。`QUERY` 和重复 `RETIRE` 会保留并返回这一代的 `RECLAIMED` 快照；下一次 `CREATE` 才回收它并分配单调递增的新 generation，旧 key 随后返回 `STALE`。
+
+CREATE 使用的发布边界只固定普通 inode 上正在进行的 read/write/fstat 和 Task resource 文件操作。pipe、device 与 stdio 的长期控制读取不增加这项引用，因此不会因为阻塞读取而阻止 Contract 建立；Contract 活动期间的普通 pipe write 仍作为 IPC 副作用经过直接作用检查，不能借控制通道绕过 Contract。Nexus 因而把非 provider 的 observer/Host event 输出延后到 `RECLAIMED` 之后。
 
 V3 请求保留完整的 V2 前缀，后面增加 Execution Contract 键、节点号、尝试次数、schema digest、输入指纹、来源 Context 序号、来源节点、生产者的控制编号和进程号，以及 artifact 类型。响应增加决定原因、工作流记录票号、输出 provenance、结果类型和完成标志。设置 `AGENT_RESPONSE_V3_F_CACHED` 表示本次调用直接取用了已经完成的结果。
 
@@ -250,13 +254,29 @@ int agent_task_channel_enter(
 int agent_task_channel_resource(
     const struct agent_task_channel_resource *request,
     struct agent_task_channel_resource_result *result);
+int agent_task_delegate_claim(
+    const struct agent_task_delegate_claim *request,
+    struct agent_task_delegate_claim_result *result);
+int agent_task_delegate_complete(
+    const struct agent_task_delegate_complete *request,
+    struct agent_task_delegate_complete_result *result);
 ```
 
 每条 Task Channel 只允许一个提交者。SQ 和 CQ 各有 16 个位置，队列表头、SQE 和 CQE 均为 128 字节。`setup` 只能由进程主线程调用，调用后建立共享映射。后续的 `enter` 和 `resource` 都绑定同一个提交者线程及其身份 generation。`enter` 提交新的 SQ 队尾、确认已经读取的 CQ 队头，并推动内核处理任务；`resource` 用于导入、释放和查询类型化句柄。
 
-`IMPORT` 接受当前进程打开的可读普通文件描述符，类型固定为 `AGENT_ARTIFACT_UTF8`，长度必须准确落在 1–63 字节，创建的句柄只能是 OWNED。调用前，当前 Agent 必须已有一条经过校验的最新 Context；导入只绑定它的 sequence，不新建记录。内核从 offset 0 读取并多探测一个字节确认 EOF，不改变共享文件 offset；内容经过 NUL 与 UTF-8 检查后，以不可变快照保存在 Task Channel 私有页中，同时记录内容指纹、生产者 PID/`control_id` 和 `UNTRUSTED_FILE_DATA` provenance。导入成功后的最终 copyout 若失败，刚建立的资源会在用户态可见前回滚。
+`IMPORT` 接受当前进程打开的可读普通文件描述符，创建的句柄只能是 OWNED。`AGENT_ARTIFACT_UTF8` 接受准确的 1–63 字节文本；`AGENT_ARTIFACT_TASK` 只接受准确的 56 字节 `agent_task_delegate_descriptor`。调用前，当前 Agent 必须已有一条经过校验的最新 Context；导入只绑定它的 sequence，不新建记录。内核从 offset 0 读取并多探测一个字节确认 EOF，不改变共享文件 offset。UTF-8 资源需要通过 NUL 与编码检查，TASK 资源需要通过描述符版本、大小、标志和保留字段检查；通过后都以不可变快照保存在 Task Channel 私有页中，同时记录内容指纹、生产者 PID/`control_id`、Context sequence 和 provenance。导入成功后的最终 copyout 若失败，刚建立的资源会在用户态可见前回滚。
 
-SQE 可以把已有 OWNED 句柄改作 BORROWED 别名提交。当前 ECHO Task Bridge 会把快照复制到工具 payload：BORROWED 任务完成后资源仍处于 `LIVE`，调用方随后显式 `RELEASE`；OWNED 任务完成后输入自动消费。释放后的句柄以及槽位复用前的旧 generation 都返回 `STALE`。
+SQE 可以把已有 OWNED 句柄改作 BORROWED 别名提交。ECHO Task Bridge 会把 UTF-8 快照复制到工具 payload；`delegate_task` 则读取 TASK 描述符，并把任务放入内核的 delegated pending 队列。BORROWED 任务完成后资源仍处于 `LIVE`，调用方随后显式 `RELEASE`；OWNED 任务完成后输入自动消费。释放后的句柄以及槽位复用前的旧 generation 都返回 `STALE`。
+
+delegated task 的 56 字节描述符只保存目标 PID、Agent/control 身份、任务类型、task/correlation/parent 标识和 capsule handle。大段输入与输出保存在 Guest artifact 中，由 capsule handle 关联，不放进描述符或 CQE。发起者必须先用 `agent_route_config()` 向目标授予独立的 `AGENT_IPC_ROUTE_TASK`，目标还必须具有 `AGENT_CAP_TASK_ACCEPT`；TASK route 与 `MESSAGE`、`LLM_DONE` 的事件 route 分开。首版拒绝 owner 与 target 相同的 self delegation，也拒绝让一个活动端点同时成为 owner 和 target，因而把活动委派图限制为二分无环。`delegate_task` SQE 被接受后进入真实的 Execution Contract `RUNNING` 和 Task Channel pending 状态。目标调用 `agent_task_delegate_claim()` 取得描述符以及准确的 owner/channel/request/slot 绑定，内核在返回 claim 前登记执行者并进入 effect-start；目标完成 Guest result artifact 后，只用 `agent_task_delegate_complete()` 提交业务状态。首版每个 owner issuer 同时只允许一个尚未结算的委派。
+
+claim 建立的 delegated effect lease 只属于这一条委派，不是整个 workflow 的通用授权。内核把它绑定到执行者 PID/Agent/`control_id`、主线程 identity generation，以及 channel generation、request id 和 slot generation；若 Contract 允许创建 helper，helper 还要匹配单独登记的 TID 与 identity generation。执行者发起直接作用时，请求的 side-effect mask 必须是该 Contract manifest 所列 mask 的子集，并在调用期间持有对应委派代次的引用。正常 complete 或最新终态 offer 的 cleanup ACK 会在活动引用归零后结束 lease；目标进程 quiescence 也会先等待相关调用退出，再撤销这项授权。
+
+正常 complete 要求 `flags == 0`，业务 `terminal_status` 有效，两个确认字段为零。若任务被 claim 后，截止时间、取消、owner 退出或生命周期关闭先取得终态优先级，内核不会立刻向发起者发布 CQE：第一次 complete 返回 `RETRY`、`CLAIMED` 以及 `(terminal_status, terminal_generation)`。执行者应先使预绑定的结果 artifact 失效，再以相同的业务状态、`AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL` 和原样回传的两个终态字段重新调用 complete。若期间优先级升级为 `TIMEOUT`，内核会给出更高 generation 的新 offer，执行者只需再次清理并确认，不得重新运行任务。只有确认最新 offer 后，complete 才返回 `OK`、`READY`，发起者随后从 `enter()` 取得唯一的 terminal CQE。首版不会强制终止已经 claim 后永久不再响应的执行者，因此这种情况下不保证自动收敛。
+
+syscall 568 也提供独立的 controller 取消入口。位于同一生命周期的 controller 设置 `AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL`、`terminal_status=CANCELLED` 和零 ACK 字段，并准确回传 owner PID/`control_id`、channel generation、request id、slot generation、task id 与 correlation id。调用者必须同时具有 `AGENT_CAP_ORCHESTRATE`、`AGENT_CAP_WAIT_CANCEL`，并持有 caller 到 owner 的 TASK route。`OK` 只表示取消请求已经线性化；QUEUED 任务由 owner lane 结算，CLAIMED 任务则在执行者下一次 complete 时返回 `CANCELLED` 或优先级更高的 `TIMEOUT` offer，仍需 cleanup ACK 后才产生 owner 的唯一 CQE。PREPARING/CLAIMING 返回 `RETRY`；READY 或已经终结的任务返回 `STALE`，不会改写先到的结果。内核保存完整绑定的取消回执，因此结果 copyout 丢失时可用同一请求重试。
+
+delegated task 的 CQE 输出类型保持 `NONE`；应用结果仍由 capsule 所绑定的 Guest artifact 传递。发起者的 terminal Context 用 `result.value0 = (agent_id << 32) | (uint32_t)pid` 保存实际执行者，`value1` 保存执行者 `control_id`，`value2` 保存执行者 Context sequence。发起者仍是该 Execution Contract 节点的 terminalizer，二者不能混为同一身份。
 
 SQE 支持提交、取消、关联和强制截止时间。每个已经接受的目标任务只产生一条完成 CQE。取消命令使用自己的 `request_id`，并通过 `link_request_id` 指向目标。若取消策略当场拒绝该命令，取消命令的编号仍会被记为已使用；`enter` 返回 `DENIED`，不会产生取消 CQE，原目标继续执行。CQE 标志可以表示目标被取消、超过截止时间、被拒绝或关联失败。
 
@@ -282,8 +302,8 @@ SQE 支持提交、取消、关联和强制截止时间。每个已经接受的�
 | `NO_SPACE` | 读取并确认完成队列、释放对象，或等待资源结算后再提交 |
 | `STALE`、`CONFLICT`、`NOT_FOUND` | 重新读取生命周期 generation、对象身份或文件编辑版本 |
 | `RESYNC_REQUIRED` | Live Query 要建立替代订阅并用未截断查询重建基线；Task Channel 要执行明确的重新同步 |
-| `RETRY` | 等待负责该对象的模块继续处理，再按接口规则重试；Task Channel 中的新命令要使用更大的请求号 |
-| 工具或任务返回 `TIMEOUT`、`CANCELLED` | 从响应或 CQE 中读取执行结果、决定原因和 Context 序号 |
+| `RETRY` | 按接口规则重试：新 SQE 使用更大的请求号；delegated complete/REQUEST_CANCEL 复用原绑定；Contract `RETIRE` 复用原 key，直到结果由 `RETIRING` 变为 `RECLAIMED` |
+| 工具或任务返回 `TIMEOUT`、`CANCELLED` | 从响应或 CQE 中读取执行结果、决定原因和 Context 序号；已 claim 委派要先完成终态确认，owner 才会看到 CQE |
 | `DURABILITY`、`INDETERMINATE` | 重新读取对象状态和 terminal record，再决定补偿操作或停止 Replay |
 
 `agent_wait_cancel()` 取消的是目标当前或下一次 `agent_wait()`，它与工具调用和 Task Channel 中的目标取消并非同一套语义。内核会为目标安装一条 `AGENT_EVENT_CANCELLED` 事件，目标从 `agent_event` 读取取消或超时结果后自行处理；返回 `DUPLICATE` 表示已经有一条取消请求等待处理。

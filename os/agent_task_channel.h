@@ -165,5 +165,20 @@ int agent_task_channel_rebind_exec(struct proc *, struct thread *);
 int agent_task_channel_reclaim(struct proc *,
 			       const struct agent_task_channel_ops *);
 int agent_task_channel_active(const struct proc *);
+/* True only for the setup-bound live issuer thread. */
+int agent_task_channel_current_issuer(struct proc *, struct thread *);
+/* Teardown-only exact issuer check; does not require a live lifecycle. */
+int agent_task_channel_current_issuer_cleanup(struct proc *, struct thread *);
+/* IRQ-safe wake of the exact generation-bound channel issuer. */
+int agent_task_channel_notify(struct proc *, uint64);
+/* Interrupts-disabled validation for an exact delegated RUNNING request. */
+int agent_task_channel_delegate_cancel_preflight_locked(
+	struct proc *, uint64, uint64, uint64);
+/*
+ * Interrupts-disabled commit after a successful preflight in the same
+ * critical section.  It also supersedes an earlier denied owner SQ CANCEL.
+ */
+int agent_task_channel_delegate_cancel_locked(
+	struct proc *, uint64, uint64, uint64);
 
 #endif

@@ -7,7 +7,7 @@
 #include "defs.h"
 #include "proc.h"
 
-#define AGENT_PROVENANCE_CAP_ALL ((1ULL << 13) - 1ULL)
+#define AGENT_PROVENANCE_CAP_ALL ((1ULL << 14) - 1ULL)
 
 struct agent_provenance_proc_state {
 	int used;

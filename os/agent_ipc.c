@@ -190,6 +190,26 @@ agent_ipc_route_allows(struct proc *source, struct proc *target,
 			     AGENT_EVENT_MASK(event_type)) != 0;
 }
 
+int
+agent_ipc_task_route_allows_locked(struct proc *source, struct proc *target)
+{
+	struct agent_ipc_observe_cold_state *cold;
+	int slot;
+
+	if (intr_get())
+		panic("Agent task route unlocked");
+	if (source == 0 || target == 0 || source->agent_control_id == 0 ||
+	    target->agent_control_id == 0 ||
+	    !agent_ipc_same_scope(source, target))
+		return 0;
+	if (source == target)
+		return 1;
+	slot = agent_ipc_route_find(target, source->agent_control_id);
+	cold = target->agent_ipc_observe_cold;
+	return slot >= 0 && (cold->ipc_route_events[slot] &
+			     AGENT_IPC_ROUTE_TASK) != 0;
+}
+
 static void
 agent_ipc_remove_source_locked(uint64 source_control_id)
 {
@@ -1416,7 +1436,7 @@ int sys_agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 	if (!p->is_agent)
 		return -1;
 	if (source_pid <= 0 || target_pid <= 0 || event_mask == 0 ||
-	    (event_mask & ~AGENT_IPC_EVENT_MASK) != 0 ||
+	    (event_mask & ~AGENT_IPC_ROUTE_MASK) != 0 ||
 	    (operation != AGENT_IPC_ROUTE_GRANT &&
 	     operation != AGENT_IPC_ROUTE_REVOKE))
 		return AGENT_STATUS_BAD_PARAM;

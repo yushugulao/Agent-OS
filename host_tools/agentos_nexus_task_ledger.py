@@ -28,6 +28,7 @@ FULL_U64_MAX: Final = (1 << 64) - 1
 MIN_I32: Final = -(1 << 31)
 MAX_I32: Final = (1 << 31) - 1
 AGENT_STATUS_OK: Final = 0
+AGENT_STATUS_NO_SPACE: Final = -6
 AGENT_STATUS_TIMEOUT: Final = -7
 AGENT_STATUS_CANCELLED: Final = -10
 AGENT_STATUS_IO_ERROR: Final = -18
@@ -51,8 +52,6 @@ TASK_TOOL_ROLES: Final[Mapping[str, str]] = {
     "read_file": "research",
     "inspect_system": "system",
 }
-# Workspace tools settle a Research child artifact which proves only that the
-# Host-side request is ready, never the later provider-private workspace bytes.
 TASK_ARTIFACT_PROVENANCE: Final[Mapping[str, int]] = {
     "search_files": 60,
     "read_file": 60,
@@ -63,20 +62,24 @@ TOOL_PROVENANCE: Final[Mapping[str, int]] = {
     "read_file": 60,
     "inspect_system": 53,
 }
-WORKSPACE_REQUEST_PROJECTIONS: Final[Mapping[str, str]] = {
-    tool: (
-        f"workspace_request={tool}\n"
-        "result_delivery=host_provider_context\n"
-        "content_untrusted=1\n"
-    )
-    for tool in ("search_files", "read_file")
+WORKSPACE_TOOLS: Final = frozenset(("search_files", "read_file"))
+WORKSPACE_OPERATIONS: Final[Mapping[str, frozenset[str]]] = {
+    "search_files": frozenset(("manifest", "search")),
+    "read_file": frozenset(("manifest", "read")),
 }
+WORKSPACE_RESULT_STATUSES: Final = frozenset(("ok", "stale", "error"))
+# Three complete 10k-object scans fit even when bounded manifests shrink to
+# nine entries for maximum-size UTF-8 paths.
+MAX_WORKSPACE_ATTEMPTS: Final = 8192
+MAX_WORKSPACE_CONTENT_BYTES: Final = 2800
+MAX_WORKSPACE_MANIFEST_BYTES: Final = 12000
 # event, root status, TURN_COMPLETE status
 TERMINATION_CONTRACTS: Final[Mapping[str, tuple[str, int, str]]] = {
     "user_interrupt": ("cancelled", AGENT_STATUS_CANCELLED, "cancelled"),
     "provider_fatal": ("failed", AGENT_STATUS_IO_ERROR, "error"),
     "round_limit": ("cancelled", AGENT_STATUS_CANCELLED, "cancelled"),
     "session_error": ("failed", AGENT_STATUS_IO_ERROR, "error"),
+    "context_final_failed": ("failed", AGENT_STATUS_NO_SPACE, "error"),
 }
 BUSINESS_ROLES: Final = frozenset(("coordinator", "system", "research"))
 TASK_TERMINALS: Final = frozenset(("completed", "failed", "cancelled"))
@@ -107,6 +110,17 @@ _ARTIFACT_CLEANUP_SESSION_BLOCK_RESULT = (
 _ARTIFACT_CLEANUP_SESSION_BLOCK_SHA256 = hashlib.sha256(
     _ARTIFACT_CLEANUP_SESSION_BLOCK_RESULT.encode("utf-8")
 ).hexdigest()
+_CONTEXT_FINAL_FAILED_SUMMARY = "context_final_failed"
+_CONTEXT_FINAL_FAILED_SHA256 = hashlib.sha256(
+    _CONTEXT_FINAL_FAILED_SUMMARY.encode("utf-8")
+).hexdigest()
+_TASK_CHANNEL_SUMMARY_RE = re.compile(
+    r"^task_channel_v1;phase=(assigned|cqe);"
+    r"channel_generation=([1-9][0-9]{0,19});"
+    r"request_id=([1-9][0-9]{0,19});"
+    r"slot_generation=([1-9][0-9]{0,19});"
+    r"tool_id=26;contract_generation=([1-9][0-9]{0,19})$"
+)
 
 _EVENT_REQUIRED_FIELDS = frozenset(
     (
@@ -188,8 +202,10 @@ _TASK_ROOT_ITEM_FIELDS = (
     "deadline_tick",
     "terminal_event",
     "terminal_status",
+    "terminal_context_seq",
     "artifact_handle",
     "artifact_sha256",
+    "artifact_context_seq",
     "resource_used",
     "provenance",
     "tool",
@@ -216,6 +232,8 @@ _ARTIFACT_ROOT_ITEM_FIELDS = (
     "tool",
     "artifact_handle",
     "artifact_sha256",
+    "cqe_context_seq",
+    "consumption_context_seq",
     "resource_used",
     "provenance",
     "projection_sha256",
@@ -238,7 +256,33 @@ _TOOL_ROOT_ITEM_FIELDS = (
     "provenance",
     "projection_sha256",
     "result_sha256",
+    "context_seq",
+    "workspace_source_sha256",
+    "workspace_attempt_count",
+    "workspace_attempts_sha256",
     "session_blocked",
+)
+
+_WORKSPACE_ATTEMPT_FIELDS = (
+    "version",
+    "corr_id",
+    "task_id",
+    "tool",
+    "operation",
+    "attempt",
+    "manifest_cursor",
+    "manifest_next_cursor",
+    "manifest_eof",
+    "request_generation",
+    "result_generation",
+    "arguments_sha256",
+    "request_objects_sha256",
+    "result_objects_sha256",
+    "request_sha256",
+    "status",
+    "content_bytes",
+    "content_sha256",
+    "result_sha256",
 )
 
 
@@ -278,8 +322,10 @@ class NexusTaskSnapshot:
     state: str
     terminal_event: str
     terminal_status: int
+    terminal_context_seq: int
     artifact_handle: int
     artifact_sha256: str
+    artifact_context_seq: int
     resource_used: int
     provenance: int
     tool: str
@@ -329,7 +375,33 @@ class _ToolRecord:
     provenance: int = 0
     projection_sha256: str = ""
     result_sha256: str = ""
+    context_seq: int = 0
+    workspace_source_sha256: str = ""
+    reserved_task_id: int = 0
+    workspace_attempts: list["_WorkspaceAttempt"] = field(default_factory=list)
     session_blocked: bool = False
+
+
+@dataclass(slots=True)
+class _WorkspaceAttempt:
+    corr_id: int
+    task_id: int
+    tool: str
+    operation: str
+    attempt: int
+    manifest_cursor: int
+    request_generation: str
+    arguments_sha256: str
+    request_objects_sha256: str
+    request_sha256: str
+    status: str = ""
+    manifest_next_cursor: int = 0
+    manifest_eof: bool = False
+    result_generation: str = ""
+    result_objects_sha256: str = ""
+    content_bytes: int = 0
+    content_sha256: str = ""
+    result_sha256: str = ""
 
 
 @dataclass(slots=True)
@@ -356,12 +428,18 @@ class _TaskRecord:
     control_id_known: bool
     control_id: int
     deadline_tick: int
+    channel_generation: int = 0
+    channel_request_id: int = 0
+    slot_generation: int = 0
+    contract_generation: int = 0
     state: str = "assigned"
     terminal_event: str = ""
     terminal_corr_id: int = 0
     terminal_status: int = 0
+    terminal_context_seq: int = 0
     artifact_handle: int = 0
     artifact_sha256: str = ""
+    artifact_context_seq: int = 0
     resource_used: int = 0
     provenance: int = 0
     identity_verified: bool = False
@@ -437,6 +515,26 @@ def _digest(
     if _DIGEST_RE.fullmatch(result) is None:
         raise NexusTaskLedgerError(f"{label} is malformed", code=code)
     return result
+
+
+def _task_channel_binding(
+    summary: str, *, phase: str
+) -> tuple[int, int, int, int]:
+    match = _TASK_CHANNEL_SUMMARY_RE.fullmatch(summary)
+    if match is None or match.group(1) != phase:
+        raise NexusTaskLedgerError(
+            "child TASK_EVENT lacks its Task Channel binding"
+        )
+    values = tuple(
+        _integer(
+            int(match.group(index)),
+            "Task Channel binding",
+            minimum=1,
+            maximum=FULL_U64_MAX,
+        )
+        for index in range(2, 6)
+    )
+    return values[0], values[1], values[2], values[3]
 
 
 def _fixed(fields: Sequence[str], values: Mapping[str, object]) -> dict[str, object]:
@@ -791,6 +889,509 @@ class NexusTaskLedger:
         self._tools[corr] = record
         request.response_outcome = "tool"
 
+    def record_workspace_request(
+        self,
+        corr_id: object,
+        *,
+        task_id: object,
+        tool: object,
+        operation: object,
+        attempt: object,
+        workspace_generation: object,
+        arguments_sha256: object,
+        objects_sha256: object,
+        manifest_cursor: object,
+    ) -> str:
+        """Bind one body-free Guest workspace exchange to a pending tool.
+
+        The Host validates the request body before calling this method.  The
+        ledger retains only the canonical arguments/object roots and the
+        workspace generation.  Attempts are correlation-local and strictly
+        increasing across manifest pages and the final search/read operation.
+        """
+
+        self._require_mutable(code="BAD_WORKSPACE_EVENT")
+        if self._provider_final_frozen or self._cancelling or self._session_blocked:
+            raise NexusTaskLedgerError(
+                "workspace request arrived after turn execution froze",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        corr = _integer(
+            corr_id,
+            "corr_id",
+            minimum=1,
+            maximum=MAX_U64,
+            code="BAD_WORKSPACE_EVENT",
+        )
+        record = self._tools.get(corr)
+        request = self._requests.get(corr)
+        if (
+            record is None
+            or request is None
+            or corr != self._latest_corr_id
+            or request.response_outcome != "tool"
+            or record.settled
+            or record.tool not in WORKSPACE_TOOLS
+        ):
+            raise NexusTaskLedgerError(
+                "workspace request has no active workspace tool",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        name = _text(tool, "tool", maximum=64, code="BAD_WORKSPACE_EVENT")
+        op = _text(
+            operation, "workspace operation", maximum=16,
+            code="BAD_WORKSPACE_EVENT"
+        )
+        if name != record.tool or op not in WORKSPACE_OPERATIONS[name]:
+            raise NexusTaskLedgerError(
+                "workspace request changed its delivered tool operation",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        task = _integer(
+            task_id,
+            "task_id",
+            minimum=1,
+            maximum=MAX_U32,
+            code="BAD_WORKSPACE_EVENT",
+        )
+        if record.task_id or (
+            record.reserved_task_id and record.reserved_task_id != task
+        ):
+            raise NexusTaskLedgerError(
+                "workspace request changed or followed its child Task",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        sequence = _integer(
+            attempt,
+            "workspace attempt",
+            minimum=1,
+            maximum=MAX_WORKSPACE_ATTEMPTS,
+            code="BAD_WORKSPACE_EVENT",
+        )
+        if sequence != len(record.workspace_attempts) + 1:
+            raise NexusTaskLedgerError(
+                "workspace attempts are duplicated or non-consecutive",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        generation = _digest(
+            workspace_generation,
+            "workspace_generation",
+            empty=True,
+            code="BAD_WORKSPACE_EVENT",
+        )
+        arguments = _digest(
+            arguments_sha256, "arguments_sha256", code="BAD_WORKSPACE_EVENT"
+        )
+        objects = _digest(
+            objects_sha256, "objects_sha256", code="BAD_WORKSPACE_EVENT"
+        )
+        cursor = _integer(
+            manifest_cursor,
+            "manifest_cursor",
+            minimum=0,
+            maximum=MAX_U32,
+            code="BAD_WORKSPACE_EVENT",
+        )
+        if op != "manifest" and cursor != 0:
+            raise NexusTaskLedgerError(
+                "non-manifest workspace request exposed a cursor",
+                code="BAD_WORKSPACE_EVENT",
+            )
+
+        if record.workspace_attempts:
+            previous = record.workspace_attempts[-1]
+            if not previous.status:
+                raise NexusTaskLedgerError(
+                    "workspace request preceded its prior Host result",
+                    code="BAD_WORKSPACE_EVENT",
+                )
+            if previous.status == "error" or (
+                previous.status == "ok" and previous.operation == "read"
+            ):
+                raise NexusTaskLedgerError(
+                    "workspace request followed a terminal Host result",
+                    code="BAD_WORKSPACE_EVENT",
+                )
+            if (
+                previous.status == "ok"
+                and previous.operation == "search"
+                and (op != "manifest" or generation != previous.result_generation)
+            ):
+                raise NexusTaskLedgerError(
+                    "paged workspace search did not continue with its manifest",
+                    code="BAD_WORKSPACE_EVENT",
+                )
+            if previous.status == "stale" and (op != "manifest" or generation):
+                raise NexusTaskLedgerError(
+                    "stale workspace state was not restarted from a manifest",
+                    code="BAD_WORKSPACE_EVENT",
+                )
+            if previous.status == "stale" and cursor != 0:
+                raise NexusTaskLedgerError(
+                    "stale workspace state did not restart at cursor zero",
+                    code="BAD_WORKSPACE_EVENT",
+                )
+            if (
+                previous.status == "ok"
+                and op == "manifest"
+                and generation != previous.result_generation
+            ):
+                raise NexusTaskLedgerError(
+                    "workspace manifest paging changed its generation",
+                    code="BAD_WORKSPACE_EVENT",
+                )
+            if op == "manifest" and previous.status == "ok":
+                manifests = [
+                    item
+                    for item in record.workspace_attempts
+                    if item.operation == "manifest" and item.status == "ok"
+                ]
+                if not manifests:
+                    raise NexusTaskLedgerError(
+                        "workspace manifest cursor lacks a prior page",
+                        code="BAD_WORKSPACE_EVENT",
+                    )
+                prior_manifest = manifests[-1]
+                if prior_manifest.manifest_eof:
+                    raise NexusTaskLedgerError(
+                        "workspace manifest continued after end of catalog",
+                        code="BAD_WORKSPACE_EVENT",
+                    )
+                if cursor != prior_manifest.manifest_next_cursor:
+                    raise NexusTaskLedgerError(
+                        "workspace manifest cursor skipped or repeated a page",
+                        code="BAD_WORKSPACE_EVENT",
+                    )
+        elif op != "manifest" or generation or cursor != 0:
+            raise NexusTaskLedgerError(
+                "workspace exchange did not start with a fresh manifest",
+                code="BAD_WORKSPACE_EVENT",
+            )
+
+        if op != "manifest":
+            manifests = [
+                item for item in record.workspace_attempts
+                if item.operation == "manifest" and item.status == "ok"
+            ]
+            if (
+                not manifests
+                or not generation
+                or manifests[-1].result_generation != generation
+            ):
+                raise NexusTaskLedgerError(
+                    "workspace operation is not bound to the current manifest",
+                    code="BAD_WORKSPACE_EVENT",
+                )
+
+        request_root = _sha256(
+            {
+                "version": 1,
+                "corr_id": corr,
+                "task_id": task,
+                "tool": name,
+                "operation": op,
+                "attempt": sequence,
+                "manifest_cursor": cursor,
+                "workspace_generation": generation,
+                "arguments_sha256": arguments,
+                "objects_sha256": objects,
+            }
+        )
+        record.reserved_task_id = task
+        record.workspace_attempts.append(
+            _WorkspaceAttempt(
+                corr_id=corr,
+                task_id=task,
+                tool=name,
+                operation=op,
+                attempt=sequence,
+                manifest_cursor=cursor,
+                request_generation=generation,
+                arguments_sha256=arguments,
+                request_objects_sha256=objects,
+                request_sha256=request_root,
+            )
+        )
+        return request_root
+
+    def record_workspace_result(
+        self,
+        corr_id: object,
+        *,
+        task_id: object,
+        tool: object,
+        operation: object,
+        attempt: object,
+        workspace_generation: object,
+        arguments_sha256: object,
+        result_objects_sha256: object,
+        status: object,
+        content_bytes: object,
+        content_sha256: object,
+        manifest_cursor: object,
+        manifest_next_cursor: object,
+        manifest_eof: object,
+        content: object | None = None,
+    ) -> str:
+        """Settle one Host workspace exchange without retaining its content."""
+
+        self._require_mutable(code="BAD_WORKSPACE_EVENT")
+        if self._provider_final_frozen or self._cancelling or self._session_blocked:
+            raise NexusTaskLedgerError(
+                "workspace result arrived after turn execution froze",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        corr = _integer(
+            corr_id,
+            "corr_id",
+            minimum=1,
+            maximum=MAX_U64,
+            code="BAD_WORKSPACE_EVENT",
+        )
+        record = self._tools.get(corr)
+        request = self._requests.get(corr)
+        if (
+            record is None
+            or request is None
+            or corr != self._latest_corr_id
+            or request.response_outcome != "tool"
+            or record.settled
+            or record.tool not in WORKSPACE_TOOLS
+            or not record.workspace_attempts
+        ):
+            raise NexusTaskLedgerError(
+                "workspace result has no active Guest request",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        pending = record.workspace_attempts[-1]
+        name = _text(tool, "tool", maximum=64, code="BAD_WORKSPACE_EVENT")
+        op = _text(
+            operation, "workspace operation", maximum=16,
+            code="BAD_WORKSPACE_EVENT"
+        )
+        sequence = _integer(
+            attempt,
+            "workspace attempt",
+            minimum=1,
+            maximum=MAX_WORKSPACE_ATTEMPTS,
+            code="BAD_WORKSPACE_EVENT",
+        )
+        task = _integer(
+            task_id,
+            "task_id",
+            minimum=1,
+            maximum=MAX_U32,
+            code="BAD_WORKSPACE_EVENT",
+        )
+        arguments = _digest(
+            arguments_sha256, "arguments_sha256", code="BAD_WORKSPACE_EVENT"
+        )
+        result_objects = _digest(
+            result_objects_sha256,
+            "result_objects_sha256",
+            code="BAD_WORKSPACE_EVENT",
+        )
+        cursor = _integer(
+            manifest_cursor,
+            "manifest_cursor",
+            minimum=0,
+            maximum=MAX_U32,
+            code="BAD_WORKSPACE_EVENT",
+        )
+        next_cursor = _integer(
+            manifest_next_cursor,
+            "manifest_next_cursor",
+            minimum=0,
+            maximum=MAX_U32,
+            code="BAD_WORKSPACE_EVENT",
+        )
+        if not isinstance(manifest_eof, bool):
+            raise NexusTaskLedgerError(
+                "manifest_eof must be boolean", code="BAD_WORKSPACE_EVENT"
+            )
+        eof = manifest_eof
+        if (
+            pending.status
+            or (task, name, op, sequence, arguments, cursor)
+            != (
+                pending.task_id,
+                pending.tool,
+                pending.operation,
+                pending.attempt,
+                pending.arguments_sha256,
+                pending.manifest_cursor,
+            )
+        ):
+            raise NexusTaskLedgerError(
+                "workspace result changed, duplicated, or reordered its request",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        outcome = _text(
+            status, "workspace status", maximum=16, code="BAD_WORKSPACE_EVENT"
+        )
+        if outcome not in WORKSPACE_RESULT_STATUSES:
+            raise NexusTaskLedgerError(
+                "workspace result status is unsupported",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        if op != "manifest" and (cursor != 0 or next_cursor != 0 or eof):
+            raise NexusTaskLedgerError(
+                "non-manifest workspace result exposed catalog paging",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        if op == "manifest" and outcome != "ok" and (next_cursor != 0 or eof):
+            raise NexusTaskLedgerError(
+                "unsuccessful manifest exposed catalog paging",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        if op == "manifest" and outcome == "ok":
+            if next_cursor < cursor or (not eof and next_cursor == cursor):
+                raise NexusTaskLedgerError(
+                    "successful manifest cursor did not advance toward EOF",
+                    code="BAD_WORKSPACE_EVENT",
+                )
+        generation = _digest(
+            workspace_generation,
+            "workspace_generation",
+            code="BAD_WORKSPACE_EVENT",
+        )
+        content_limit = (
+            MAX_WORKSPACE_MANIFEST_BYTES
+            if op == "manifest"
+            else MAX_WORKSPACE_CONTENT_BYTES
+        )
+        size = _integer(
+            content_bytes,
+            "content_bytes",
+            minimum=0,
+            maximum=content_limit,
+            code="BAD_WORKSPACE_EVENT",
+        )
+        digest = _digest(
+            content_sha256, "content_sha256", code="BAD_WORKSPACE_EVENT"
+        )
+        if content is not None:
+            if not isinstance(content, str) or "\0" in content:
+                raise NexusTaskLedgerError(
+                    "workspace content is not valid text",
+                    code="BAD_WORKSPACE_EVENT",
+                )
+            try:
+                raw_content = content.encode("utf-8")
+            except UnicodeEncodeError as error:
+                raise NexusTaskLedgerError(
+                    "workspace content is not UTF-8",
+                    code="BAD_WORKSPACE_EVENT",
+                ) from error
+            if (
+                len(raw_content) != size
+                or len(raw_content) > content_limit
+                or not hmac.compare_digest(
+                    hashlib.sha256(raw_content).hexdigest(), digest
+                )
+            ):
+                raise NexusTaskLedgerError(
+                    "workspace content does not match its bounded digest",
+                    code="BAD_WORKSPACE_EVENT",
+                )
+        empty_digest = hashlib.sha256(b"").hexdigest()
+        if outcome == "stale" and (
+            size != 0 or not hmac.compare_digest(digest, empty_digest)
+        ):
+            raise NexusTaskLedgerError(
+                "stale workspace result exposed content",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        if outcome == "ok" and not generation:
+            raise NexusTaskLedgerError(
+                "successful workspace result lacks a generation",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        if (
+            outcome == "ok"
+            and pending.request_generation
+            and generation != pending.request_generation
+        ):
+            raise NexusTaskLedgerError(
+                "workspace content came from a different generation",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        result_root = _sha256(
+            {
+                "version": 1,
+                "request_sha256": pending.request_sha256,
+                "manifest_cursor": cursor,
+                "manifest_next_cursor": next_cursor,
+                "manifest_eof": eof,
+                "workspace_generation": generation,
+                "objects_sha256": result_objects,
+                "status": outcome,
+                "content_bytes": size,
+                "content_sha256": digest,
+            }
+        )
+        pending.status = outcome
+        pending.manifest_next_cursor = next_cursor
+        pending.manifest_eof = eof
+        pending.result_generation = generation
+        pending.result_objects_sha256 = result_objects
+        pending.content_bytes = size
+        pending.content_sha256 = digest
+        pending.result_sha256 = result_root
+        return result_root
+
+    def workspace_source_sha256(self, corr_id: object) -> str:
+        """Return the Guest-compatible source root for accepted workspace pages."""
+
+        self._require_active(code="BAD_WORKSPACE_EVENT")
+        corr = _integer(
+            corr_id,
+            "corr_id",
+            minimum=1,
+            maximum=MAX_U64,
+            code="BAD_WORKSPACE_EVENT",
+        )
+        record = self._tools.get(corr)
+        if (
+            record is None
+            or record.tool not in WORKSPACE_TOOLS
+            or not record.workspace_attempts
+            or any(not attempt.status for attempt in record.workspace_attempts)
+        ):
+            raise NexusTaskLedgerError(
+                "workspace source root is not complete",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        accepted: list[_WorkspaceAttempt] = []
+        for attempt in record.workspace_attempts:
+            if attempt.status == "stale":
+                accepted.clear()
+            elif attempt.status == "ok":
+                accepted.append(attempt)
+        if not accepted:
+            raise NexusTaskLedgerError(
+                "workspace source root has no accepted generation",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        source = bytearray()
+        for attempt in accepted:
+            request_generation = attempt.request_generation or ("0" * 64)
+            source.extend(
+                (
+                    "workspace_source_attempt_v1\n"
+                    f"operation={attempt.operation}\n"
+                    f"attempt={attempt.attempt}\n"
+                    f"request_generation={request_generation}\n"
+                    f"result_generation={attempt.result_generation}\n"
+                    f"arguments_sha256={attempt.arguments_sha256}\n"
+                    f"objects_sha256={attempt.result_objects_sha256}\n"
+                    "status=ok\n"
+                    f"content_bytes={attempt.content_bytes}\n"
+                    f"content_sha256={attempt.content_sha256}\n"
+                ).encode("ascii")
+            )
+        return hashlib.sha256(source).hexdigest()
+
     def record_model_request(self, corr_id: object) -> None:
         """Bind the next request after the exact three-event root prelude."""
 
@@ -1127,6 +1728,7 @@ class NexusTaskLedger:
                 or (
                     kind != "completed"
                     and not self._is_artifact_cleanup_root(normalized)
+                    and not self._is_context_final_failed_root(normalized)
                 )
                 or root.terminal_event
                 or int(normalized["corr_id"]) != self._final_corr_id
@@ -1168,6 +1770,8 @@ class NexusTaskLedger:
         value2: object = 0,
         provenance: object = 0,
         projection_sha256: object = "",
+        workspace_source_sha256: object = "",
+        context_seq: object = 0,
         result_sha256: object,
         session_blocked_marker: object = "",
     ) -> None:
@@ -1214,6 +1818,19 @@ class NexusTaskLedger:
             empty=True,
             code="BAD_TOOL_EVENT",
         )
+        workspace_source = _digest(
+            workspace_source_sha256,
+            "workspace_source_sha256",
+            empty=True,
+            code="BAD_TOOL_EVENT",
+        )
+        context = _integer(
+            context_seq,
+            "context_seq",
+            minimum=0,
+            maximum=MAX_U64,
+            code="BAD_TOOL_EVENT",
+        )
         result_digest = _digest(result_sha256, "result_sha256", code="BAD_TOOL_EVENT")
         block_marker = _text(
             session_blocked_marker,
@@ -1247,6 +1864,21 @@ class NexusTaskLedger:
                 code="BAD_TOOL_EVENT",
             )
 
+        if record.tool in WORKSPACE_TOOLS and settled_status == AGENT_STATUS_OK:
+            expected_workspace_source = self.workspace_source_sha256(corr)
+            if not workspace_source or not hmac.compare_digest(
+                workspace_source, expected_workspace_source
+            ):
+                raise NexusTaskLedgerError(
+                    "workspace tool changed its accepted source root",
+                    code="BAD_TOOL_EVENT",
+                )
+        elif workspace_source:
+            raise NexusTaskLedgerError(
+                "non-workspace or failed tool exposed a workspace source root",
+                code="BAD_TOOL_EVENT",
+            )
+
         expected_role = self._task_tool_roles.get(record.tool)
         task = self._tasks.get(record.task_id) if record.task_id else None
         if pending_session_block:
@@ -1266,6 +1898,7 @@ class NexusTaskLedger:
                 values,
                 labels,
                 projection,
+                context,
             )
         else:
             raise NexusTaskLedgerError(
@@ -1277,6 +1910,8 @@ class NexusTaskLedger:
         record.provenance = labels
         record.projection_sha256 = projection
         record.result_sha256 = result_digest
+        record.context_seq = context
+        record.workspace_source_sha256 = workspace_source
         record.session_blocked = pending_session_block
         request = self._requests[corr]
         request.tool_settled = True
@@ -1334,7 +1969,7 @@ class NexusTaskLedger:
             )
         self._task_root_sha256 = _sha256(
             {
-                "version": 3,
+                "version": 4,
                 "tasks": self._task_root_items(),
                 "tools": self._tool_root_items(),
             }
@@ -1502,6 +2137,17 @@ class NexusTaskLedger:
             elif request.response_outcome not in ("tool", "retryable_error"):
                 raise NexusTaskLedgerError(
                     "user interrupt conflicts with the request outcome",
+                    code="BAD_TURN",
+                )
+        elif cause == "context_final_failed":
+            if (
+                not self._provider_final_frozen
+                or corr_id != self._final_corr_id
+                or request.response_outcome != "final"
+                or self._session_blocked
+            ):
+                raise NexusTaskLedgerError(
+                    "context final failure lacks its frozen provider final",
                     code="BAD_TURN",
                 )
         request.termination_cause = cause
@@ -1675,6 +2321,33 @@ class NexusTaskLedger:
                 hashlib.sha256(summary_raw).hexdigest() if summary_raw else ""
             ),
         }
+        task_channel_binding = (0, 0, 0, 0)
+        if normalized["parent_task_id"] != 0:
+            if kind == "assigned":
+                task_channel_binding = _task_channel_binding(
+                    summary_text, phase="assigned"
+                )
+            elif kind in ("accepted", "progress"):
+                raise NexusTaskLedgerError(
+                    "native Task Channel child emitted a legacy transition"
+                )
+            elif kind in TASK_TERMINALS and not (
+                kind == "failed"
+                and normalized["status"] == AGENT_STATUS_INDETERMINATE
+                and summary_text == _SESSION_BLOCK_SUMMARY
+            ):
+                task_channel_binding = _task_channel_binding(
+                    summary_text, phase="cqe"
+                )
+                if normalized["context_seq"] == 0:
+                    raise NexusTaskLedgerError(
+                        "Task Channel terminal lacks its CQE context sequence"
+                    )
+            if normalized["metric_code"] or normalized["metric_value"]:
+                raise NexusTaskLedgerError(
+                    "native Task Channel child exposed legacy progress metrics"
+                )
+        normalized["task_channel_binding"] = task_channel_binding
         cleanup_marker = bool(
             normalized["summary_bytes"]
             == len(_ARTIFACT_CLEANUP_SESSION_BLOCK_RESULT.encode("utf-8"))
@@ -1687,6 +2360,18 @@ class NexusTaskLedger:
         ):
             raise NexusTaskLedgerError(
                 "artifact cleanup marker has an invalid root terminal envelope"
+            )
+        context_final_failed_marker = bool(
+            normalized["summary_bytes"]
+            == len(_CONTEXT_FINAL_FAILED_SUMMARY.encode("utf-8"))
+            and normalized["summary_sha256"] == _CONTEXT_FINAL_FAILED_SHA256
+        )
+        if context_final_failed_marker and not (
+            normalized["parent_task_id"] == 0
+            and self._is_context_final_failed_root(normalized)
+        ):
+            raise NexusTaskLedgerError(
+                "context final failure marker has an invalid root terminal envelope"
             )
         if (normalized["metric_code"] == 0) != (normalized["metric_value"] == 0):
             # metric_value may legitimately be zero, but the wire omits both
@@ -1736,8 +2421,17 @@ class NexusTaskLedger:
             if corr_id != self._latest_corr_id or corr_id not in self._requests:
                 raise NexusTaskLedgerError("child Task uses a stale model correlation")
             expected_role = self._task_tool_roles.get(tool.tool)
-            if expected_role is None or expected_role != role or tool.task_id:
+            if (
+                expected_role is None
+                or expected_role != role
+                or tool.task_id
+                or (tool.reserved_task_id and tool.reserved_task_id != task_id)
+            ):
                 raise NexusTaskLedgerError("child Task/tool role binding is malformed")
+            if tool.tool in WORKSPACE_TOOLS and not self._workspace_ready(tool):
+                raise NexusTaskLedgerError(
+                    "workspace child Task preceded its accepted Host content"
+                )
             if deadline == 0 or deadline <= int(value["tick"]):
                 raise NexusTaskLedgerError("child Task deadline is not in the future")
             if (
@@ -1746,6 +2440,8 @@ class NexusTaskLedger:
             ):
                 raise NexusTaskLedgerError("child Task assignment routing is malformed")
             tool.task_id = task_id
+        channel_binding = value["task_channel_binding"]
+        assert isinstance(channel_binding, tuple) and len(channel_binding) == 4
         task = _TaskRecord(
             turn_id=self._turn_id,
             request_id=self._request_id,
@@ -1760,6 +2456,10 @@ class NexusTaskLedger:
             control_id_known=bool(value["control_id_known"]),
             control_id=int(value["control_id"]),
             deadline_tick=deadline,
+            channel_generation=int(channel_binding[0]),
+            channel_request_id=int(channel_binding[1]),
+            slot_generation=int(channel_binding[2]),
+            contract_generation=int(channel_binding[3]),
         )
         task.identity_verified = self._verify_task_identity(task)
         self._tasks[task_id] = task
@@ -1786,11 +2486,19 @@ class NexusTaskLedger:
                 and status == AGENT_STATUS_TASK_FAILED
                 and value["summary_sha256"] == _SESSION_BLOCK_SUMMARY_SHA256
             )
-            expected_route = (
-                (root.agent_pid, task.agent_pid)
-                if synthetic_block
-                else (task.agent_pid, root.agent_pid)
-            )
+            if kind in TASK_TERMINALS and not synthetic_block:
+                channel_binding = value["task_channel_binding"]
+                expected_channel_binding = (
+                    task.channel_generation,
+                    task.channel_request_id,
+                    task.slot_generation,
+                    task.contract_generation,
+                )
+                if channel_binding != expected_channel_binding:
+                    raise NexusTaskLedgerError(
+                        "Task Channel CQE changed its submitted binding"
+                    )
+            expected_route = (root.agent_pid, task.agent_pid)
             if (int(value["source_pid"]), int(value["target_pid"])) != expected_route:
                 raise NexusTaskLedgerError("child Task event routing is malformed")
             if status == AGENT_STATUS_TASK_FAILED and not synthetic_block:
@@ -1836,9 +2544,9 @@ class NexusTaskLedger:
             if task.parent_task_id == 0:
                 allowed_states = ("running",)
             elif kind == "completed":
-                allowed_states = ("accepted", "running", "waiting")
+                allowed_states = ("assigned",)
             else:
-                allowed_states = ("assigned", "accepted", "running", "waiting")
+                allowed_states = ("assigned",)
             if task.state not in allowed_states:
                 raise NexusTaskLedgerError("Task terminal result followed an invalid state")
             if kind == "completed" and status != AGENT_STATUS_OK:
@@ -1861,6 +2569,7 @@ class NexusTaskLedger:
                             "root completion is not bound to the frozen provider final"
                         )
                 else:
+                    self._stage_context_final_failure(corr_id, value)
                     self._stage_artifact_cleanup_session_error(
                         corr_id, value
                     )
@@ -1901,6 +2610,7 @@ class NexusTaskLedger:
             task.terminal_event = kind
             task.terminal_corr_id = corr_id
             task.terminal_status = status
+            task.terminal_context_seq = int(value["context_seq"])
             if task.parent_task_id and kind == "completed":
                 self._pending_artifact_task_id = task.task_id
             if task.parent_task_id and status == AGENT_STATUS_TASK_FAILED:
@@ -1992,6 +2702,17 @@ class NexusTaskLedger:
         assert request is not None
         request.termination_cause = "session_error"
 
+    def _stage_context_final_failure(
+        self,
+        corr_id: int,
+        value: Mapping[str, object],
+    ) -> None:
+        """Bind the exact post-provider Context FINAL append failure."""
+
+        if not self._is_context_final_failed_root(value):
+            return
+        self._arm_termination(corr_id, "context_final_failed")
+
     @staticmethod
     def _task_execution_complete_for_cleanup(
         task: _TaskRecord | None,
@@ -2011,6 +2732,23 @@ class NexusTaskLedger:
             == len(_ARTIFACT_CLEANUP_SESSION_BLOCK_RESULT.encode("utf-8"))
             and value["summary_sha256"]
             == _ARTIFACT_CLEANUP_SESSION_BLOCK_SHA256
+            and value["deadline_tick"] == 0
+            and value["artifact_handle"] == 0
+            and value["artifact_sha256"] == ""
+            and value["resource_used"] == 0
+            and value["provenance"] == NEXUS_PROVENANCE_FAILURE
+            and value["metric_code"] == 0
+            and value["metric_value"] == 0
+        )
+
+    @staticmethod
+    def _is_context_final_failed_root(value: Mapping[str, object]) -> bool:
+        return bool(
+            value["event"] == "failed"
+            and value["status"] == AGENT_STATUS_NO_SPACE
+            and value["summary_bytes"]
+            == len(_CONTEXT_FINAL_FAILED_SUMMARY.encode("utf-8"))
+            and value["summary_sha256"] == _CONTEXT_FINAL_FAILED_SHA256
             and value["deadline_tick"] == 0
             and value["artifact_handle"] == 0
             and value["artifact_sha256"] == ""
@@ -2089,21 +2827,59 @@ class NexusTaskLedger:
         handle = int(value["artifact_handle"])
         if handle != 0:
             raise NexusTaskLedgerError("transient Task artifact exposed a handle")
-        placeholder = WORKSPACE_REQUEST_PROJECTIONS.get(tool.tool)
-        if placeholder is not None:
-            expected_digest = hashlib.sha256(placeholder.encode("utf-8")).hexdigest()
-            if resource != len(placeholder.encode("utf-8")) or not hmac.compare_digest(
-                digest, expected_digest
+        context = int(value["context_seq"])
+        if context == 0:
+            raise NexusTaskLedgerError(
+                "Coordinator artifact acceptance lacks its Context sequence"
+            )
+        if task.terminal_context_seq == 0 or context <= task.terminal_context_seq:
+            raise NexusTaskLedgerError(
+                "Coordinator artifact acceptance did not follow its Task Channel CQE"
+            )
+        workspace = self._workspace_content(tool)
+        if tool.tool == "read_file":
+            if workspace is None or (
+                resource != workspace.content_bytes
+                or not hmac.compare_digest(digest, workspace.content_sha256)
             ):
                 raise NexusTaskLedgerError(
-                    "workspace Task artifact is not the canonical Host-request placeholder"
+                    "workspace Task artifact does not bind accepted Host content"
                 )
         task.artifact_handle = handle
         task.artifact_sha256 = digest
+        task.artifact_context_seq = context
         task.resource_used = resource
         task.provenance = provenance
         self._append_event(task, value)
         self._pending_artifact_task_id = 0
+
+    @staticmethod
+    def _workspace_content(tool: _ToolRecord) -> _WorkspaceAttempt | None:
+        target = "search" if tool.tool == "search_files" else "read"
+        for attempt in reversed(tool.workspace_attempts):
+            if attempt.status == "stale":
+                break
+            if attempt.operation == target and attempt.status == "ok":
+                return attempt
+        return None
+
+    @staticmethod
+    def _workspace_ready(tool: _ToolRecord) -> bool:
+        if not tool.workspace_attempts or not tool.workspace_attempts[-1].status:
+            return False
+        if tool.workspace_attempts[-1].status != "ok":
+            return False
+        if tool.tool == "read_file":
+            return NexusTaskLedger._workspace_content(tool) is not None
+        final = tool.workspace_attempts[-1]
+        if final.operation == "manifest":
+            return final.manifest_eof
+        for attempt in reversed(tool.workspace_attempts):
+            if attempt.status == "stale":
+                break
+            if attempt.operation == "manifest" and attempt.status == "ok":
+                return True
+        return False
 
     def _append_event(
         self, task: _TaskRecord, value: Mapping[str, object]
@@ -2179,6 +2955,7 @@ class NexusTaskLedger:
         values: tuple[int, int, int],
         provenance: int,
         projection: str,
+        context_seq: int,
     ) -> None:
         if task is None:
             if status == AGENT_STATUS_OK:
@@ -2205,9 +2982,20 @@ class NexusTaskLedger:
                     "successful child Task/tool result is incomplete",
                     code="BAD_TOOL_EVENT",
                 )
-            if values != (task.artifact_handle, task.task_id, task.agent_id):
+            if (
+                tool.tool in WORKSPACE_TOOLS
+                and values != (task.resource_used, task.task_id, task.agent_id)
+            ):
                 raise NexusTaskLedgerError(
                     "tool values do not bind the child Task artifact",
+                    code="BAD_TOOL_EVENT",
+                )
+            if (
+                task.artifact_context_seq == 0
+                or context_seq != task.artifact_context_seq
+            ):
+                raise NexusTaskLedgerError(
+                    "tool Context sequence does not bind Coordinator artifact acceptance",
                     code="BAD_TOOL_EVENT",
                 )
             expected_tool_provenance = TOOL_PROVENANCE[tool.tool]
@@ -2305,8 +3093,10 @@ class NexusTaskLedger:
                         "deadline_tick": task.deadline_tick,
                         "terminal_event": task.terminal_event,
                         "terminal_status": task.terminal_status,
+                        "terminal_context_seq": task.terminal_context_seq,
                         "artifact_handle": task.artifact_handle,
                         "artifact_sha256": task.artifact_sha256,
+                        "artifact_context_seq": task.artifact_context_seq,
                         "resource_used": task.resource_used,
                         "provenance": task.provenance,
                         "tool": tool.tool if tool is not None else "",
@@ -2345,6 +3135,8 @@ class NexusTaskLedger:
                         "tool": tool.tool,
                         "artifact_handle": task.artifact_handle,
                         "artifact_sha256": task.artifact_sha256,
+                        "cqe_context_seq": task.terminal_context_seq,
+                        "consumption_context_seq": task.artifact_context_seq,
                         "resource_used": task.resource_used,
                         "provenance": task.provenance,
                         "projection_sha256": tool.projection_sha256,
@@ -2377,11 +3169,51 @@ class NexusTaskLedger:
                         "provenance": tool.provenance,
                         "projection_sha256": tool.projection_sha256,
                         "result_sha256": tool.result_sha256,
+                        "context_seq": tool.context_seq,
+                        "workspace_source_sha256": tool.workspace_source_sha256,
+                        "workspace_attempt_count": len(tool.workspace_attempts),
+                        "workspace_attempts_sha256": (
+                            _sha256(self._workspace_attempt_items(tool))
+                            if tool.workspace_attempts
+                            else ""
+                        ),
                         "session_blocked": tool.session_blocked,
                     },
                 )
             )
         return items
+
+    @staticmethod
+    def _workspace_attempt_items(
+        tool: _ToolRecord,
+    ) -> list[dict[str, object]]:
+        return [
+            _fixed(
+                _WORKSPACE_ATTEMPT_FIELDS,
+                {
+                    "version": 1,
+                    "corr_id": attempt.corr_id,
+                    "task_id": attempt.task_id,
+                    "tool": attempt.tool,
+                    "operation": attempt.operation,
+                    "attempt": attempt.attempt,
+                    "manifest_cursor": attempt.manifest_cursor,
+                    "manifest_next_cursor": attempt.manifest_next_cursor,
+                    "manifest_eof": attempt.manifest_eof,
+                    "request_generation": attempt.request_generation,
+                    "result_generation": attempt.result_generation,
+                    "arguments_sha256": attempt.arguments_sha256,
+                    "request_objects_sha256": attempt.request_objects_sha256,
+                    "result_objects_sha256": attempt.result_objects_sha256,
+                    "request_sha256": attempt.request_sha256,
+                    "status": attempt.status,
+                    "content_bytes": attempt.content_bytes,
+                    "content_sha256": attempt.content_sha256,
+                    "result_sha256": attempt.result_sha256,
+                },
+            )
+            for attempt in tool.workspace_attempts
+        ]
 
     def _task_snapshot(self, task: _TaskRecord) -> NexusTaskSnapshot:
         tool = self._tools.get(task.assigned_corr_id) if task.parent_task_id else None
@@ -2399,8 +3231,10 @@ class NexusTaskLedger:
             state=task.state,
             terminal_event=task.terminal_event,
             terminal_status=task.terminal_status,
+            terminal_context_seq=task.terminal_context_seq,
             artifact_handle=task.artifact_handle,
             artifact_sha256=task.artifact_sha256,
+            artifact_context_seq=task.artifact_context_seq,
             resource_used=task.resource_used,
             provenance=task.provenance,
             tool=tool.tool if tool is not None else "",
@@ -2495,11 +3329,15 @@ __all__ = (
     "AGENT_STATUS_CANCELLED",
     "AGENT_STATUS_IO_ERROR",
     "AGENT_STATUS_INDETERMINATE",
+    "AGENT_STATUS_NO_SPACE",
     "AGENT_STATUS_OK",
     "AGENT_STATUS_TASK_FAILED",
     "AGENT_STATUS_TIMEOUT",
     "BUSINESS_ROLES",
     "KernelIdentity",
+    "MAX_WORKSPACE_ATTEMPTS",
+    "MAX_WORKSPACE_CONTENT_BYTES",
+    "MAX_WORKSPACE_MANIFEST_BYTES",
     "NEXUS_ROOT_TASK_BASE",
     "NexusTaskLedger",
     "NexusTaskLedgerError",
@@ -2508,5 +3346,8 @@ __all__ = (
     "TASK_EVENTS",
     "TASK_STATES",
     "TASK_TOOL_ROLES",
+    "WORKSPACE_OPERATIONS",
+    "WORKSPACE_RESULT_STATUSES",
+    "WORKSPACE_TOOLS",
     "canonical_json_bytes",
 )

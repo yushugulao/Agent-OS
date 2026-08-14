@@ -2,6 +2,15 @@
 #define USER_AGENT_NEXUS_H
 
 #include <agent.h>
+
+#define AGENT_NEXUS_DELEGATE_SIDE_EFFECTS \
+	(AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA | \
+	 AGENT_SIDE_EFFECT_ARTIFACT | AGENT_SIDE_EFFECT_PROCESS | \
+	 AGENT_SIDE_EFFECT_PERMISSION | AGENT_SIDE_EFFECT_IPC)
+
+_Static_assert((AGENT_NEXUS_DELEGATE_SIDE_EFFECTS &
+		AGENT_SIDE_EFFECT_WATCH) == 0,
+	       "delegated task lease must not authorize watch effects");
 #include <agent_nexus_protocol.h>
 
 #define AGENT_NEXUS_SHA256_SIZE 32U
@@ -44,23 +53,6 @@ void agent_nexus_sha256(const void *data, unsigned int length,
 void agent_nexus_sha256_hex(
 	const unsigned char digest[AGENT_NEXUS_SHA256_SIZE],
 	char text[AGENT_NEXUS_SHA256_HEX_SIZE + 1]);
-
-int agent_nexus_task_encode(const struct agent_nexus_task *task,
-			    char text[AGENT_EVENT_PAYLOAD_SIZE]);
-int agent_nexus_task_decode_n(const char *text, unsigned int length,
-			      struct agent_nexus_task *task);
-int agent_nexus_task_decode(const char *text, struct agent_nexus_task *task);
-int agent_nexus_task_validate(const struct agent_nexus_task *task);
-int agent_nexus_task_validate_runtime(
-	const struct agent_nexus_task *task,
-	const struct agent_workflow_lifecycle_key *expected_lifecycle,
-	unsigned int current_tick);
-int agent_nexus_task_transition_validate(
-	const struct agent_nexus_task *previous,
-	const struct agent_nexus_task *next);
-int agent_nexus_task_send(int target_pid, unsigned long long task_id,
-			  const struct agent_nexus_task *task,
-			  struct agent_response_v2 *response);
 
 int agent_nexus_tools_discover(void);
 const struct agent_tool_desc_v2 *agent_nexus_tool_find(const char *name);
@@ -137,5 +129,10 @@ int agent_nexus_context_note(unsigned long long task_id, int tool_id,
 			     unsigned long long value0,
 			     unsigned long long value1,
 			     unsigned long long value2);
+int agent_nexus_artifact_context_note(
+	unsigned long long task_id, int tool_id, int status,
+	unsigned long long provenance, unsigned int handle,
+	unsigned int payload_size,
+	const unsigned char digest[AGENT_NEXUS_SHA256_SIZE]);
 
 #endif

@@ -1,4 +1,5 @@
 #include "workflow_lifecycle.h"
+#include "agent_task_bridge.h"
 #include "agent_identity_lease.h"
 #include "defs.h"
 #include "fs.h"
@@ -278,6 +279,8 @@ workflow_lifecycle_close(uint scope_id,
 		break;
 	}
 	intr_restore(enabled);
+	if (result == 0)
+		agent_task_bridge_lifecycle_closed(*closed);
 	return result;
 }
 

@@ -91,17 +91,8 @@ class NexusTaskLedgerTests(unittest.TestCase):
         if source_pid is None or target_pid is None:
             if parent_task_id == 0:
                 route = (ROOT_ID[1], ROOT_ID[1])
-            elif (
-                kind == "failed"
-                and status == ledger.AGENT_STATUS_TASK_FAILED
-                and optional.get("summary")
-                == "worker_not_quiescent;session_blocked=1"
-            ):
-                route = (ROOT_ID[1], pid)
-            elif kind == "assigned":
-                route = (ROOT_ID[1], pid)
             else:
-                route = (pid, ROOT_ID[1])
+                route = (ROOT_ID[1], pid)
             if source_pid is None:
                 source_pid = route[0]
             if target_pid is None:
@@ -126,6 +117,18 @@ class NexusTaskLedgerTests(unittest.TestCase):
             "source_pid": source_pid,
             "target_pid": target_pid,
         }
+        if parent_task_id != 0:
+            phase = "assigned" if kind == "assigned" else "cqe"
+            if kind == "assigned" or kind in ledger.TASK_TERMINALS:
+                result["summary"] = (
+                    f"task_channel_v1;phase={phase};channel_generation=7;"
+                    f"request_id={task_id + 10000};slot_generation={task_id};"
+                    "tool_id=26;contract_generation=9"
+                )
+            if kind in ledger.TASK_TERMINALS:
+                result["context_seq"] = task_id + tick
+            elif kind == "artifact_published":
+                result["context_seq"] = task_id + tick
         if deadline_tick:
             result["deadline_tick"] = deadline_tick
         result.update(optional)
@@ -161,6 +164,79 @@ class NexusTaskLedgerTests(unittest.TestCase):
         value.record_delivered_tool(corr, tool, arguments_canonical=arguments)
         return arguments
 
+    def workspace_content(
+        self,
+        value: ledger.NexusTaskLedger,
+        *,
+        corr: int = CORR1,
+        task_id: int = 1000,
+        tool: str = "search_files",
+        digest: str = SHA_A,
+        resource: int = 64,
+    ) -> None:
+        arguments = TOOL_SPEC[tool][0]
+        generation = "d" * 64
+        manifest_arguments = hashlib.sha256(
+            b'{"cursor":0,"limit":8}'
+        ).hexdigest()
+        target_arguments = hashlib.sha256(arguments.encode("utf-8")).hexdigest()
+        objects = "e" * 64
+        value.record_workspace_request(
+            corr,
+            task_id=task_id,
+            tool=tool,
+            operation="manifest",
+            attempt=1,
+            workspace_generation="",
+            arguments_sha256=manifest_arguments,
+            objects_sha256=objects,
+            manifest_cursor=0,
+        )
+        value.record_workspace_result(
+            corr,
+            task_id=task_id,
+            tool=tool,
+            operation="manifest",
+            attempt=1,
+            workspace_generation=generation,
+            arguments_sha256=manifest_arguments,
+            result_objects_sha256=objects,
+            status="ok",
+            content_bytes=128,
+            content_sha256=SHA_C,
+            manifest_cursor=0,
+            manifest_next_cursor=1,
+            manifest_eof=True,
+        )
+        operation = "search" if tool == "search_files" else "read"
+        value.record_workspace_request(
+            corr,
+            task_id=task_id,
+            tool=tool,
+            operation=operation,
+            attempt=2,
+            workspace_generation=generation,
+            arguments_sha256=target_arguments,
+            objects_sha256=objects,
+            manifest_cursor=0,
+        )
+        value.record_workspace_result(
+            corr,
+            task_id=task_id,
+            tool=tool,
+            operation=operation,
+            attempt=2,
+            workspace_generation=generation,
+            arguments_sha256=target_arguments,
+            result_objects_sha256=objects,
+            status="ok",
+            content_bytes=resource,
+            content_sha256=digest,
+            manifest_cursor=0,
+            manifest_next_cursor=0,
+            manifest_eof=False,
+        )
+
     def child_success(
         self,
         value: ledger.NexusTaskLedger,
@@ -176,13 +252,15 @@ class NexusTaskLedgerTests(unittest.TestCase):
         handle = 0
         resource = 64
         if tool in ("search_files", "read_file"):
-            placeholder = (
-                f"workspace_request={tool}\n"
-                "result_delivery=host_provider_context\n"
-                "content_untrusted=1\n"
+            digest = SHA_A if digest is None else digest
+            self.workspace_content(
+                value,
+                corr=corr,
+                task_id=task_id,
+                tool=tool,
+                digest=digest,
+                resource=resource,
             )
-            digest = hashlib.sha256(placeholder.encode("utf-8")).hexdigest()
-            resource = len(placeholder.encode("utf-8"))
         if digest is None:
             digest = SHA_A
         deadline = 5000
@@ -194,10 +272,6 @@ class NexusTaskLedgerTests(unittest.TestCase):
             deadline_tick=deadline,
         )
         value.record_event(self.event(**common, tick=20))
-        value.record_event(self.event(**common, kind="accepted", tick=21))
-        value.record_event(
-            self.event(**common, kind="progress", tick=22, context_seq=7)
-        )
         value.record_event(self.event(**common, kind="completed", tick=23))
         value.record_event(
             self.event(
@@ -208,21 +282,28 @@ class NexusTaskLedgerTests(unittest.TestCase):
                 provenance=artifact_provenance,
                 resource_used=resource,
                 digest=digest,
-                summary="workspace_request_ready"
+                summary="workspace_observation_ready"
                 if tool in ("search_files", "read_file")
                 else "system_observation_ready",
             )
         )
         if settle:
+            value0 = resource if tool in ("search_files", "read_file") else handle
             value.settle_tool(
                 corr,
                 tool=tool,
                 status=0,
-                value0=handle,
+                value0=value0,
                 value1=task_id,
                 value2=identity[2],
                 provenance=provenance,
                 projection_sha256=digest,
+                context_seq=task_id + 24,
+                workspace_source_sha256=(
+                    value.workspace_source_sha256(corr)
+                    if tool in ("search_files", "read_file")
+                    else ""
+                ),
                 result_sha256=SHA_B,
             )
         return digest, handle, resource
@@ -329,6 +410,88 @@ class NexusTaskLedgerTests(unittest.TestCase):
         self.root_prelude(value)
         self.rejected(lambda: value.begin_termination(CORR2, "round_limit"))
 
+    def test_context_final_failure_binds_the_frozen_final_to_error(self) -> None:
+        value = self.make()
+        self.root_prelude(value)
+        value.freeze_provider_final(CORR1)
+        value.record_event(
+            self.event(
+                kind="failed",
+                status=ledger.AGENT_STATUS_NO_SPACE,
+                tick=40,
+                summary="context_final_failed",
+                context_seq=13,
+            )
+        )
+
+        staged = value.snapshot()
+        self.assertTrue(staged.provider_final_frozen)
+        self.assertTrue(staged.cancelling)
+        self.assertEqual(staged.termination_cause, "context_final_failed")
+        self.assertFalse(staged.session_blocked)
+        self.assertEqual(value._requests[CORR1].response_outcome, "final")
+        self.assertEqual(
+            value._requests[CORR1].termination_cause, "context_final_failed"
+        )
+        self.assertEqual(staged.tasks[0].terminal_event, "failed")
+        self.assertEqual(
+            staged.tasks[0].terminal_status, ledger.AGENT_STATUS_NO_SPACE
+        )
+        self.rejected(lambda: value.assert_turn_complete("completed"))
+        self.rejected(lambda: value.assert_turn_complete("cancelled"))
+        sealed = value.assert_turn_complete("error")
+        self.assertTrue(sealed.sealed)
+        self.assertFalse(sealed.session_blocked)
+        value.clear()
+        value.begin_turn(TURN + 1, REQUEST + 1)
+        self.assertTrue(value.active)
+
+    def test_context_final_failure_rejects_envelope_and_owner_mutations(self) -> None:
+        mutations = (
+            {"status": ledger.AGENT_STATUS_IO_ERROR},
+            {"summary": "context_final_failure"},
+            {"corr_id": CORR2},
+            {"task_state": "cancelled"},
+            {
+                "event": "cancelled",
+                "status": ledger.AGENT_STATUS_CANCELLED,
+                "task_state": "cancelled",
+            },
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                value = self.make()
+                self.root_prelude(value)
+                value.freeze_provider_final(CORR1)
+                event = self.event(
+                    kind="failed",
+                    status=ledger.AGENT_STATUS_NO_SPACE,
+                    tick=40,
+                    summary="context_final_failed",
+                )
+                event.update(mutation)
+                self.rejected(lambda v=value, e=event: v.record_event(e))
+                snapshot = value.snapshot()
+                self.assertEqual(snapshot.termination_cause, "")
+                self.assertFalse(snapshot.session_blocked)
+                self.assertEqual(snapshot.tasks[0].terminal_event, "")
+
+        value = self.make()
+        self.root_prelude(value)
+        self.rejected(
+            lambda: value.record_event(
+                self.event(
+                    kind="failed",
+                    status=ledger.AGENT_STATUS_NO_SPACE,
+                    tick=40,
+                    summary="context_final_failed",
+                )
+            )
+        )
+        self.rejected(
+            lambda: value.begin_termination(CORR1, "context_final_failed")
+        )
+
     def test_pre_request_and_advanced_user_cancel_are_bounded(self) -> None:
         value = self.make()
         value.record_event(self.event(summary="user_goal_received"))
@@ -424,6 +587,10 @@ class NexusTaskLedgerTests(unittest.TestCase):
                 self.root_prelude(value)
                 arguments, identity, expected, artifact_expected = TOOL_SPEC[tool]
                 value.record_delivered_tool(CORR1, tool, arguments_canonical=arguments)
+                if tool in ("search_files", "read_file"):
+                    self.workspace_content(
+                        value, task_id=1000 + index, tool=tool
+                    )
                 common = dict(
                     task_id=1000 + index,
                     parent_task_id=ROOT,
@@ -432,7 +599,6 @@ class NexusTaskLedgerTests(unittest.TestCase):
                     deadline_tick=5000,
                 )
                 value.record_event(self.event(**common, tick=20))
-                value.record_event(self.event(**common, kind="accepted", tick=21))
                 value.record_event(self.event(**common, kind="completed", tick=22))
                 self.rejected(
                     lambda v=value, c=common: v.record_event(
@@ -450,7 +616,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
                 self.assertIn(expected, (53, 60))
                 self.assertEqual(artifact_expected, expected)
 
-    def test_workspace_placeholder_requires_exact_settlement_binding(self) -> None:
+    def test_workspace_content_requires_exact_settlement_binding(self) -> None:
         value = self.make()
         self.root_prelude(value)
         self.child_success(value, tool="read_file")
@@ -462,20 +628,26 @@ class NexusTaskLedgerTests(unittest.TestCase):
             {"value2": SYSTEM_ID[2]},
             {"provenance": 53},
             {"projection_sha256": SHA_C},
+            {"workspace_source_sha256": SHA_C},
+            {"context_seq": 1023},
         ):
             with self.subTest(mutation=mutation):
                 value = self.make()
                 self.root_prelude(value)
-                digest, _handle, _resource = self.child_success(
+                digest, _handle, resource = self.child_success(
                     value, tool="read_file", settle=False
                 )
                 data = {
                     "status": 0,
-                    "value0": 0,
+                    "value0": resource,
                     "value1": 1000,
                     "value2": RESEARCH_ID[2],
                     "provenance": 60,
                     "projection_sha256": digest,
+                    "context_seq": 1024,
+                    "workspace_source_sha256": value.workspace_source_sha256(
+                        CORR1
+                    ),
                     "result_sha256": SHA_B,
                 }
                 data.update(mutation)
@@ -484,6 +656,390 @@ class NexusTaskLedgerTests(unittest.TestCase):
                         CORR1, tool="read_file", **d
                     )
                 )
+
+    def test_coordinator_context_routes_and_consumption_sequence_are_exact(self) -> None:
+        value = self.make()
+        self.root_prelude(value)
+        self.deliver(value, CORR1, "read_file")
+        self.workspace_content(value, tool="read_file")
+        common = dict(
+            task_id=1000,
+            parent_task_id=ROOT,
+            corr_id=CORR1,
+            identity=RESEARCH_ID,
+            deadline_tick=5000,
+        )
+        value.record_event(self.event(**common, tick=20))
+        self.rejected(
+            lambda: value.record_event(
+                self.event(
+                    **common,
+                    kind="completed",
+                    tick=21,
+                    source_pid=RESEARCH_ID[1],
+                    target_pid=ROOT_ID[1],
+                )
+            )
+        )
+        value.record_event(self.event(**common, kind="completed", tick=21))
+        self.rejected(
+            lambda: value.record_event(
+                self.event(
+                    **common,
+                    kind="artifact_published",
+                    tick=22,
+                    source_pid=RESEARCH_ID[1],
+                    target_pid=ROOT_ID[1],
+                    digest=SHA_A,
+                    provenance=60,
+                    resource_used=64,
+                )
+            )
+        )
+        self.rejected(
+            lambda: value.record_event(
+                self.event(
+                    **common,
+                    kind="artifact_published",
+                    tick=22,
+                    context_seq=1021,
+                    digest=SHA_A,
+                    provenance=60,
+                    resource_used=64,
+                )
+            )
+        )
+        value.record_event(
+            self.event(
+                **common,
+                kind="artifact_published",
+                tick=22,
+                digest=SHA_A,
+                provenance=60,
+                resource_used=64,
+            )
+        )
+        self.rejected(
+            lambda: value.settle_tool(
+                CORR1,
+                tool="read_file",
+                status=0,
+                value0=64,
+                value1=1000,
+                value2=RESEARCH_ID[2],
+                provenance=60,
+                projection_sha256=SHA_A,
+                workspace_source_sha256=value.workspace_source_sha256(CORR1),
+                context_seq=1021,
+                result_sha256=SHA_B,
+            )
+        )
+
+    def test_workspace_pages_stale_reset_and_source_root_are_exact(self) -> None:
+        value = self.make()
+        self.root_prelude(value)
+        self.deliver(value, CORR1, "search_files")
+        generation_a = "1" * 64
+        generation_b = "2" * 64
+        arguments = "3" * 64
+        objects = "4" * 64
+        empty = hashlib.sha256(b"").hexdigest()
+
+        def exchange(
+            operation: str,
+            attempt: int,
+            request_generation: str,
+            result_generation: str,
+            status: str,
+            content_digest: str,
+            content_bytes: int,
+            *,
+            cursor: int = 0,
+            next_cursor: int = 0,
+            eof: bool = False,
+        ) -> None:
+            value.record_workspace_request(
+                CORR1,
+                task_id=1000,
+                tool="search_files",
+                operation=operation,
+                attempt=attempt,
+                workspace_generation=request_generation,
+                arguments_sha256=arguments,
+                objects_sha256=objects,
+                manifest_cursor=cursor if operation == "manifest" else 0,
+            )
+            value.record_workspace_result(
+                CORR1,
+                task_id=1000,
+                tool="search_files",
+                operation=operation,
+                attempt=attempt,
+                workspace_generation=result_generation,
+                arguments_sha256=arguments,
+                result_objects_sha256=objects,
+                status=status,
+                content_bytes=content_bytes,
+                content_sha256=content_digest,
+                manifest_cursor=cursor if operation == "manifest" else 0,
+                manifest_next_cursor=(
+                    next_cursor if operation == "manifest" and status == "ok" else 0
+                ),
+                manifest_eof=eof if operation == "manifest" and status == "ok" else False,
+            )
+
+        exchange(
+            "manifest", 1, "", generation_a, "ok", SHA_A, 64,
+            cursor=0, next_cursor=1,
+        )
+        exchange("search", 2, generation_a, generation_b, "stale", empty, 0)
+        exchange(
+            "manifest", 3, "", generation_b, "ok", SHA_B, 32,
+            cursor=0, next_cursor=1,
+        )
+        # A zero-candidate manifest page legitimately has no search exchange.
+        exchange(
+            "manifest", 4, generation_b, generation_b, "ok", SHA_C, 16,
+            cursor=1, next_cursor=1, eof=True,
+        )
+
+        source = (
+            "workspace_source_attempt_v1\n"
+            "operation=manifest\n"
+            "attempt=3\n"
+            f"request_generation={'0' * 64}\n"
+            f"result_generation={generation_b}\n"
+            f"arguments_sha256={arguments}\n"
+            f"objects_sha256={objects}\n"
+            "status=ok\n"
+            "content_bytes=32\n"
+            f"content_sha256={SHA_B}\n"
+            "workspace_source_attempt_v1\n"
+            "operation=manifest\n"
+            "attempt=4\n"
+            f"request_generation={generation_b}\n"
+            f"result_generation={generation_b}\n"
+            f"arguments_sha256={arguments}\n"
+            f"objects_sha256={objects}\n"
+            "status=ok\n"
+            "content_bytes=16\n"
+            f"content_sha256={SHA_C}\n"
+        )
+        self.assertEqual(
+            value.workspace_source_sha256(CORR1),
+            hashlib.sha256(source.encode("ascii")).hexdigest(),
+        )
+
+        common = dict(
+            task_id=1000,
+            parent_task_id=ROOT,
+            corr_id=CORR1,
+            identity=RESEARCH_ID,
+            deadline_tick=5000,
+        )
+        value.record_event(self.event(**common, tick=30))
+        value.record_event(self.event(**common, kind="completed", tick=31))
+        value.record_event(
+            self.event(
+                **common,
+                kind="artifact_published",
+                tick=32,
+                provenance=60,
+                resource_used=20,
+                digest=SHA_A,
+            )
+        )
+        value.settle_tool(
+            CORR1,
+            tool="search_files",
+            status=0,
+            value0=20,
+            value1=1000,
+            value2=RESEARCH_ID[2],
+            provenance=60,
+            projection_sha256=SHA_A,
+            context_seq=1032,
+            workspace_source_sha256=value.workspace_source_sha256(CORR1),
+            result_sha256=SHA_B,
+        )
+
+    def test_workspace_attempt_order_binding_and_cancellation_fail_closed(self) -> None:
+        generation = "1" * 64
+        arguments = "2" * 64
+        objects = "3" * 64
+
+        value = self.make()
+        self.root_prelude(value)
+        self.deliver(value, CORR1, "search_files")
+        request = dict(
+            task_id=1000,
+            tool="search_files",
+            operation="manifest",
+            attempt=1,
+            workspace_generation="",
+            arguments_sha256=arguments,
+            objects_sha256=objects,
+            manifest_cursor=0,
+        )
+        value.record_workspace_request(CORR1, **request)
+        self.rejected(lambda: value.record_workspace_request(CORR1, **request))
+        self.rejected(
+            lambda: value.record_workspace_result(
+                CORR2,
+                **{
+                    key: item
+                    for key, item in request.items()
+                    if key not in ("objects_sha256", "workspace_generation")
+                },
+                workspace_generation=generation,
+                result_objects_sha256=objects,
+                status="ok",
+                content_bytes=1,
+                content_sha256=SHA_A,
+                manifest_next_cursor=1,
+                manifest_eof=False,
+            )
+        )
+        value.begin_cancel(CORR1)
+        self.rejected(
+            lambda: value.record_workspace_result(
+                CORR1,
+                **{
+                    key: item
+                    for key, item in request.items()
+                    if key not in ("objects_sha256", "workspace_generation")
+                },
+                workspace_generation=generation,
+                result_objects_sha256=objects,
+                status="ok",
+                content_bytes=1,
+                content_sha256=SHA_A,
+                manifest_next_cursor=1,
+                manifest_eof=False,
+            )
+        )
+
+        value = self.make()
+        self.root_prelude(value)
+        self.deliver(value, CORR1, "search_files")
+        self.rejected(
+            lambda: value.record_workspace_request(
+                CORR1,
+                **{**request, "workspace_generation": generation},
+            )
+        )
+        value.record_workspace_request(CORR1, **request)
+        value.record_workspace_result(
+            CORR1,
+            **{
+                key: item
+                for key, item in request.items()
+                if key not in ("objects_sha256", "workspace_generation")
+            },
+            workspace_generation=generation,
+            result_objects_sha256=objects,
+            status="ok",
+            content_bytes=1,
+            content_sha256=SHA_A,
+            manifest_next_cursor=1,
+            manifest_eof=False,
+        )
+        next_manifest = {
+            **request,
+            "attempt": 2,
+            "workspace_generation": generation,
+            "arguments_sha256": "4" * 64,
+            "manifest_cursor": 1,
+        }
+        self.rejected(
+            lambda: value.record_workspace_request(
+                CORR1,
+                **{**next_manifest, "workspace_generation": ""},
+            )
+        )
+        value.record_workspace_request(CORR1, **next_manifest)
+        self.rejected(
+            lambda: value.record_workspace_result(
+                CORR1,
+                **{
+                    key: item
+                    for key, item in next_manifest.items()
+                    if key not in ("objects_sha256", "workspace_generation")
+                },
+                workspace_generation="5" * 64,
+                result_objects_sha256=objects,
+                status="ok",
+                content_bytes=1,
+                content_sha256=SHA_A,
+                manifest_next_cursor=2,
+                manifest_eof=False,
+            )
+        )
+
+        value = self.make()
+        self.root_prelude(value)
+        self.deliver(value, CORR1, "search_files")
+        value.begin_cancel(CORR1)
+        self.rejected(
+            lambda: value.record_workspace_request(CORR1, **request)
+        )
+
+    def test_workspace_attempt_bound_covers_full_repository_paging(self) -> None:
+        max_objects = 10000
+        minimum_bounded_page = 9
+        generations_with_two_stale_restarts = 3
+        pages = (max_objects + minimum_bounded_page - 1) // minimum_bounded_page
+        worst_case = pages * 2 * generations_with_two_stale_restarts
+        self.assertEqual(worst_case, 6672)
+        self.assertEqual(ledger.MAX_WORKSPACE_ATTEMPTS, 8192)
+        self.assertGreaterEqual(ledger.MAX_WORKSPACE_ATTEMPTS, worst_case)
+
+    def test_workspace_manifest_cursor_chain_and_eof_are_exact(self) -> None:
+        value = self.make()
+        self.root_prelude(value)
+        self.deliver(value, CORR1, "search_files")
+        generation = "1" * 64
+
+        def request(attempt: int, cursor: int, request_generation: str) -> None:
+            value.record_workspace_request(
+                CORR1,
+                task_id=1000,
+                tool="search_files",
+                operation="manifest",
+                attempt=attempt,
+                workspace_generation=request_generation,
+                arguments_sha256=f"{attempt:064x}",
+                objects_sha256=SHA_A,
+                manifest_cursor=cursor,
+            )
+
+        def result(
+            attempt: int, cursor: int, next_cursor: int, *, eof: bool
+        ) -> None:
+            value.record_workspace_result(
+                CORR1,
+                task_id=1000,
+                tool="search_files",
+                operation="manifest",
+                attempt=attempt,
+                workspace_generation=generation,
+                arguments_sha256=f"{attempt:064x}",
+                result_objects_sha256=SHA_B,
+                status="ok",
+                content_bytes=1,
+                content_sha256=SHA_C,
+                manifest_cursor=cursor,
+                manifest_next_cursor=next_cursor,
+                manifest_eof=eof,
+            )
+
+        request(1, 0, "")
+        result(1, 0, 32, eof=False)
+        self.rejected(lambda: request(2, 0, generation))
+        self.rejected(lambda: request(2, 64, generation))
+        request(2, 32, generation)
+        result(2, 32, 40, eof=True)
+        self.rejected(lambda: request(3, 40, generation))
 
     def test_routing_is_exact_for_root_worker_and_synthetic_terminal(self) -> None:
         value = self.make()
@@ -494,6 +1050,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         value = self.make()
         self.root_prelude(value)
         self.deliver(value, CORR1, "search_files")
+        self.workspace_content(value)
         common = dict(
             task_id=1000,
             parent_task_id=ROOT,
@@ -510,6 +1067,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         value = self.make()
         self.root_prelude(value)
         self.deliver(value, CORR1, "search_files")
+        self.workspace_content(value)
         value.record_event(self.event(**common, tick=20))
         self.rejected(
             lambda: value.record_event(
@@ -525,10 +1083,11 @@ class NexusTaskLedgerTests(unittest.TestCase):
             )
         )
 
-    def test_assigned_may_fail_or_cancel_but_completed_needs_acceptance(self) -> None:
+    def test_task_channel_assignment_may_terminalize_from_queued_state(self) -> None:
         value = self.make()
         self.root_prelude(value)
         self.deliver(value, CORR1, "search_files")
+        self.workspace_content(value)
         common = dict(
             task_id=1000,
             parent_task_id=ROOT,
@@ -551,16 +1110,18 @@ class NexusTaskLedgerTests(unittest.TestCase):
         value = self.make()
         self.root_prelude(value)
         self.deliver(value, CORR1, "search_files")
+        self.workspace_content(value)
         value.record_event(self.event(**common, tick=20))
-        self.rejected(
-            lambda: value.record_event(
-                self.event(**common, kind="completed", tick=21)
-            )
+        value.record_event(
+            self.event(**common, kind="completed", tick=21)
         )
+        self.assertEqual(value.snapshot().tasks[1].terminal_event, "completed")
+        self.rejected(lambda: value.record_model_request(CORR2))
 
         value = self.make()
         self.root_prelude(value)
         self.deliver(value, CORR1, "search_files")
+        self.workspace_content(value)
         value.begin_cancel(CORR1)
         value.record_event(self.event(**common, tick=20))
         value.record_event(
@@ -572,10 +1133,60 @@ class NexusTaskLedgerTests(unittest.TestCase):
         )
         self.assertTrue(value.assert_turn_complete("cancelled").sealed)
 
+        for mutation in (
+            {"summary": "research_queued;transport=message"},
+            {"summary": "task_channel_v1;phase=assigned;channel_generation=7"},
+        ):
+            value = self.make()
+            self.root_prelude(value)
+            self.deliver(value, CORR1, "search_files")
+            self.workspace_content(value)
+            self.rejected(
+                lambda v=value, m=mutation: v.record_event(
+                    self.event(**common, tick=20, **m)
+                )
+            )
+
+        value = self.make()
+        self.root_prelude(value)
+        self.deliver(value, CORR1, "search_files")
+        self.workspace_content(value)
+        value.record_event(self.event(**common, tick=20))
+        self.rejected(
+            lambda: value.record_event(
+                self.event(**common, kind="accepted", tick=21)
+            )
+        )
+        self.rejected(
+            lambda: value.record_event(
+                self.event(
+                    **common,
+                    kind="completed",
+                    tick=21,
+                    context_seq=0,
+                )
+            )
+        )
+        self.rejected(
+            lambda: value.record_event(
+                self.event(
+                    **common,
+                    kind="completed",
+                    tick=21,
+                    summary=(
+                        "task_channel_v1;phase=cqe;channel_generation=7;"
+                        "request_id=99999;slot_generation=1000;tool_id=26;"
+                        "contract_generation=9"
+                    ),
+                )
+            )
+        )
+
     def test_indeterminate_latches_session_block_and_forbids_success(self) -> None:
         value = self.make()
         self.root_prelude(value)
         self.deliver(value, CORR1, "search_files")
+        self.workspace_content(value)
         common = dict(
             task_id=1000,
             parent_task_id=ROOT,
@@ -699,6 +1310,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         value = self.make()
         self.root_prelude(value)
         self.deliver(value, CORR1, "search_files")
+        self.workspace_content(value)
         value.record_event(self.event(**common, tick=20))
         self.rejected(
             lambda: value.record_event(
@@ -757,6 +1369,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         value = self.make()
         self.root_prelude(value)
         self.deliver(value, CORR1, "search_files")
+        self.workspace_content(value)
         common = dict(
             task_id=1000,
             parent_task_id=ROOT,
@@ -789,6 +1402,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         value = self.make()
         self.root_prelude(value)
         self.deliver(value, CORR1, "search_files")
+        self.workspace_content(value)
         common = dict(
             task_id=1000,
             parent_task_id=ROOT,
@@ -822,6 +1436,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         value = self.make()
         self.root_prelude(value)
         self.deliver(value, CORR1, "search_files")
+        self.workspace_content(value)
         value.begin_cancel(CORR1)
         common = dict(
             task_id=1000,
@@ -862,6 +1477,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         value = self.make()
         self.root_prelude(value)
         self.deliver(value, CORR1, "search_files")
+        self.workspace_content(value)
         value.begin_cancel(CORR1)
         common = dict(
             task_id=1000,

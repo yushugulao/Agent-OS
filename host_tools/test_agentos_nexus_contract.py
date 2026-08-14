@@ -51,14 +51,46 @@ def _header_macro(source: str, name: str) -> str:
     return ast.literal_eval(value)
 
 
-def _request(*, history: bool = False) -> dict[str, object]:
-    messages: list[dict[str, object]] = [
+def _pair_sha256(user: str, assistant: str) -> str:
+    return hashlib.sha256(
+        user.encode("utf-8") + b"\0" + assistant.encode("utf-8")
+    ).hexdigest()
+
+
+def _request(
+    *,
+    history: bool = False,
+    prior_turns: tuple[tuple[str, str], ...] = (),
+) -> dict[str, object]:
+    messages: list[dict[str, object]] = []
+    context_turns: list[dict[str, object]] = []
+    sequence = 1
+    for index, (user, assistant) in enumerate(prior_turns, 1):
+        messages.extend(
+            (
+                {"role": "user", "content": user},
+                {"role": "assistant", "content": assistant},
+            )
+        )
+        context_turns.append(
+            {
+                "turn_id": index,
+                "request_id": index + 10,
+                "user_sequence": sequence,
+                "final_sequence": sequence + 1,
+                "sha256": _pair_sha256(user, assistant),
+            }
+        )
+        sequence += 2
+    messages.extend(
+        [
         {"role": "user", "content": "an arbitrary current goal"},
         {
             "role": "user",
             "content": contract.CONTROL_CONTEXT_PREFIX + "bounded observations",
         },
-    ]
+        ]
+    )
     if history:
         messages.extend(
             [
@@ -83,6 +115,13 @@ def _request(*, history: bool = False) -> dict[str, object]:
         "contract_version": contract.CONTRACT_VERSION,
         "policy_sha256": contract.SYSTEM_POLICY_SHA256,
         "tool_catalog_sha256": contract.TOOL_CATALOG_SHA256,
+        "context_path": {
+            "version": contract.CONTEXT_PATH_VERSION,
+            "branch_generation": 3,
+            "visible_head_sequence": sequence,
+            "current_user_sequence": sequence,
+            "turns": context_turns,
+        },
         "max_tokens": 512,
         "system": contract.SYSTEM_PROMPT,
         "messages": messages,
@@ -122,9 +161,11 @@ class CrossSourceTests(unittest.TestCase):
 
     def test_system_policy_and_tools_are_generic_and_read_only(self) -> None:
         prompt = contract.SYSTEM_PROMPT
-        self.assertEqual(contract.CONTRACT_VERSION, 3)
+        self.assertEqual(contract.CONTRACT_VERSION, 4)
         for text in (
             "Solve the user's current task directly and in the requested language",
+            "come from the active AgentOS Context path",
+            "reassess when the user changes direction",
             "current Host workspace supplied to this session",
             "search before reading when the location is unknown",
             "System inspection describes only the current Guest runtime",
@@ -217,8 +258,11 @@ class ContractValidationTests(unittest.TestCase):
         with self.assertRaises(contract.NexusContractError):
             contract.validate_request_contract(request)
 
-    def test_exact_three_tool_request_and_history_are_accepted(self) -> None:
-        request = _request(history=True)
+    def test_exact_three_tool_request_and_context_history_are_accepted(self) -> None:
+        request = _request(
+            history=True,
+            prior_turns=(("first question", "first answer"), ("继续", "后续回答")),
+        )
         contract.validate_request_contract(request)
         self.assertEqual(
             [tool["name"] for tool in request["tools"]],
@@ -282,6 +326,76 @@ class ContractValidationTests(unittest.TestCase):
             self.assert_rejected(request)
             del request[key]
             self.assert_rejected(request)
+
+    def test_context_path_fields_bounds_and_order_are_rejected(self) -> None:
+        mutations: list[dict[str, object]] = []
+        for key, value in (
+            ("version", 2),
+            ("branch_generation", 0),
+            ("visible_head_sequence", True),
+            ("current_user_sequence", 1 << 64),
+        ):
+            request = _request()
+            request["context_path"][key] = value
+            mutations.append(request)
+
+        request = _request()
+        del request["context_path"]["turns"]
+        mutations.append(request)
+        request = _request()
+        request["context_path"]["extra"] = 1
+        mutations.append(request)
+        request = _request()
+        request["context_path"]["visible_head_sequence"] = 1
+        request["context_path"]["current_user_sequence"] = 2
+        mutations.append(request)
+        request = _request(prior_turns=(("one", "answer one"),) * 2)
+        request["context_path"]["turns"][1]["turn_id"] = 1
+        mutations.append(request)
+        request = _request(prior_turns=(("one", "answer one"),) * 2)
+        request["context_path"]["turns"][1]["user_sequence"] = 2
+        mutations.append(request)
+        request = _request(
+            prior_turns=(("one", "answer one"), ("two", "answer two"))
+        )
+        extra = copy.deepcopy(request["context_path"]["turns"][-1])
+        extra.update(
+            {
+                "turn_id": 3,
+                "request_id": 13,
+                "user_sequence": 5,
+                "final_sequence": 6,
+            }
+        )
+        request["context_path"]["turns"].append(extra)
+        mutations.append(request)
+
+        for mutation in mutations:
+            with self.subTest(context_path=mutation.get("context_path")):
+                self.assert_rejected(mutation)
+
+    def test_context_path_digest_and_message_binding_are_rejected_when_tampered(self) -> None:
+        mutations: list[dict[str, object]] = []
+        request = _request(prior_turns=(("question", "answer"),))
+        request["context_path"]["turns"][0]["sha256"] = "A" * 64
+        mutations.append(request)
+        request = _request(prior_turns=(("question", "answer"),))
+        request["context_path"]["turns"][0]["sha256"] = "0" * 64
+        mutations.append(request)
+        request = _request(prior_turns=(("question", "answer"),))
+        request["messages"][1]["content"] = "altered answer"
+        mutations.append(request)
+        request = _request(prior_turns=(("question", "answer"),))
+        request["messages"][0]["role"] = "system"
+        mutations.append(request)
+        request = _request(prior_turns=(("question", "answer"),))
+        request["messages"][0]["content"] = "question\0suffix"
+        request["context_path"]["turns"][0]["sha256"] = _pair_sha256(
+            "question\0suffix", "answer"
+        )
+        mutations.append(request)
+        for mutation in mutations:
+            self.assert_rejected(mutation)
 
     def test_non_contract_message_shapes_are_rejected(self) -> None:
         invalid_messages = (

@@ -1510,7 +1510,8 @@ agent_execution_contract_gate_direct_syscall(
 	    side_effect_mask == 0 ||
 	    (side_effect_mask & ~AGENT_SIDE_EFFECT_ALL) != 0)
 		return AGENT_STATUS_BAD_PARAM;
-	status = agent_execution_contract_direct_enter(p, guard);
+	status = agent_execution_contract_direct_enter(
+		p, side_effect_mask, guard);
 	if (status != AGENT_STATUS_DENIED)
 		return status;
 	lifecycle = vfs_proc_lifecycle(p);
@@ -1556,6 +1557,7 @@ agent_execution_append_terminal(
 	struct agent_evidence_context_reservation *reservation)
 {
 	uint64 evidence_ticket = 0;
+	uint64 context_provenance_labels = 0;
 	int result;
 
 	if (claim->legacy)
@@ -1565,11 +1567,14 @@ agent_execution_append_terminal(
 		return -1;
 	result = agent_context_append_reserved_ticket(
 		p, op, res, tick, authority_effect, reservation,
-		&evidence_ticket);
+		&evidence_ticket, &context_provenance_labels);
 	if (result < 0 || evidence_ticket == 0)
 		return -1;
-	if (outcome != 0)
+	if (outcome != 0) {
 		outcome->evidence_ticket = evidence_ticket;
+		outcome->output_provenance_labels =
+			context_provenance_labels;
+	}
 	agent_execution_contract_complete(claim, res, outcome);
 	return 0;
 }
@@ -1937,6 +1942,276 @@ agent_execution_task_submit_sync(
 	if (outcome->evidence_ticket == 0)
 		panic("accepted Task without terminal evidence");
 	return status;
+}
+
+int
+agent_execution_task_begin_pending(
+	struct proc *p, struct agent_op *op,
+	const struct agent_execution_binding *binding,
+	uint64 request_deadline_tick, uint admission_policy_flags,
+	struct agent_execution_claim *claim,
+	struct agent_provenance_decision *provenance_decision,
+	struct resource_phase_lease *phase_lease,
+	struct agent_result *result, struct agent_execution_outcome *outcome)
+{
+	struct agent_provenance_request provenance_request;
+	struct agent_evidence_context_reservation reservation = { 0 };
+	struct resource_account_handle storage = resource_account_none();
+	enum agent_execution_admission admission;
+	uint64 now = agent_ticks();
+	int phase_started = 0;
+	int status;
+
+	if (p == 0 || op == 0 || binding == 0 || claim == 0 ||
+	    provenance_decision == 0 || phase_lease == 0 || result == 0 ||
+	    outcome == 0 || (binding->internal_flags &
+		AGENT_EXECUTION_BINDING_INTERNAL_F_TASK_CHANNEL) == 0)
+		return -1;
+	memset(claim, 0, sizeof(*claim));
+	memset(provenance_decision, 0, sizeof(*provenance_decision));
+	memset(phase_lease, 0, sizeof(*phase_lease));
+	memset(outcome, 0, sizeof(*outcome));
+	agent_result_init(result, op);
+	if (!agent_evidence_context_preallocated(p, binding->lifecycle))
+		panic("pending Task Evidence pages");
+	if (agent_lifecycle_context_lane_enter_accepted_task(p) < 0)
+		panic("pending Task accepted context lane");
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		panic("pending Task context lane");
+	if (agent_context_append_prepare(p, p->agent_call_count + 1) < 0)
+		panic("pending Task context prepare");
+	admission = agent_execution_contract_admit(
+		p, binding, op, request_deadline_tick, admission_policy_flags,
+		now, claim, result, outcome);
+	if (admission == AGENT_EXECUTION_ADMISSION_CACHED) {
+		outcome->completion_flags |= AGENT_RESPONSE_V3_F_CACHED;
+		status = AGENT_EXECUTION_TASK_BEGIN_COMPLETE;
+		goto out;
+	}
+	if (admission == AGENT_EXECUTION_ADMISSION_DENIED) {
+		if (result->status == AGENT_STATUS_DENIED ||
+		    result->status == AGENT_STATUS_STALE) {
+			(void)agent_execution_security_denial(
+				p, claim, op, 1, result, outcome);
+			status = outcome->evidence_ticket != 0 ?
+				AGENT_EXECUTION_TASK_BEGIN_DENIED : -1;
+		} else {
+			if (agent_evidence_context_reserve(p, &reservation) < 0)
+				panic("pending Task denial Evidence");
+			p->agent_call_count++;
+			result->sequence = p->agent_call_count;
+			outcome->decision_reason = claim->decision_reason;
+			outcome->output_artifact_type = AGENT_ARTIFACT_NONE;
+			outcome->output_provenance_labels =
+				agent_provenance_current_labels(p) |
+				AGENT_PROVENANCE_AGENT_DERIVED;
+			outcome->terminal_tick = now;
+			if (agent_execution_append_terminal(
+				    p, op, result, now, 0, claim, outcome,
+				    &reservation) < 0)
+				panic("pending Task denial terminal");
+			status = AGENT_EXECUTION_TASK_BEGIN_DENIED;
+		}
+		goto out;
+	}
+	if (admission != AGENT_EXECUTION_ADMISSION_EXECUTE)
+		panic("pending Task admission");
+	if (claim->input_provenance_labels != 0 &&
+	    agent_provenance_merge_current(
+		    p, claim->input_provenance_labels) != AGENT_STATUS_OK)
+		panic("pending Task input provenance");
+	outcome->output_artifact_type = claim->output_artifact_type;
+	outcome->terminal_tick = now;
+	if (claim->deadline_expired || claim->dependency_failed) {
+		if (agent_evidence_context_reserve(p, &reservation) < 0)
+			panic("pending Task immediate Evidence");
+		p->agent_call_count++;
+		result->sequence = p->agent_call_count;
+		result->status = claim->deadline_expired ?
+			AGENT_STATUS_TIMEOUT : AGENT_STATUS_CANCELLED;
+		agent_result_text(result, claim->deadline_expired ?
+				  "contract_deadline" : "dependency_failed");
+		outcome->decision_reason = claim->decision_reason;
+		outcome->output_provenance_labels =
+			agent_provenance_current_labels(p) |
+			AGENT_PROVENANCE_AGENT_DERIVED;
+		if (agent_execution_append_terminal(
+			    p, op, result, now, 0, claim, outcome,
+			    &reservation) < 0)
+			panic("pending Task immediate terminal");
+		status = AGENT_EXECUTION_TASK_BEGIN_COMPLETE;
+		goto out;
+	}
+	agent_execution_provenance_request(
+		claim, op, 1, &provenance_request);
+	status = agent_provenance_authorize_tool(
+		p, &provenance_request, &claim->manifest,
+		provenance_decision);
+	if (status != AGENT_STATUS_OK) {
+		uint64 ticket = 0;
+
+		claim->decision_reason = status == AGENT_STATUS_STALE ?
+			AGENT_EXECUTION_REASON_STALE_LIFECYCLE :
+			AGENT_EXECUTION_REASON_CONTRACT_INVALID;
+		result->status = status;
+		agent_result_text(result, "provenance_denied");
+		status = agent_provenance_append_security_denial(
+			p, &provenance_request, provenance_decision, &ticket);
+		result->sequence = p->agent_call_count;
+		outcome->decision_reason = claim->decision_reason;
+		outcome->evidence_ticket = ticket;
+		outcome->output_provenance_labels =
+			provenance_decision->input_labels |
+			AGENT_PROVENANCE_AGENT_DERIVED;
+		claim->retry_forbidden = 1;
+		if ((status != AGENT_STATUS_DENIED &&
+		     status != AGENT_STATUS_STALE) || ticket == 0)
+			panic("pending Task provenance terminal");
+		result->status = status;
+		agent_execution_contract_complete(claim, result, outcome);
+		status = AGENT_EXECUTION_TASK_BEGIN_DENIED;
+		goto out;
+	}
+	if (fs_storage_owner_account(FS_OWNER_SCOPE(p->vfs_scope_id),
+				     &storage) < 0 ||
+	    resource_phase_lease_begin(
+		    phase_lease, claim->lifecycle, p->resource_account, storage,
+		    (enum resource_charge_class)claim->charge_class,
+		    claim->exec_amounts, claim->storage_amounts,
+		    claim->node_id, op->request_id) < 0 ||
+	    phase_lease->generation == 0) {
+		if (phase_lease->state != RESOURCE_PHASE_LEASE_EMPTY &&
+		    resource_phase_lease_settle(
+			    phase_lease, phase_lease->generation) < 0)
+			panic("pending Task phase settle");
+		claim->decision_reason = AGENT_EXECUTION_REASON_PHASE_CREDIT;
+		if (agent_evidence_context_reserve(p, &reservation) < 0)
+			panic("pending Task phase Evidence");
+		p->agent_call_count++;
+		result->sequence = p->agent_call_count;
+		result->status = AGENT_STATUS_NO_SPACE;
+		agent_result_text(result, "phase_credit_denied");
+		outcome->decision_reason = claim->decision_reason;
+		outcome->output_provenance_labels =
+			agent_provenance_current_labels(p) |
+			AGENT_PROVENANCE_AGENT_DERIVED;
+		if (agent_execution_append_terminal(
+			    p, op, result, now, 0, claim, outcome,
+			    &reservation) < 0)
+			panic("pending Task phase terminal");
+		status = AGENT_EXECUTION_TASK_BEGIN_COMPLETE;
+		goto out;
+	}
+	phase_started = 1;
+	outcome->phase_lease_generation = phase_lease->generation;
+	/*
+	 * The admitted lease holds the envelope without installing a dynamic
+	 * allocation context on the issuer thread. V1 permits one outstanding
+	 * delegated task per issuer. The owner terminal path consumes no dynamic
+	 * resources, so it settles this reservation without installing it as the
+	 * issuer thread's allocation context. Provider-side artifact work remains
+	 * charged to the provider process.
+	 */
+	status = AGENT_EXECUTION_TASK_BEGIN_PENDING;
+out:
+	if (reservation.active)
+		agent_evidence_context_abort(&reservation);
+	if (status != AGENT_EXECUTION_TASK_BEGIN_PENDING && phase_started) {
+		if (resource_phase_lease_settle(
+			    phase_lease, phase_lease->generation) < 0)
+			panic("pending Task immediate phase");
+	}
+	agent_lifecycle_context_lane_leave(p);
+	agent_lifecycle_context_lane_leave(p);
+	return status;
+}
+
+int
+agent_execution_task_finish_pending(
+	struct proc *p, struct agent_op *op,
+	struct agent_execution_claim *claim,
+	const struct agent_provenance_decision *provenance_decision,
+	struct resource_phase_lease *phase_lease, int terminal_status,
+	uint64 terminal_tick,
+	struct agent_result *result, struct agent_execution_outcome *outcome)
+{
+	struct agent_evidence_context_reservation reservation = { 0 };
+	struct agent_provenance_decision final_provenance;
+	uint64 now = terminal_tick != 0 ? terminal_tick : agent_ticks();
+
+	if (p == 0 || op == 0 || claim == 0 || provenance_decision == 0 ||
+	    phase_lease == 0 || result == 0 || outcome == 0 ||
+	    !claim->active || claim->legacy || phase_lease->generation == 0 ||
+	    phase_lease->state != RESOURCE_PHASE_LEASE_ADMITTED)
+		return -1;
+	if (agent_lifecycle_context_lane_enter_accepted_task(p) < 0)
+		panic("finish Task accepted context lane");
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		panic("finish Task context lane");
+	if (agent_context_append_prepare(p, p->agent_call_count + 1) < 0 ||
+	    agent_evidence_context_reserve(p, &reservation) < 0)
+		panic("finish Task Evidence");
+	memset(outcome, 0, sizeof(*outcome));
+	final_provenance = *provenance_decision;
+	final_provenance.output_labels |=
+		agent_provenance_current_labels(p);
+	outcome->phase_lease_generation = phase_lease->generation;
+	agent_result_init(result, op);
+	if (op->tool_id == AGENT_TOOL_DELEGATE_TASK &&
+	    claim->executor_pid > 0) {
+		if (claim->executor_agent_id <= 0 ||
+		    claim->executor_control_id == 0)
+			panic("delegated Task executor identity");
+		result->value0 =
+			((uint64)(uint)claim->executor_agent_id <<
+			 AGENT_TASK_DELEGATE_EXECUTOR_AGENT_SHIFT) |
+			((uint64)(uint)claim->executor_pid &
+			 AGENT_TASK_DELEGATE_EXECUTOR_PID_MASK);
+		result->value1 = claim->executor_control_id;
+		result->value2 = claim->executor_context_sequence;
+	}
+	if (terminal_status == AGENT_STATUS_CANCELLED)
+		claim->retry_forbidden = 1;
+	if (terminal_status == AGENT_STATUS_TIMEOUT) {
+		claim->decision_reason =
+			AGENT_EXECUTION_REASON_DEADLINE_EXPIRED;
+		claim->retry_forbidden = 1;
+	}
+	p->agent_call_count++;
+	result->sequence = p->agent_call_count;
+	result->status = terminal_status;
+	agent_result_text(result,
+		terminal_status == AGENT_STATUS_OK ? "delegated_complete" :
+		terminal_status == AGENT_STATUS_CANCELLED ?
+			"delegated_cancelled" : "delegated_failed");
+	if (terminal_status != AGENT_STATUS_TIMEOUT &&
+	    claim->deadline_tick != 0 && now >= claim->deadline_tick) {
+		result->status = AGENT_STATUS_TIMEOUT;
+		agent_result_text(result, "contract_deadline");
+		claim->decision_reason =
+			AGENT_EXECUTION_REASON_DEADLINE_EXPIRED;
+		claim->retry_forbidden = 1;
+	}
+	if (agent_provenance_commit_tool_output(
+		    p, &final_provenance, result->status) != AGENT_STATUS_OK)
+		panic("finish Task provenance");
+	outcome->decision_reason = claim->decision_reason;
+	outcome->output_artifact_type = AGENT_ARTIFACT_NONE;
+	outcome->output_provenance_labels =
+		final_provenance.output_labels |
+		AGENT_PROVENANCE_AGENT_DERIVED;
+	outcome->terminal_tick = now;
+	if (agent_execution_append_terminal(
+		    p, op, result, now, 0, claim, outcome, &reservation) < 0)
+		panic("finish Task terminal");
+	if (resource_phase_lease_settle(
+		    phase_lease, phase_lease->generation) < 0)
+		panic("finish Task phase settle");
+	if (reservation.active)
+		agent_evidence_context_abort(&reservation);
+	agent_lifecycle_context_lane_leave(p);
+	agent_lifecycle_context_lane_leave(p);
+	return 0;
 }
 
 int
