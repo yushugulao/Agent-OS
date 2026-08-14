@@ -66,7 +66,7 @@ def _request(*, history: bool = False) -> dict[str, object]:
                     "role": "assistant",
                     "tool_use": {
                         "corr_id": 7,
-                        "tool": "source_search",
+                        "tool": "search_files",
                         "arguments": {"query": "symbol"},
                     },
                 },
@@ -120,24 +120,109 @@ class CrossSourceTests(unittest.TestCase):
             contract.TOOL_CATALOG_SHA256,
         )
 
+    def test_system_policy_and_tools_are_generic_and_read_only(self) -> None:
+        prompt = contract.SYSTEM_PROMPT
+        self.assertEqual(contract.CONTRACT_VERSION, 3)
+        for text in (
+            "Solve the user's current task directly and in the requested language",
+            "current Host workspace supplied to this session",
+            "search before reading when the location is unknown",
+            "System inspection describes only the current Guest runtime",
+            "return exactly one tool call with no prose",
+            "Do not invent unseen facts, narrate the harness, or list the tool sequence",
+            "Keep the final answer within 2048 UTF-8 bytes",
+        ):
+            self.assertIn(text, prompt)
+        for legacy in (
+            "kernel engineering",
+            "build_source_snapshot",
+            "citation",
+            "draft_report",
+            "read_artifact",
+            "proof",
+        ):
+            self.assertNotIn(legacy, prompt)
+        tools = {str(tool["name"]): tool for tool in contract.TOOLS}
+        self.assertEqual(set(tools), {"search_files", "read_file", "inspect_system"})
+        self.assertIn("current Host workspace", tools["search_files"]["description"])
+        self.assertIn("empty query lists files", tools["search_files"]["description"])
+        self.assertIn("at most 8 matches", tools["search_files"]["description"])
+        self.assertIn("Read-only", tools["read_file"]["description"])
+        self.assertIn("current Guest runtime", tools["inspect_system"]["description"])
+        self.assertEqual(
+            tools["search_files"]["input_schema"],
+            {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "minLength": 0,
+                        "maxLength": 95,
+                        "pattern": r"^[^\u0000]*$",
+                    },
+                    "path_prefix": {
+                        "type": "string",
+                        "maxLength": 111,
+                        "pattern": r"^[^\u0000]*$",
+                    },
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        )
+        self.assertEqual(
+            tools["read_file"]["input_schema"],
+            {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255,
+                        "pattern": r"^[^\u0000]*$",
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 4294967295,
+                    },
+                    "max_lines": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 64,
+                    },
+                },
+                "required": ["path", "start_line", "max_lines"],
+                "additionalProperties": False,
+            },
+        )
+        self.assertEqual(
+            tools["inspect_system"]["input_schema"],
+            {
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["status", "processes", "context"],
+                    }
+                },
+                "required": ["operation"],
+                "additionalProperties": False,
+            },
+        )
+
 
 class ContractValidationTests(unittest.TestCase):
     def assert_rejected(self, request: dict[str, object]) -> None:
         with self.assertRaises(contract.NexusContractError):
             contract.validate_request_contract(request)
 
-    def test_exact_five_tool_request_and_history_are_accepted(self) -> None:
+    def test_exact_three_tool_request_and_history_are_accepted(self) -> None:
         request = _request(history=True)
         contract.validate_request_contract(request)
         self.assertEqual(
             [tool["name"] for tool in request["tools"]],
-            [
-                "source_search",
-                "source_read",
-                "inspect_runtime",
-                "draft_report",
-                "read_artifact",
-            ],
+            ["search_files", "read_file", "inspect_system"],
         )
 
     def test_system_one_character_mutation_is_rejected(self) -> None:
@@ -148,7 +233,7 @@ class ContractValidationTests(unittest.TestCase):
     def test_tool_catalog_mutations_are_rejected(self) -> None:
         mutations = []
         request = _request()
-        request["tools"][0]["name"] = "source_seek"
+        request["tools"][0]["name"] = "search_paths"
         mutations.append(request)
         request = _request()
         request["tools"][1]["description"] += "?"
@@ -169,7 +254,7 @@ class ContractValidationTests(unittest.TestCase):
         del request["tools"][-1]
         mutations.append(request)
         request = _request()
-        request["tools"][4]["name"] = request["tools"][0]["name"]
+        request["tools"][2]["name"] = request["tools"][0]["name"]
         mutations.append(request)
         for mutation in mutations:
             with self.subTest(tools=mutation["tools"]):
@@ -177,7 +262,7 @@ class ContractValidationTests(unittest.TestCase):
 
     def test_forced_choice_temperature_and_stop_are_rejected(self) -> None:
         for key, value in (
-            ("tool_choice", {"tool": "source_search"}),
+            ("tool_choice", {"tool": "search_files"}),
             ("temperature", 0),
             ("stop", "done"),
         ):

@@ -1,4 +1,4 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check host-contract-selftest local-host-selftests local-check agent-module-check agent-uapi-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agent-live-demo agent-live-demo-check agentos-console-image agentos-console agentos-cli agentos-observe agentos-console-check agentos-console-replay agentos-console-deepseek agentos-nexus-image agentos-nexus agentos-nexus-cli agentos-nexus-observe agentos-nexus-check agentos-nexus-replay agentos-nexus-deepseek contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run ch3-trace-test fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test virtio-disk-test dual-platform-run full-verify dual-clean clean-workspace-dry-run clean-workspace .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check host-contract-selftest local-host-selftests local-check agent-module-check agent-uapi-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agent-live-demo agent-live-demo-check agentos-console-image agentos-console agentos-cli agentos-observe agentos-console-check agentos-console-replay agentos-console-deepseek agentos-nexus-image agentos-nexus agentos-nexus-demo agentos-nexus-cli agentos-nexus-observe agentos-nexus-check agentos-nexus-replay agentos-nexus-deepseek contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run ch3-trace-test fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test virtio-disk-test dual-platform-run full-verify dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
 unexport BASH_ENV ENV
 all: build
@@ -455,7 +455,6 @@ override PRODUCT_STATIC_TESTS := \
 	scripts/test-agent-execution-contract.py \
 	scripts/test-agent-live-loop.py \
 	scripts/test-agent-nexus-loop.py \
-	scripts/test-agentnexus-source-corpus.py \
 	scripts/test-agent-file-publish-atomicity.py \
 	scripts/test-agent-task-channel.py \
 	scripts/test-agent-direct-denial-evidence.py \
@@ -535,7 +534,7 @@ override HOST_PRODUCT_TESTS := \
 	host_tools/test_agentos_nexus.py \
 	host_tools/test_agentos_nexus_contract.py \
 	host_tools/test_agentos_nexus_task_ledger.py \
-	host_tools/test_agentos_source_attestation.py \
+	host_tools/test_agentos_workspace.py \
 	host_tools/test_validate_agentos_nexus_replay.py \
 	host_tools/test_guest_llm_relay.py \
 	host_tools/test_mcp_a2a_gateway.py \
@@ -638,17 +637,22 @@ AGENTOS_NEXUS_ENDPOINT ?= $(if $(filter deepseek,$(AGENTOS_NEXUS_PROVIDER)),http
 AGENTOS_NEXUS_API_KEY_ENV ?=
 AGENTOS_NEXUS_API_KEY_FILE ?= $(if $(filter deepseek,$(AGENTOS_NEXUS_PROVIDER)),$(AGENT_LIVE_DEEPSEEK_KEY_FILE),)
 AGENTOS_NEXUS_REPLAY_FILE ?= ci/agentos-nexus-replay.jsonl
+AGENTOS_NEXUS_SCRIPT ?=
+AGENTOS_NEXUS_MAX_ROUNDS ?= 16
 AGENTOS_NEXUS_MAX_OUTPUT_TOKENS ?= 114514
 AGENTOS_NEXUS_HTTP_TIMEOUT ?= 600
 AGENTOS_NEXUS_MAX_HTTP_RESPONSE_BYTES ?= 8388608
 AGENTOS_NEXUS_MAX_BINARY ?= 274432
 AGENTOS_NEXUS_REPLAY_DEP = $(if $(filter replay,$(AGENTOS_NEXUS_PROVIDER)),$(AGENTOS_NEXUS_REPLAY_FILE))
 AGENTOS_NEXUS_REPLAY_ARGS = $(if $(filter replay,$(AGENTOS_NEXUS_PROVIDER)),--replay-file $(call shell_quote,$(AGENTOS_NEXUS_REPLAY_FILE)))
+AGENTOS_NEXUS_SCRIPT_DEP = $(if $(strip $(AGENTOS_NEXUS_SCRIPT)),$(AGENTOS_NEXUS_SCRIPT))
+AGENTOS_NEXUS_SCRIPT_ARGS = $(if $(strip $(AGENTOS_NEXUS_SCRIPT)),--script $(call shell_quote,$(AGENTOS_NEXUS_SCRIPT)))
 AGENTOS_NEXUS_MODEL_ARGS = $(if $(strip $(AGENTOS_NEXUS_MODEL)),--model $(call shell_quote,$(AGENTOS_NEXUS_MODEL)))
 AGENTOS_NEXUS_ENDPOINT_ARGS = $(if $(strip $(AGENTOS_NEXUS_ENDPOINT)),--endpoint $(call shell_quote,$(AGENTOS_NEXUS_ENDPOINT)))
 AGENTOS_NEXUS_KEY_ARGS = $(if $(strip $(AGENTOS_NEXUS_API_KEY_FILE)),--api-key-file $(call shell_quote,$(AGENTOS_NEXUS_API_KEY_FILE)),$(if $(strip $(AGENTOS_NEXUS_API_KEY_ENV)),--api-key-env $(call shell_quote,$(AGENTOS_NEXUS_API_KEY_ENV))))
 AGENTOS_NEXUS_PROVIDER_ARGS = \
 	--provider $(call shell_quote,$(AGENTOS_NEXUS_PROVIDER)) \
+	--max-rounds $(call shell_quote,$(AGENTOS_NEXUS_MAX_ROUNDS)) \
 	--max-output-tokens $(call shell_quote,$(AGENTOS_NEXUS_MAX_OUTPUT_TOKENS)) \
 	--http-timeout $(call shell_quote,$(AGENTOS_NEXUS_HTTP_TIMEOUT)) \
 	--max-http-response-bytes $(call shell_quote,$(AGENTOS_NEXUS_MAX_HTTP_RESPONSE_BYTES)) \
@@ -876,12 +880,9 @@ agentos-console-deepseek:
 
 # Build the additive Nexus Guest using the repository's shared kernel/image outputs.
 # Do not run console and Nexus image builds concurrently in the same worktree.
-agentos-nexus-image: user/src/agentnexus_ucore.c user/include/agent_nexus.h user/include/agent_nexus_protocol.h user/include/agent_nexus_source.h user/lib/agent_nexus.c user/lib/agent_nexus_source.c scripts/build-agentnexus-source-corpus.py scripts/test-agentnexus-source-corpus.py user/include/exec_policy_manifest.h
+agentos-nexus-image: user/src/agentnexus_ucore.c user/include/agent_nexus.h user/include/agent_nexus_protocol.h user/lib/agent_nexus.c user/include/exec_policy_manifest.h
 	@rm -f $(F)/fs.img $(F)/fs-copy.img
 	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory -rR -C $(U) -f Makefile clean
-	@$(PYTHON_CMD) -I -S -B scripts/build-agentnexus-source-corpus.py \
-		--root . --output-dir "$(U)/build/nexus-source-corpus" \
-		--anchor-header "$(U)/build/generated/agent_nexus_source_anchor.h"
 	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory -rR -C $(U) -f Makefile \
 		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
 		CHAPTER=agent CH_TESTS=agentnexus_ucore
@@ -892,12 +893,6 @@ agentos-nexus-image: user/src/agentnexus_ucore.c user/include/agent_nexus.h user
 			echo "agentnexus_ucore exceeds uCore MAXFILE: $$size > $(AGENTOS_NEXUS_MAX_BINARY)" >&2; \
 			exit 1; \
 		}
-	@set -e; mkdir -p "$(U)/target/system-data"; \
-		$(CP) "$(U)"/build/nexus-source-corpus/nxsrc* \
-			"$(U)/target/system-data/"
-	@$(PYTHON_CMD) -I -S -B scripts/build-agentnexus-source-corpus.py \
-		--output-dir "$(U)/target/system-data" --verify-only \
-		--anchor-header "$(U)/build/generated/agent_nexus_source_anchor.h"
 	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory -rR -C $(F) -f Makefile
 	@set -e; tmp="$(F)/fs-copy.img.$$$$.tmp"; \
 		trap 'rm -f "$$tmp"' 0 1 2 3 15; \
@@ -908,7 +903,7 @@ agentos-nexus-image: user/src/agentnexus_ucore.c user/include/agent_nexus.h user
 		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
 		LOG=warn INIT_PROC=agentnexus_ucore CHAPTER=agent
 
-agentos-nexus: agentos-nexus-image host_tools/agentos_console.py host_tools/agentos_relayd.py host_tools/agentos_cli.py host_tools/agentos_local_protocol.py host_tools/agentos_nexus_contract.py host_tools/agentos_source_attestation.py $(AGENTOS_NEXUS_REPLAY_DEP)
+agentos-nexus: agentos-nexus-image host_tools/agentos_console.py host_tools/agentos_relayd.py host_tools/agentos_cli.py host_tools/agentos_local_protocol.py host_tools/agentos_nexus_contract.py host_tools/agentos_workspace.py $(AGENTOS_NEXUS_REPLAY_DEP) $(AGENTOS_NEXUS_SCRIPT_DEP)
 	@if test -n $(call shell_quote,$(AGENTOS_NEXUS_API_KEY_FILE)) && \
 		test -n $(call shell_quote,$(AGENTOS_NEXUS_API_KEY_ENV)); then \
 		echo "AGENTOS_NEXUS_API_KEY_FILE and AGENTOS_NEXUS_API_KEY_ENV are mutually exclusive" >&2; \
@@ -923,12 +918,20 @@ agentos-nexus: agentos-nexus-image host_tools/agentos_console.py host_tools/agen
 	esac
 	@$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py run \
 		--guest-profile nexus \
-		--source-corpus $(call shell_quote,$(U)/build/nexus-source-corpus) \
-		--source-anchor $(call shell_quote,$(U)/build/generated/agent_nexus_source_anchor.h) \
+		--workspace-root $(call shell_quote,.) \
 		$(AGENTOS_NEXUS_PROVIDER_ARGS) \
 		--qemu $(call shell_quote,$(QEMU)) \
 		--kernel $(call shell_quote,$(BUILDDIR)/kernel) \
-		--image $(call shell_quote,$(F)/fs-copy.img)
+		--image $(call shell_quote,$(F)/fs-copy.img) \
+		$(AGENTOS_NEXUS_SCRIPT_ARGS)
+
+# Focused live engineering question for judging Nexus by the usefulness of its
+# workspace investigation and conclusion, rather than by a prescribed tool tour.
+agentos-nexus-demo: ci/agentos-nexus-demo-script.txt
+	+@$(MAKE) --no-print-directory agentos-nexus \
+		AGENTOS_NEXUS_PROVIDER=deepseek \
+		AGENTOS_NEXUS_MAX_ROUNDS=10 \
+		AGENTOS_NEXUS_SCRIPT=ci/agentos-nexus-demo-script.txt
 
 agentos-nexus-cli: host_tools/agentos_console.py host_tools/agentos_cli.py host_tools/agentos_local_protocol.py
 	@$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py cli \
@@ -938,21 +941,19 @@ agentos-nexus-observe: host_tools/agentos_console.py host_tools/agentos_observe.
 	@$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py observe \
 		--attach latest --expect-guest-profile nexus
 
-agentos-nexus-check: host_tools/test_agentos_console.py host_tools/test_agentos_nexus.py host_tools/test_agentos_nexus_contract.py host_tools/test_agentos_nexus_task_ledger.py host_tools/test_agentos_source_attestation.py host_tools/test_validate_agentos_nexus_replay.py host_tools/test_guest_llm_relay.py scripts/test-agent-nexus-loop.py scripts/test-agentnexus-source-corpus.py
+agentos-nexus-check: host_tools/test_agentos_console.py host_tools/test_agentos_nexus.py host_tools/test_agentos_nexus_contract.py host_tools/test_agentos_nexus_task_ledger.py host_tools/test_agentos_workspace.py host_tools/test_validate_agentos_nexus_replay.py host_tools/test_guest_llm_relay.py scripts/test-agent-nexus-loop.py
 	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_console.py
 	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_nexus.py
 	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_nexus_contract.py
 	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_nexus_task_ledger.py
-	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_source_attestation.py
+	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_workspace.py
 	@$(PYTHON_CMD) -I -S -B host_tools/test_validate_agentos_nexus_replay.py
 	@$(PYTHON_CMD) -B host_tools/test_guest_llm_relay.py
 	@$(PYTHON_CMD) -I -S -B scripts/test-agent-nexus-loop.py
-	@$(PYTHON_CMD) -I -S -B scripts/test-agentnexus-source-corpus.py
 
-# Deterministic protocol regression captured from a genuine autonomous run.  It
-# replays bytes and proofs; the separate live rehearsal is the conclusion-free
-# autonomy acceptance and never prescribes the model's tool order or answer.
-agentos-nexus-replay: agentos-nexus-image host_tools/agentos_console.py host_tools/agentos_relayd.py host_tools/agentos_cli.py host_tools/agentos_observe.py host_tools/agentos_local_protocol.py host_tools/agentos_nexus_contract.py host_tools/agentos_source_attestation.py host_tools/validate_agentos_nexus_replay.py $(AGENTOS_NEXUS_REPLAY_FILE) ci/agentos-nexus-script.txt
+# Deterministic interaction regression for the Nexus protocol. The separate
+# live demonstration judges a model-selected investigation and natural answer.
+agentos-nexus-replay: agentos-nexus-image host_tools/agentos_console.py host_tools/agentos_relayd.py host_tools/agentos_cli.py host_tools/agentos_observe.py host_tools/agentos_local_protocol.py host_tools/agentos_nexus_contract.py host_tools/agentos_workspace.py host_tools/validate_agentos_nexus_replay.py $(AGENTOS_NEXUS_REPLAY_FILE) ci/agentos-nexus-script.txt
 	@set -eu; \
 		runtime=$$(mktemp -d /tmp/aon.XXXXXX); \
 		controller="$$runtime/controller.ndjson"; \
@@ -988,9 +989,9 @@ agentos-nexus-replay: agentos-nexus-image host_tools/agentos_console.py host_too
 		trap 'exit 130' 1 2 3 15; \
 		$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py daemon \
 			--guest-profile nexus \
-			--source-corpus $(call shell_quote,$(U)/build/nexus-source-corpus) \
-			--source-anchor $(call shell_quote,$(U)/build/generated/agent_nexus_source_anchor.h) \
+			--workspace-root $(call shell_quote,.) \
 			--provider replay \
+			--max-rounds $(call shell_quote,$(AGENTOS_NEXUS_MAX_ROUNDS)) \
 			--max-output-tokens $(call shell_quote,$(AGENTOS_NEXUS_MAX_OUTPUT_TOKENS)) \
 			--http-timeout $(call shell_quote,$(AGENTOS_NEXUS_HTTP_TIMEOUT)) \
 			--max-http-response-bytes $(call shell_quote,$(AGENTOS_NEXUS_MAX_HTTP_RESPONSE_BYTES)) \
@@ -1028,8 +1029,7 @@ agentos-nexus-replay: agentos-nexus-image host_tools/agentos_console.py host_too
 			--controller "$$controller" --observer "$$observer" \
 			--fixture $(call shell_quote,$(AGENTOS_NEXUS_REPLAY_FILE)) \
 			--script $(call shell_quote,ci/agentos-nexus-script.txt) \
-			--source-corpus $(call shell_quote,$(U)/build/nexus-source-corpus) \
-			--source-anchor $(call shell_quote,$(U)/build/generated/agent_nexus_source_anchor.h)
+			--workspace-root $(call shell_quote,.)
 
 agentos-nexus-deepseek:
 	+@$(MAKE) --no-print-directory agentos-nexus AGENTOS_NEXUS_PROVIDER=deepseek

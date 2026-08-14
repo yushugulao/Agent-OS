@@ -141,7 +141,7 @@ int agent_execution_contract(
 
 Execution Contract 可以 `CREATE`、`QUERY` 或 `RETIRE`。每个生命周期最多登记 24 个按依赖顺序排列的节点，每个节点最多尝试 4 次，一份 Execution Contract 最多保留 48 条已经接受的执行结果。`predecessor_mask` 只能引用编号更小的节点。
 
-V3 请求保留完整的 V2 前缀，后面增加 Execution Contract 键、节点号、尝试次数、schema digest、输入指纹、来源 Context 序号、来源节点、生产者的控制编号和进程号，以及 artifact 类型。响应增加决定原因、Evidence Ring 票号、输出 provenance、结果类型和完成标志。设置 `AGENT_RESPONSE_V3_F_CACHED` 表示本次调用直接取用了已经完成的结果。
+V3 请求保留完整的 V2 前缀，后面增加 Execution Contract 键、节点号、尝试次数、schema digest、输入指纹、来源 Context 序号、来源节点、生产者的控制编号和进程号，以及 artifact 类型。响应增加决定原因、工作流记录票号、输出 provenance、结果类型和完成标志。设置 `AGENT_RESPONSE_V3_F_CACHED` 表示本次调用直接取用了已经完成的结果。
 
 <a id="batch-与-workflow-fence"></a>
 ## 批量调用与 Workflow Fence
@@ -158,7 +158,7 @@ int agent_workflow_fence(
 
 `agent_run()` 一次最多提交 64 个操作，内核按数组顺序执行，每项分别写回 `agent_result`。批量调用和单次调用共用 `agent_execute_one()`，也共用 Context commit 顺序。
 
-Workflow Fence 请求占 56 字节，包含标志、32 字节 `challenge` 和请求号；Workflow Fence 回执固定为 320 字节，记录生命周期键、屏障序号、元数据 generation、计费轮次、Evidence Ring 范围、八类资源用量、`previous_root` 和摘要。请求尚在处理时返回 `RETRY`；使用同一 `request_id` 进行 Replay 时返回同一份回执。结构定义见 [`include/agent_workflow_fence_abi.h`](../include/agent_workflow_fence_abi.h)。
+Workflow Fence 请求占 56 字节，包含标志、32 字节 `challenge` 和请求号；Workflow Fence 回执固定为 320 字节，记录生命周期键、屏障序号、元数据 generation、计费轮次、工作流记录范围、八类资源用量、`previous_root` 和内容摘要。请求尚在处理时返回 `RETRY`；使用同一 `request_id` 进行 Replay 时返回同一份回执。结构定义见 [`include/agent_workflow_fence_abi.h`](../include/agent_workflow_fence_abi.h)。
 
 <a id="context-path"></a>
 ## 上下文路径管理
@@ -254,7 +254,7 @@ int agent_task_channel_resource(
 
 每条 Task Channel 只允许一个提交者。SQ 和 CQ 各有 16 个位置，队列表头、SQE 和 CQE 均为 128 字节。`setup` 只能由进程主线程调用，调用后建立共享映射。后续的 `enter` 和 `resource` 都绑定同一个提交者线程及其身份 generation。`enter` 提交新的 SQ 队尾、确认已经读取的 CQ 队头，并推动内核处理任务；`resource` 用于导入、释放和查询类型化句柄。
 
-`IMPORT` 接受当前进程打开的可读普通文件描述符，类型固定为 `AGENT_ARTIFACT_UTF8`，长度必须准确落在 1–63 字节，创建的句柄只能是 OWNED。调用前，当前 Agent 必须已有一条经过校验的最新 Context；导入只绑定它的 sequence，不新建记录。内核从 offset 0 读取并多探测一个字节确认 EOF，不改变共享文件 offset；内容经过 NUL 与 UTF-8 检查后，以不可变快照保存在 Task Channel 私有页中，同时记录 SHA-256、生产者 PID/`control_id` 和 `UNTRUSTED_FILE_DATA` provenance。导入成功后的最终 copyout 若失败，刚建立的资源会在用户态可见前回滚。
+`IMPORT` 接受当前进程打开的可读普通文件描述符，类型固定为 `AGENT_ARTIFACT_UTF8`，长度必须准确落在 1–63 字节，创建的句柄只能是 OWNED。调用前，当前 Agent 必须已有一条经过校验的最新 Context；导入只绑定它的 sequence，不新建记录。内核从 offset 0 读取并多探测一个字节确认 EOF，不改变共享文件 offset；内容经过 NUL 与 UTF-8 检查后，以不可变快照保存在 Task Channel 私有页中，同时记录内容指纹、生产者 PID/`control_id` 和 `UNTRUSTED_FILE_DATA` provenance。导入成功后的最终 copyout 若失败，刚建立的资源会在用户态可见前回滚。
 
 SQE 可以把已有 OWNED 句柄改作 BORROWED 别名提交。当前 ECHO Task Bridge 会把快照复制到工具 payload：BORROWED 任务完成后资源仍处于 `LIVE`，调用方随后显式 `RELEASE`；OWNED 任务完成后输入自动消费。释放后的句柄以及槽位复用前的旧 generation 都返回 `STALE`。
 

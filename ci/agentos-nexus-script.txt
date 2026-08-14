@@ -1,9 +1,9 @@
 /tools
 In one sentence, explain what makes an engineering agent autonomous. Answer directly from general knowledge without using a tool.
 /status
-Using this boot's Nexus, write one natural, evidence-supported paragraph explaining how it carries out an autonomous source-backed task. Include an exact source search for NEXUS_AUTONOMY_ENTRYPOINT_V0 as a negative control; if it has no match, describe that result only as the complete marker having no match in the bounded source snapshot, without inferring that any broader kind of entry point, symbol, or marker is absent. After that result, choose a broader source query yourself and read enough source to support one relevant contract fact. Also observe the current runtime state, and draft and read back a concise report before writing the conclusion. Support the source fact by copying its source_read citation token byte-for-byte, including its brackets and line range. Choose the useful evidence, the remaining order, and the stopping point yourself. Whenever you need a tool, return exactly one tool call with no accompanying prose and wait for its result.
+请阅读当前工作区中的 README.md，用一个自然段向第一次接触项目的开发者说明 AgentOS 主要解决什么问题、Nexus 如何运行，以及用哪个 make 目标开始体验 Nexus 在线自由演示。不要引用其他文件或列出无关的控制台命令。
 /context
 /tasks
-/artifacts
+/agents
 /status
 /quit

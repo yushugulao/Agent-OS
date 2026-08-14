@@ -4,7 +4,7 @@
 The relay validates wire types before calling this module.  This ledger adds
 the stateful guarantees which cannot be established from one event alone:
 turn/lifecycle binding, the root/child DAG, stable kernel identities, strict
-task transitions, and Task/Tool/artifact/evidence cross-bindings.
+task transitions, and Task/Tool/artifact cross-bindings.
 
 Only bounded metadata and hashes are retained.  In particular, TASK_EVENT
 ``summary`` text and tool arguments are hashed at the API boundary and are
@@ -36,8 +36,9 @@ AGENT_STATUS_INDETERMINATE: Final = -20
 AGENT_STATUS_TASK_FAILED: Final = AGENT_STATUS_INDETERMINATE
 NEXUS_PROVENANCE_ALL: Final = (1 << 6) - 1
 NEXUS_ROOT_TASK_BASE: Final = 100
-AGENT_NEXUS_ARTIFACT_REPORT: Final = 7
 NEXUS_PROVENANCE_FAILURE: Final = 0
+FILE_READ_MAX_LINES: Final = 64
+TOOL_ARGUMENT_STRING_BYTES: Final = 3072
 
 DEFAULT_MAX_TASKS: Final = 17
 DEFAULT_MAX_EVENTS: Final = 4096
@@ -46,18 +47,29 @@ ABSOLUTE_MAX_TASKS: Final = 256
 ABSOLUTE_MAX_EVENTS: Final = 65536
 
 TASK_TOOL_ROLES: Final[Mapping[str, str]] = {
-    "source_search": "research",
-    "source_read": "research",
-    "inspect_runtime": "system",
-    "draft_report": "analyst",
+    "search_files": "research",
+    "read_file": "research",
+    "inspect_system": "system",
 }
-NO_CHILD_TOOLS: Final = frozenset(("read_artifact",))
+# Workspace tools settle a Research child artifact which proves only that the
+# Host-side request is ready, never the later provider-private workspace bytes.
+TASK_ARTIFACT_PROVENANCE: Final[Mapping[str, int]] = {
+    "search_files": 60,
+    "read_file": 60,
+    "inspect_system": 53,
+}
 TOOL_PROVENANCE: Final[Mapping[str, int]] = {
-    "source_search": 60,
-    "source_read": 60,
-    "inspect_runtime": 53,
-    "draft_report": 52,
-    "read_artifact": 52,
+    "search_files": 60,
+    "read_file": 60,
+    "inspect_system": 53,
+}
+WORKSPACE_REQUEST_PROJECTIONS: Final[Mapping[str, str]] = {
+    tool: (
+        f"workspace_request={tool}\n"
+        "result_delivery=host_provider_context\n"
+        "content_untrusted=1\n"
+    )
+    for tool in ("search_files", "read_file")
 }
 # event, root status, TURN_COMPLETE status
 TERMINATION_CONTRACTS: Final[Mapping[str, tuple[str, int, str]]] = {
@@ -66,9 +78,7 @@ TERMINATION_CONTRACTS: Final[Mapping[str, tuple[str, int, str]]] = {
     "round_limit": ("cancelled", AGENT_STATUS_CANCELLED, "cancelled"),
     "session_error": ("failed", AGENT_STATUS_IO_ERROR, "error"),
 }
-BUSINESS_ROLES: Final = frozenset(
-    ("coordinator", "system", "research", "analyst")
-)
+BUSINESS_ROLES: Final = frozenset(("coordinator", "system", "research"))
 TASK_TERMINALS: Final = frozenset(("completed", "failed", "cancelled"))
 TASK_EVENTS: Final = frozenset(
     (
@@ -87,7 +97,6 @@ TASK_STATES: Final = frozenset(
 
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}\Z")
 _TOOL_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
-_SOURCE_ID_RE = re.compile(r"S[0-9]{4}\Z")
 _SESSION_BLOCK_SUMMARY = "worker_not_quiescent;session_blocked=1"
 _SESSION_BLOCK_SUMMARY_SHA256 = hashlib.sha256(
     _SESSION_BLOCK_SUMMARY.encode("utf-8")
@@ -210,10 +219,6 @@ _ARTIFACT_ROOT_ITEM_FIELDS = (
     "resource_used",
     "provenance",
     "projection_sha256",
-    "evidence_task_id",
-    "evidence_provenance",
-    "evidence_artifact_sha256",
-    "evidence_projection_sha256",
 )
 
 _TOOL_ROOT_ITEM_FIELDS = (
@@ -233,33 +238,7 @@ _TOOL_ROOT_ITEM_FIELDS = (
     "provenance",
     "projection_sha256",
     "result_sha256",
-    "evidence_task_id",
-    "evidence_provenance",
-    "evidence_artifact_sha256",
-    "evidence_projection_sha256",
-    "bound_handle",
-    "bound_artifact_sha256",
-    "bound_resource_used",
     "session_blocked",
-)
-
-_DIRECT_ARTIFACT_ROOT_ITEM_FIELDS = (
-    "version",
-    "turn_id",
-    "request_id",
-    "workflow_lifecycle_id",
-    "workflow_lifecycle_generation",
-    "corr_id",
-    "tool",
-    "arguments_sha256",
-    "artifact_handle",
-    "artifact_sha256",
-    "resource_used",
-    "artifact_kind",
-    "provenance",
-    "projection_sha256",
-    "result_sha256",
-    "bound_draft_corr_id",
 )
 
 
@@ -341,13 +320,6 @@ class _ToolRecord:
     tool: str
     arguments_sha256: str
     argument_binding_sha256: str
-    draft_content_sha256: str = ""
-    draft_content_bytes: int = 0
-    read_handle: int = 0
-    bound_handle: int = 0
-    bound_artifact_sha256: str = ""
-    bound_resource_used: int = 0
-    bound_draft_corr_id: int = 0
     task_id: int = 0
     settled: bool = False
     status: int = 0
@@ -357,10 +329,6 @@ class _ToolRecord:
     provenance: int = 0
     projection_sha256: str = ""
     result_sha256: str = ""
-    evidence_task_id: int = 0
-    evidence_provenance: int = 0
-    evidence_artifact_sha256: str = ""
-    evidence_projection_sha256: str = ""
     session_blocked: bool = False
 
 
@@ -517,7 +485,7 @@ def _argument_text(
     maximum: int,
     empty: bool = False,
 ) -> str:
-    if not isinstance(value, str):
+    if not isinstance(value, str) or "\0" in value:
         raise NexusTaskLedgerError(f"{label} must be text", code="BAD_TOOL_EVENT")
     try:
         raw = value.encode("utf-8")
@@ -525,7 +493,16 @@ def _argument_text(
         raise NexusTaskLedgerError(
             f"{label} is not UTF-8", code="BAD_TOOL_EVENT"
         ) from error
-    if (not empty and not raw) or len(raw) > maximum:
+    escaped_bytes = sum(
+        6 if byte < 0x20 else (2 if byte in (ord('"'), ord("\\")) else 1)
+        for byte in raw
+    )
+    if (
+        (not empty and not value)
+        or len(value) > maximum
+        or len(raw) > TOOL_ARGUMENT_STRING_BYTES
+        or escaped_bytes > TOOL_ARGUMENT_STRING_BYTES
+    ):
         raise NexusTaskLedgerError(
             f"{label} is outside its size bound", code="BAD_TOOL_EVENT"
         )
@@ -534,85 +511,55 @@ def _argument_text(
 
 def _tool_argument_binding(
     tool: str, arguments: Mapping[str, object]
-) -> tuple[str, str, int, int]:
-    """Return binding hash, draft digest/size, and read handle without a body."""
+) -> str:
+    """Return a body-free binding hash for one v3 tool request."""
 
     keys = set(arguments)
     binding: dict[str, object]
-    draft_digest = ""
-    draft_bytes = 0
-    read_handle = 0
-    if tool == "source_search":
+    if tool == "search_files":
         if not {"query"} <= keys <= {"query", "path_prefix"}:
             raise NexusTaskLedgerError(
-                "source_search arguments are malformed", code="BAD_TOOL_EVENT"
+                "search_files arguments are malformed", code="BAD_TOOL_EVENT"
             )
-        query = _argument_text(arguments["query"], "query", maximum=95)
+        query = _argument_text(
+            arguments["query"], "query", maximum=95, empty=True
+        )
         prefix = _argument_text(
             arguments.get("path_prefix", ""), "path_prefix", maximum=111, empty=True
         )
         binding = {"tool": tool, "query_sha256": hashlib.sha256(query.encode()).hexdigest(),
                    "path_prefix_sha256": hashlib.sha256(prefix.encode()).hexdigest()}
-    elif tool == "source_read":
-        if keys != {"source_id", "start_line", "max_lines"}:
+    elif tool == "read_file":
+        if keys != {"path", "start_line", "max_lines"}:
             raise NexusTaskLedgerError(
-                "source_read arguments are malformed", code="BAD_TOOL_EVENT"
+                "read_file arguments are malformed", code="BAD_TOOL_EVENT"
             )
-        source_id = arguments["source_id"]
+        path = _argument_text(arguments["path"], "path", maximum=255)
         start_line = arguments["start_line"]
         max_lines = arguments["max_lines"]
-        if not isinstance(source_id, str) or _SOURCE_ID_RE.fullmatch(source_id) is None:
-            raise NexusTaskLedgerError(
-                "source_id is malformed", code="BAD_TOOL_EVENT"
-            )
         start = _integer(
             start_line, "start_line", minimum=1, maximum=MAX_U32,
             code="BAD_TOOL_EVENT"
         )
         count = _integer(
-            max_lines, "max_lines", minimum=1, maximum=12,
+            max_lines, "max_lines", minimum=1, maximum=FILE_READ_MAX_LINES,
             code="BAD_TOOL_EVENT"
         )
-        binding = {"tool": tool, "source_id": source_id,
+        binding = {"tool": tool, "path_sha256": hashlib.sha256(path.encode()).hexdigest(),
                    "start_line": start, "max_lines": count}
-    elif tool == "inspect_runtime":
+    elif tool == "inspect_system":
         if keys != {"operation"} or arguments.get("operation") not in (
-            "system_status", "processes", "context"
+            "status", "processes", "context"
         ):
             raise NexusTaskLedgerError(
-                "inspect_runtime arguments are malformed", code="BAD_TOOL_EVENT"
+                "inspect_system arguments are malformed", code="BAD_TOOL_EVENT"
             )
         binding = {"tool": tool, "operation": arguments["operation"]}
-    elif tool == "draft_report":
-        if not {"content"} <= keys <= {"content", "title"}:
-            raise NexusTaskLedgerError(
-                "draft_report arguments are malformed", code="BAD_TOOL_EVENT"
-            )
-        content = _argument_text(arguments["content"], "content", maximum=2800)
-        title = _argument_text(
-            arguments.get("title", ""), "title", maximum=128, empty=True
-        )
-        raw = content.encode("utf-8")
-        draft_digest = hashlib.sha256(raw).hexdigest()
-        draft_bytes = len(raw)
-        binding = {"tool": tool, "content_sha256": draft_digest,
-                   "content_bytes": draft_bytes,
-                   "title_sha256": hashlib.sha256(title.encode()).hexdigest()}
-    elif tool == "read_artifact":
-        if keys != {"handle"}:
-            raise NexusTaskLedgerError(
-                "read_artifact arguments are malformed", code="BAD_TOOL_EVENT"
-            )
-        read_handle = _integer(
-            arguments["handle"], "handle", minimum=1, maximum=MAX_U32,
-            code="BAD_TOOL_EVENT"
-        )
-        binding = {"tool": tool, "handle": read_handle}
     else:
-        # Non-autonomy/approval tools remain direct proof items, but their own
-        # Host policy owns their argument schema.
-        binding = {"tool": tool, "arguments_sha256": _sha256(arguments)}
-    return _sha256(binding), draft_digest, draft_bytes, read_handle
+        raise NexusTaskLedgerError(
+            "tool is outside the Nexus contract", code="BAD_TOOL_EVENT"
+        )
+    return _sha256(binding)
 
 
 class NexusTaskLedger:
@@ -683,7 +630,6 @@ class NexusTaskLedger:
                 not isinstance(tool, str)
                 or _TOOL_RE.fullmatch(tool) is None
                 or role not in BUSINESS_ROLES - {"coordinator"}
-                or tool in NO_CHILD_TOOLS
             ):
                 raise NexusTaskLedgerError(
                     "task_tool_roles is malformed", code="BAD_LEDGER_CONFIG"
@@ -800,8 +746,10 @@ class NexusTaskLedger:
             corr_id, "corr_id", minimum=1, maximum=MAX_U64, code="BAD_TOOL_EVENT"
         )
         name = _text(tool, "tool", maximum=64, code="BAD_TOOL_EVENT")
-        if _TOOL_RE.fullmatch(name) is None:
-            raise NexusTaskLedgerError("tool is malformed", code="BAD_TOOL_EVENT")
+        if _TOOL_RE.fullmatch(name) is None or name not in self._task_tool_roles:
+            raise NexusTaskLedgerError(
+                "tool is outside the Nexus contract", code="BAD_TOOL_EVENT"
+            )
         request = self._requests.get(corr)
         if request is None or corr != self._latest_corr_id:
             raise NexusTaskLedgerError(
@@ -838,31 +786,8 @@ class NexusTaskLedger:
                     "canonical tool arguments do not match their digest",
                     code="BAD_TOOL_EVENT",
                 )
-        binding, draft_digest, draft_bytes, read_handle = _tool_argument_binding(
-            name, arguments
-        )
-        record = _ToolRecord(
-            corr,
-            name,
-            argument_digest,
-            binding,
-            draft_content_sha256=draft_digest,
-            draft_content_bytes=draft_bytes,
-            read_handle=read_handle,
-        )
-        if name == "read_artifact":
-            # Delivery precedes Guest execution.  A schema-valid stale handle is
-            # therefore recorded as an ordinary negative tool outcome, not used
-            # to fail-stop the already-sent MODEL_RESPONSE.
-            if (
-                self._current_draft_handle
-                and read_handle == self._current_draft_handle
-                and self._current_draft_sha256
-            ):
-                record.bound_handle = self._current_draft_handle
-                record.bound_artifact_sha256 = self._current_draft_sha256
-                record.bound_resource_used = self._current_draft_bytes
-                record.bound_draft_corr_id = self._current_draft_corr_id
+        binding = _tool_argument_binding(name, arguments)
+        record = _ToolRecord(corr, name, argument_digest, binding)
         self._tools[corr] = record
         request.response_outcome = "tool"
 
@@ -1244,13 +1169,9 @@ class NexusTaskLedger:
         provenance: object = 0,
         projection_sha256: object = "",
         result_sha256: object,
-        evidence_task_id: object = 0,
-        evidence_provenance: object = 0,
-        evidence_artifact_sha256: object = "",
-        evidence_projection_sha256: object = "",
         session_blocked_marker: object = "",
     ) -> None:
-        """Bind a TOOL_EVENT settlement to its Task/artifact/evidence trace."""
+        """Bind a TOOL_EVENT settlement to its Task and artifact trace."""
 
         self._require_mutable(code="BAD_TOOL_EVENT")
         if self._provider_final_frozen:
@@ -1294,32 +1215,6 @@ class NexusTaskLedger:
             code="BAD_TOOL_EVENT",
         )
         result_digest = _digest(result_sha256, "result_sha256", code="BAD_TOOL_EVENT")
-        evidence_id = _integer(
-            evidence_task_id,
-            "evidence_task_id",
-            minimum=0,
-            maximum=MAX_U32,
-            code="BAD_TOOL_EVENT",
-        )
-        evidence_labels = _integer(
-            evidence_provenance,
-            "evidence_provenance",
-            minimum=0,
-            maximum=NEXUS_PROVENANCE_ALL,
-            code="BAD_TOOL_EVENT",
-        )
-        evidence_artifact = _digest(
-            evidence_artifact_sha256,
-            "evidence_artifact_sha256",
-            empty=True,
-            code="BAD_TOOL_EVENT",
-        )
-        evidence_projection = _digest(
-            evidence_projection_sha256,
-            "evidence_projection_sha256",
-            empty=True,
-            code="BAD_TOOL_EVENT",
-        )
         block_marker = _text(
             session_blocked_marker,
             "session_blocked_marker",
@@ -1341,14 +1236,6 @@ class NexusTaskLedger:
                 or any(values)
                 or labels != NEXUS_PROVENANCE_FAILURE
                 or projection
-                or any(
-                    (
-                        evidence_id,
-                        evidence_labels,
-                        evidence_artifact,
-                        evidence_projection,
-                    )
-                )
             ):
                 raise NexusTaskLedgerError(
                     "artifact cleanup session block settlement is malformed",
@@ -1379,26 +1266,10 @@ class NexusTaskLedger:
                 values,
                 labels,
                 projection,
-                evidence_id,
-                evidence_labels,
-                evidence_artifact,
-                evidence_projection,
             )
         else:
-            if task is not None:
-                raise NexusTaskLedgerError(
-                    "a non-task tool acquired a child Task", code="BAD_TOOL_EVENT"
-                )
-            if any((evidence_id, evidence_labels, evidence_artifact, evidence_projection)):
-                raise NexusTaskLedgerError(
-                    "a non-source tool acquired Task evidence", code="BAD_TOOL_EVENT"
-                )
-            self._bind_direct_tool_settlement(
-                record,
-                settled_status,
-                values,
-                labels,
-                projection,
+            raise NexusTaskLedgerError(
+                "delivered Nexus tool has no child role", code="BAD_TOOL_EVENT"
             )
         record.settled = True
         record.status = settled_status
@@ -1406,21 +1277,12 @@ class NexusTaskLedger:
         record.provenance = labels
         record.projection_sha256 = projection
         record.result_sha256 = result_digest
-        record.evidence_task_id = evidence_id
-        record.evidence_provenance = evidence_labels
-        record.evidence_artifact_sha256 = evidence_artifact
-        record.evidence_projection_sha256 = evidence_projection
         record.session_blocked = pending_session_block
         request = self._requests[corr]
         request.tool_settled = True
         if pending_session_block:
             self._pending_session_block_corr = 0
             self._pending_cancel_derived_cleanup_corr = 0
-        if record.tool == "draft_report" and settled_status == AGENT_STATUS_OK:
-            self._current_draft_handle = record.value0
-            self._current_draft_sha256 = record.projection_sha256
-            self._current_draft_bytes = record.draft_content_bytes
-            self._current_draft_corr_id = corr
 
     def assert_turn_complete(self, status: object = "completed") -> NexusTaskLedgerSnapshot:
         """Validate the final turn state, seal both roots, and return a snapshot."""
@@ -1472,16 +1334,15 @@ class NexusTaskLedger:
             )
         self._task_root_sha256 = _sha256(
             {
-                "version": 2,
+                "version": 3,
                 "tasks": self._task_root_items(),
                 "tools": self._tool_root_items(),
             }
         )
         self._artifact_root_sha256 = _sha256(
             {
-                "version": 2,
+                "version": 3,
                 "task_artifacts": self._artifact_root_items(),
-                "direct_artifacts": self._direct_artifact_root_items(),
             }
         )
         self._sealed = True
@@ -1566,10 +1427,6 @@ class NexusTaskLedger:
         self._cancel_corr_id = 0
         self._termination_cause = ""
         self._cancel_corr_advanced = False
-        self._current_draft_handle = 0
-        self._current_draft_sha256 = ""
-        self._current_draft_bytes = 0
-        self._current_draft_corr_id = 0
         self._pending_session_block_corr = 0
         self._pending_cancel_derived_cleanup_corr = 0
         self._sealed = False
@@ -2226,44 +2083,27 @@ class NexusTaskLedger:
             raise NexusTaskLedgerError("Task artifact lacks integrity metadata")
         tool = self._tools.get(task.assigned_corr_id)
         assert tool is not None
-        expected_provenance = TOOL_PROVENANCE.get(tool.tool)
+        expected_provenance = TASK_ARTIFACT_PROVENANCE.get(tool.tool)
         if expected_provenance is None or provenance != expected_provenance:
             raise NexusTaskLedgerError("Task artifact provenance is not tool-canonical")
         handle = int(value["artifact_handle"])
-        if tool.tool == "draft_report":
-            self._validate_report_handle(handle, code="BAD_TASK_EVENT")
-            if (
-                not hmac.compare_digest(digest, tool.draft_content_sha256)
-                or resource != tool.draft_content_bytes
+        if handle != 0:
+            raise NexusTaskLedgerError("transient Task artifact exposed a handle")
+        placeholder = WORKSPACE_REQUEST_PROJECTIONS.get(tool.tool)
+        if placeholder is not None:
+            expected_digest = hashlib.sha256(placeholder.encode("utf-8")).hexdigest()
+            if resource != len(placeholder.encode("utf-8")) or not hmac.compare_digest(
+                digest, expected_digest
             ):
                 raise NexusTaskLedgerError(
-                    "draft artifact does not bind the exact delivered content"
+                    "workspace Task artifact is not the canonical Host-request placeholder"
                 )
-        elif handle != 0:
-            raise NexusTaskLedgerError("transient Task artifact exposed a handle")
         task.artifact_handle = handle
         task.artifact_sha256 = digest
         task.resource_used = resource
         task.provenance = provenance
         self._append_event(task, value)
         self._pending_artifact_task_id = 0
-
-    def _validate_report_handle(self, handle: int, *, code: str) -> None:
-        lifecycle = self._turn_lifecycle
-        if lifecycle is None:
-            raise NexusTaskLedgerError("report handle lacks a lifecycle", code=code)
-        expected_generation = lifecycle[1] & 0xFFFF
-        generation = (handle >> 16) & 0xFFFF
-        slot = handle & 0xFFFF
-        if (
-            handle == 0
-            or expected_generation == 0
-            or generation != expected_generation
-            or slot == 0
-        ):
-            raise NexusTaskLedgerError(
-                "report handle has the wrong lifecycle generation", code=code
-            )
 
     def _append_event(
         self, task: _TaskRecord, value: Mapping[str, object]
@@ -2339,17 +2179,7 @@ class NexusTaskLedger:
         values: tuple[int, int, int],
         provenance: int,
         projection: str,
-        evidence_task_id: int,
-        evidence_provenance: int,
-        evidence_artifact: str,
-        evidence_projection: str,
     ) -> None:
-        evidence_values = (
-            evidence_task_id,
-            evidence_provenance,
-            evidence_artifact,
-            evidence_projection,
-        )
         if task is None:
             if status == AGENT_STATUS_OK:
                 raise NexusTaskLedgerError(
@@ -2358,7 +2188,6 @@ class NexusTaskLedger:
             if (
                 any(values)
                 or projection
-                or any(evidence_values)
                 or provenance != NEXUS_PROVENANCE_FAILURE
             ):
                 raise NexusTaskLedgerError(
@@ -2381,10 +2210,11 @@ class NexusTaskLedger:
                     "tool values do not bind the child Task artifact",
                     code="BAD_TOOL_EVENT",
                 )
-            expected_provenance = TOOL_PROVENANCE[tool.tool]
+            expected_tool_provenance = TOOL_PROVENANCE[tool.tool]
+            expected_task_provenance = TASK_ARTIFACT_PROVENANCE[tool.tool]
             if (
-                provenance != expected_provenance
-                or task.provenance != expected_provenance
+                provenance != expected_tool_provenance
+                or task.provenance != expected_task_provenance
                 or not hmac.compare_digest(
                 projection, task.artifact_sha256
                 )
@@ -2406,75 +2236,12 @@ class NexusTaskLedger:
                 not allowed
                 or any(values)
                 or projection
-                or any(evidence_values)
                 or provenance != NEXUS_PROVENANCE_FAILURE
             ):
                 raise NexusTaskLedgerError(
                     "failed child Task/tool result binding is malformed",
                     code="BAD_TOOL_EVENT",
                 )
-
-        if tool.tool == "source_read" and status == AGENT_STATUS_OK:
-            if (
-                evidence_task_id != task.task_id
-                or evidence_provenance != task.provenance
-                or not evidence_artifact
-                or not evidence_projection
-                or not hmac.compare_digest(evidence_artifact, task.artifact_sha256)
-                or not hmac.compare_digest(evidence_projection, task.artifact_sha256)
-            ):
-                raise NexusTaskLedgerError(
-                    "source evidence does not bind the Task artifact",
-                    code="BAD_TOOL_EVENT",
-                )
-        elif any(evidence_values):
-            raise NexusTaskLedgerError(
-                "non-source Task acquired source evidence", code="BAD_TOOL_EVENT"
-            )
-
-    def _bind_direct_tool_settlement(
-        self,
-        tool: _ToolRecord,
-        status: int,
-        values: tuple[int, int, int],
-        provenance: int,
-        projection: str,
-    ) -> None:
-        if tool.tool != "read_artifact":
-            if status != AGENT_STATUS_OK and (
-                any(values) or projection or provenance != NEXUS_PROVENANCE_FAILURE
-            ):
-                raise NexusTaskLedgerError(
-                    "failed direct tool result is malformed", code="BAD_TOOL_EVENT"
-                )
-            return
-        if status == AGENT_STATUS_OK:
-            expected = (
-                tool.bound_handle,
-                tool.bound_resource_used,
-                AGENT_NEXUS_ARTIFACT_REPORT,
-            )
-            if (
-                values != expected
-                or tool.bound_handle == 0
-                or provenance != TOOL_PROVENANCE["read_artifact"]
-                or not projection
-                or not hmac.compare_digest(
-                    projection, tool.bound_artifact_sha256
-                )
-            ):
-                raise NexusTaskLedgerError(
-                    "read_artifact does not reproduce its bound draft",
-                    code="BAD_TOOL_EVENT",
-                )
-        elif (
-            any(values)
-            or projection
-            or provenance != NEXUS_PROVENANCE_FAILURE
-        ):
-            raise NexusTaskLedgerError(
-                "failed read_artifact result is malformed", code="BAD_TOOL_EVENT"
-            )
 
     def _children_complete(self) -> bool:
         for task in self._tasks.values():
@@ -2581,10 +2348,6 @@ class NexusTaskLedger:
                         "resource_used": task.resource_used,
                         "provenance": task.provenance,
                         "projection_sha256": tool.projection_sha256,
-                        "evidence_task_id": tool.evidence_task_id,
-                        "evidence_provenance": tool.evidence_provenance,
-                        "evidence_artifact_sha256": tool.evidence_artifact_sha256,
-                        "evidence_projection_sha256": tool.evidence_projection_sha256,
                     },
                 )
             )
@@ -2614,46 +2377,7 @@ class NexusTaskLedger:
                         "provenance": tool.provenance,
                         "projection_sha256": tool.projection_sha256,
                         "result_sha256": tool.result_sha256,
-                        "evidence_task_id": tool.evidence_task_id,
-                        "evidence_provenance": tool.evidence_provenance,
-                        "evidence_artifact_sha256": tool.evidence_artifact_sha256,
-                        "evidence_projection_sha256": tool.evidence_projection_sha256,
-                        "bound_handle": tool.bound_handle,
-                        "bound_artifact_sha256": tool.bound_artifact_sha256,
-                        "bound_resource_used": tool.bound_resource_used,
                         "session_blocked": tool.session_blocked,
-                    },
-                )
-            )
-        return items
-
-    def _direct_artifact_root_items(self) -> list[dict[str, object]]:
-        lifecycle = self._turn_lifecycle or (0, 0)
-        items: list[dict[str, object]] = []
-        for corr_id in sorted(self._tools):
-            tool = self._tools[corr_id]
-            if tool.tool != "read_artifact" or tool.status != AGENT_STATUS_OK:
-                continue
-            items.append(
-                _fixed(
-                    _DIRECT_ARTIFACT_ROOT_ITEM_FIELDS,
-                    {
-                        "version": 1,
-                        "turn_id": self._turn_id,
-                        "request_id": self._request_id,
-                        "workflow_lifecycle_id": lifecycle[0],
-                        "workflow_lifecycle_generation": lifecycle[1],
-                        "corr_id": tool.corr_id,
-                        "tool": tool.tool,
-                        "arguments_sha256": tool.arguments_sha256,
-                        "artifact_handle": tool.value0,
-                        "artifact_sha256": tool.projection_sha256,
-                        "resource_used": tool.value1,
-                        "artifact_kind": tool.value2,
-                        "provenance": tool.provenance,
-                        "projection_sha256": tool.projection_sha256,
-                        "result_sha256": tool.result_sha256,
-                        "bound_draft_corr_id": tool.bound_draft_corr_id,
                     },
                 )
             )

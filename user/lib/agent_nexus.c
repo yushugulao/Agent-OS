@@ -28,9 +28,8 @@ static int nexus_identity_registry_ready;
 #define NX_COORD NX_ROLE(COORDINATOR)
 #define NX_SYSTEM NX_ROLE(SYSTEM)
 #define NX_RESEARCH NX_ROLE(RESEARCH)
-#define NX_ANALYST NX_ROLE(ANALYST)
 #define NX_RELAY NX_ROLE(RELAY)
-#define NX_ALL (NX_COORD | NX_SYSTEM | NX_RESEARCH | NX_ANALYST | NX_RELAY)
+#define NX_ALL (NX_COORD | NX_SYSTEM | NX_RESEARCH | NX_RELAY)
 #define NX_SPEC(id, roles, caps, effects, tool_name, schema, use, avoid, result) \
 	{ id, roles, caps, effects, tool_name, use, avoid, schema, result, \
 	  "structured Agent status; BAD_PARAM, DENIED, NOT_FOUND or TIMEOUT" }
@@ -53,12 +52,12 @@ static const struct agent_nexus_tool_spec nexus_tool_specs[AGENT_TOOL_COUNT] = {
 		AGENT_CAP_PROCESS_READ, 0, "get_system_status", "none",
 		"capture a bounded system snapshot", "not a benchmark",
 		"process count, Agent count, tick"),
-	NX_SPEC(AGENT_TOOL_READ_CONTEXT, NX_COORD | NX_SYSTEM | NX_RESEARCH |
-		NX_ANALYST, 0, 0, "read_context", "none",
+	NX_SPEC(AGENT_TOOL_READ_CONTEXT, NX_COORD | NX_SYSTEM | NX_RESEARCH,
+		0, 0, "read_context", "none",
 		"read current Context counters", "not cross-Agent content",
 		"post-state Context counters"),
-	NX_SPEC(AGENT_TOOL_QUERY_FILE, NX_COORD | NX_SYSTEM | NX_RESEARCH |
-		NX_ANALYST, AGENT_CAP_META_READ, 0, "query_file", "path:string",
+	NX_SPEC(AGENT_TOOL_QUERY_FILE, NX_COORD | NX_SYSTEM | NX_RESEARCH,
+		AGENT_CAP_META_READ, 0, "query_file", "path:string",
 		"query one workflow path or a structured metadata selector",
 		"not for file contents or unrestricted filesystem traversal",
 		"path: inode type/inum/size; selector: hits/scanned/index flags and first match"),
@@ -72,11 +71,10 @@ static const struct agent_nexus_tool_spec nexus_tool_specs[AGENT_TOOL_COUNT] = {
 	NX_SPEC(AGENT_TOOL_FILE_META_INIT, NX_COORD, AGENT_CAP_META_WRITE,
 		AGENT_SIDE_EFFECT_METADATA, "file_meta_init", "none",
 		"initialize metadata once", "not a worker operation", "status"),
-	NX_SPEC(AGENT_TOOL_READ_FILE_SUMMARY, NX_COORD | NX_RESEARCH | NX_ANALYST,
+	NX_SPEC(AGENT_TOOL_READ_FILE_SUMMARY, NX_COORD | NX_RESEARCH,
 		AGENT_CAP_CONTENT_READ, 0, "read_file_summary", "selector:string",
 		"read an indexed summary", "not for secrets", "bounded summary"),
-	NX_SPEC(AGENT_TOOL_DEPENDENCY_QUERY, NX_COORD | NX_SYSTEM | NX_RESEARCH |
-		NX_ANALYST,
+	NX_SPEC(AGENT_TOOL_DEPENDENCY_QUERY, NX_COORD | NX_SYSTEM | NX_RESEARCH,
 		AGENT_CAP_META_READ, 0, "dependency_query", "label:string",
 		"inspect registered dependencies", "not for mutation",
 		"dependency counters"),
@@ -89,10 +87,11 @@ static const struct agent_nexus_tool_spec nexus_tool_specs[AGENT_TOOL_COUNT] = {
 		AGENT_SIDE_EFFECT_METADATA, "rerun_stage",
 		"role?:uint64,stage:string", "legacy controlled state update",
 		"not a general shell", "updated state"),
-	NX_SPEC(AGENT_TOOL_WRITE_REPORT, NX_COORD | NX_ANALYST,
+	NX_SPEC(AGENT_TOOL_WRITE_REPORT, 0,
 		AGENT_CAP_ARTIFACT_WRITE, AGENT_SIDE_EFFECT_ARTIFACT,
 		"write_report", "role?:uint64,payload:string",
-		"legacy scoped state update", "not artifact byte storage", "state"),
+		"legacy platform compatibility entry",
+		"not exposed to any Nexus product role", "legacy state"),
 	NX_SPEC(AGENT_TOOL_AGENT_WATCH, NX_ALL, AGENT_CAP_WATCH,
 		AGENT_SIDE_EFFECT_WATCH, "agent_watch",
 		"event_type:uint64,filter:string", "register an event interest",
@@ -105,7 +104,7 @@ static const struct agent_nexus_tool_spec nexus_tool_specs[AGENT_TOOL_COUNT] = {
 	NX_SPEC(AGENT_TOOL_CONTEXT_PUSH, NX_ALL, 0, 0, "context_push",
 		"record:string", "append verified local context",
 		"syscall-only; never copy hidden reasoning", "Context sequence"),
-	NX_SPEC(AGENT_TOOL_READ_FILE_DIGEST, NX_COORD | NX_RESEARCH | NX_ANALYST,
+	NX_SPEC(AGENT_TOOL_READ_FILE_DIGEST, NX_COORD | NX_RESEARCH,
 		AGENT_CAP_CONTENT_READ, 0, "read_file_digest", "selector:string",
 		"verify bounded file content", "not for unrestricted traversal",
 		"preview, full size, hashed byte count and non-cryptographic u64 digest"),
@@ -113,10 +112,11 @@ static const struct agent_nexus_tool_spec nexus_tool_specs[AGENT_TOOL_COUNT] = {
 		AGENT_SIDE_EFFECT_METADATA, "action_commit",
 		"role?:uint64,selector:string", "commit an approved metadata action",
 		"not an internal read", "commit receipt"),
-	NX_SPEC(AGENT_TOOL_ARTIFACT_UPDATE, NX_COORD | NX_ANALYST,
+	NX_SPEC(AGENT_TOOL_ARTIFACT_UPDATE, NX_COORD,
 		AGENT_CAP_ARTIFACT_WRITE, AGENT_SIDE_EFFECT_ARTIFACT,
 		"artifact_update", "role?:uint64,selector:string",
-		"update scoped artifact metadata", "does not write report bytes", "state"),
+		"update scoped artifact metadata", "does not write artifact bytes",
+		"state"),
 	NX_SPEC(AGENT_TOOL_LLM_REQUEST, NX_COORD, AGENT_CAP_MESSAGE_SEND,
 		AGENT_SIDE_EFFECT_IPC, "llm_request",
 		"target_pid:uint64,prompt_summary:string", "route model work to relay",
@@ -137,7 +137,6 @@ _Static_assert(sizeof(nexus_tool_specs) / sizeof(nexus_tool_specs[0]) ==
 #undef NX_SPEC
 #undef NX_ALL
 #undef NX_RELAY
-#undef NX_ANALYST
 #undef NX_RESEARCH
 #undef NX_SYSTEM
 #undef NX_COORD
@@ -484,12 +483,11 @@ static int nexus_base64_decode(const char *input, unsigned int length,
 static int nexus_task_type_valid(int task_type)
 {
 	switch (task_type) {
-	case AGENT_NEXUS_TASK_INSPECT_RUNTIME:
+	case AGENT_NEXUS_TASK_INSPECT_SYSTEM:
 	case AGENT_NEXUS_TASK_INSPECT_PROCESSES:
 	case AGENT_NEXUS_TASK_INSPECT_CONTEXT:
-	case AGENT_NEXUS_TASK_SOURCE_SEARCH:
-	case AGENT_NEXUS_TASK_SOURCE_READ:
-	case AGENT_NEXUS_TASK_DRAFT_REPORT:
+	case AGENT_NEXUS_TASK_SEARCH_FILES:
+	case AGENT_NEXUS_TASK_READ_FILE:
 	case AGENT_NEXUS_TASK_USER_TURN:
 	case AGENT_NEXUS_TASK_MODEL_REQUEST:
 	case AGENT_NEXUS_TASK_APPROVAL:
@@ -503,7 +501,7 @@ static int nexus_task_type_valid(int task_type)
 
 static int nexus_system_task_type(int task_type)
 {
-	return task_type == AGENT_NEXUS_TASK_INSPECT_RUNTIME ||
+	return task_type == AGENT_NEXUS_TASK_INSPECT_SYSTEM ||
 	       task_type == AGENT_NEXUS_TASK_INSPECT_PROCESSES ||
 	       task_type == AGENT_NEXUS_TASK_INSPECT_CONTEXT;
 }
@@ -1046,8 +1044,6 @@ int agent_nexus_product_kernel_role(unsigned int product_role)
 		return AGENT_ROLE_SENTINEL;
 	case AGENT_NEXUS_ROLE_RESEARCH:
 		return AGENT_ROLE_INVESTIGATOR;
-	case AGENT_NEXUS_ROLE_ANALYST:
-		return AGENT_ROLE_ARTIFACT;
 	default:
 		return 0;
 	}
@@ -1065,10 +1061,6 @@ unsigned long long agent_nexus_product_capabilities(
 		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
 		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
 		       AGENT_CAP_AUDIT_WRITE;
-	case AGENT_NEXUS_ROLE_ANALYST:
-		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
-		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
-		       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE;
 	case AGENT_NEXUS_ROLE_COORDINATOR:
 	case AGENT_NEXUS_ROLE_RELAY:
 		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
@@ -1086,10 +1078,15 @@ unsigned long long agent_nexus_product_capabilities(
 unsigned long long agent_nexus_product_permission(
 	unsigned int product_role)
 {
-	if (product_role < AGENT_NEXUS_ROLE_COORDINATOR ||
-	    product_role > AGENT_NEXUS_ROLE_RELAY)
+	switch (product_role) {
+	case AGENT_NEXUS_ROLE_COORDINATOR:
+	case AGENT_NEXUS_ROLE_SYSTEM:
+	case AGENT_NEXUS_ROLE_RESEARCH:
+	case AGENT_NEXUS_ROLE_RELAY:
+		return 1ULL << (product_role - 1U);
+	default:
 		return 0;
-	return 1ULL << (product_role - 1U);
+	}
 }
 
 unsigned int agent_nexus_artifact_handle_make(
@@ -1159,11 +1156,14 @@ static int nexus_read_all(int fd, void *data, unsigned int length)
 static int nexus_actor_shape_valid(
 	const struct agent_nexus_artifact_actor *actor)
 {
-	return actor != 0 && actor->control_id != 0 && actor->pid != 0 &&
-	       actor->agent_id != 0 &&
-	       actor->kernel_role ==
-		       (unsigned int)agent_nexus_product_kernel_role(
-			       actor->product_role);
+	int kernel_role;
+
+	if (actor == 0 || actor->control_id == 0 || actor->pid == 0 ||
+	    actor->agent_id == 0)
+		return 0;
+	kernel_role = agent_nexus_product_kernel_role(actor->product_role);
+	return kernel_role != 0 &&
+	       actor->kernel_role == (unsigned int)kernel_role;
 }
 
 static int nexus_actor_equal(const struct agent_nexus_artifact_actor *left,
@@ -1302,7 +1302,8 @@ int agent_nexus_artifact_actor_current(
 static int nexus_artifact_kind_valid(unsigned int kind)
 {
 	return kind >= AGENT_NEXUS_ARTIFACT_TOOL_INPUT &&
-	       kind <= AGENT_NEXUS_ARTIFACT_APPROVAL;
+	       kind <= AGENT_NEXUS_ARTIFACT_APPROVAL &&
+	       kind != AGENT_NEXUS_ARTIFACT_RESERVED_7;
 }
 
 static unsigned long long nexus_artifact_required_provenance(
@@ -1337,9 +1338,6 @@ static unsigned long long nexus_artifact_required_provenance(
 		return AGENT_PROVENANCE_ALL + 1ULL;
 	}
 	if ((manifest->flags & AGENT_NEXUS_ARTIFACT_F_BROKERED) != 0)
-		required |= AGENT_PROVENANCE_AGENT_DERIVED |
-			    AGENT_PROVENANCE_CROSS_AGENT_DATA;
-	if (manifest->kind == AGENT_NEXUS_ARTIFACT_REPORT)
 		required |= AGENT_PROVENANCE_AGENT_DERIVED |
 			    AGENT_PROVENANCE_CROSS_AGENT_DATA;
 	return required;
@@ -1406,8 +1404,6 @@ static int nexus_owned_manifest_valid(
 	    !nexus_actor_equal(&manifest->owner, &manifest->materializer) ||
 	    !nexus_manifest_current_materializer(manifest))
 		return 0;
-	if (manifest->materializer.product_role == AGENT_NEXUS_ROLE_ANALYST)
-		return manifest->kind == AGENT_NEXUS_ARTIFACT_REPORT;
 	if (manifest->materializer.product_role == AGENT_NEXUS_ROLE_COORDINATOR)
 		return manifest->kind == AGENT_NEXUS_ARTIFACT_TOOL_INPUT ||
 		       manifest->kind == AGENT_NEXUS_ARTIFACT_MODEL_REQUEST ||
@@ -1459,8 +1455,6 @@ static int nexus_manifest_relationship_valid(
 	    !nexus_actor_equal(&manifest->producer, &manifest->owner) ||
 	    !nexus_actor_equal(&manifest->owner, &manifest->materializer))
 		return 0;
-	if (manifest->materializer.product_role == AGENT_NEXUS_ROLE_ANALYST)
-		return manifest->kind == AGENT_NEXUS_ARTIFACT_REPORT;
 	if (manifest->materializer.product_role == AGENT_NEXUS_ROLE_COORDINATOR)
 		return manifest->kind == AGENT_NEXUS_ARTIFACT_TOOL_INPUT ||
 		       manifest->kind == AGENT_NEXUS_ARTIFACT_MODEL_REQUEST ||
@@ -1646,8 +1640,6 @@ unsigned long long agent_nexus_role_permission(int role)
 		return AGENT_NEXUS_ARTIFACT_READ_SYSTEM;
 	if (role == AGENT_ROLE_INVESTIGATOR)
 		return AGENT_NEXUS_ARTIFACT_READ_RESEARCH;
-	if (role == AGENT_ROLE_ARTIFACT)
-		return AGENT_NEXUS_ARTIFACT_READ_ANALYST;
 	return 0;
 }
 
@@ -1742,8 +1734,6 @@ int agent_nexus_artifact_read(
 		product_role = AGENT_NEXUS_ROLE_SYSTEM;
 	else if (reader_role == AGENT_ROLE_INVESTIGATOR)
 		product_role = AGENT_NEXUS_ROLE_RESEARCH;
-	else if (reader_role == AGENT_ROLE_ARTIFACT)
-		product_role = AGENT_NEXUS_ROLE_ANALYST;
 	else if (reader_role == AGENT_ROLE_ORCHESTRATOR)
 		product_role = AGENT_NEXUS_ROLE_COORDINATOR;
 	else

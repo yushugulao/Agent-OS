@@ -86,13 +86,13 @@ static inline int key_equal(struct workflow_lifecycle_key a,
 | 对象 | 保存的主要状态 | 保留时间 |
 | --- | --- | --- |
 | `struct proc` | Agent 编号、角色、能力位、控制关系、文件访问范围、Context 页、资源账户和事件队列 | 随进程创建、`exec` 和 `exit` 变化 |
-| `workflow_lifecycle_record` | 文件访问范围、generation、控制进程、成员数、操作/退出计数和 fence 门控 | 从工作流根进程创建持续到最后成员与后台工作结束 |
+| `workflow_lifecycle_record` | 文件访问范围、generation、控制进程、成员数、操作/退出计数和 fence 阻断状态 | 从工作流根进程创建持续到最后成员与后台工作结束 |
 | `agent_context_record` | 序号、请求号、起因、调用跨度、分支、工具、状态、哈希和 provenance label | 每个 Agent 保留最近 128 条 |
 | Metadata Catalog 条目 | inode 身份、incarnation、业务字段、索引项和 catalog generation | 随 VFS 更新，在文件访问范围或生命周期回收时删除 |
 | `workflow_scheduler_entity` | `vruntime`、虚拟截止时间、CPU 服务量、可运行线程数和唤醒指标 | 随工作流建立和释放 |
-| Evidence Ring 段 | 普通/关键槽、缺口、前段根哈希和封存根哈希 | 按工作流保留，由 Workflow Fence 封存 |
+| 工作流记录环区段 | 普通/关键槽、缺口、前段根摘要和封存根摘要 | 按工作流保留，由 Workflow Fence 封存 |
 
-生命周期记录分别统计普通操作和退出操作。工具、`fork` 和元数据更新开始时增加 `active_operations`，进程退出和异步清理则增加 `departing_operations`。生成 Workflow Fence 前，内核关闭两类门控，并等待已有操作完成。最后一个成员离开后，记录进入 `closing`/`retiring`。各模块用同一个生命周期键释放对象，全部结束后槽位才能再次使用。
+生命周期记录分别统计普通操作和退出操作。工具、`fork` 和元数据更新开始时增加 `active_operations`，进程退出和异步清理则增加 `departing_operations`。生成 Workflow Fence 前，内核暂停两类新操作，并等待已有操作完成。最后一个成员离开后，记录进入 `closing`/`retiring`。各模块用同一个生命周期键释放对象，全部结束后槽位才能再次使用。
 
 ## 五、主要功能模块
 
@@ -114,13 +114,13 @@ Metadata Catalog 只收录应用显式登记的文件，并为 `status`、`stage
 
 这套机制让工作流能够按业务状态查找文件，并在文件进入或离开结果集合时收到通知。Metadata Catalog、索引、事务和 Typed Watch 的实现见 [Live Query](modules/live-query.md)。
 
-Nexus 发布工作流结果时，`agent_file_publish()` 先把 header 与 payload 复制进内核快照，再写入未命名 inode。第一阶段 checkpoint 固定数据与 inode，VFS 随后只做一次正式目录接入，再用 attach-only checkpoint 固定目录项；已有同名文件时返回 `DUPLICATE`，不执行覆盖。目录接入结果不确定时返回 `INDETERMINATE`，Guest 只在正式路径的 header、payload 和 EOF 与本次请求逐字节相同时收敛为幂等成功。
+工作流应用发布结果时，`agent_file_publish()` 先把 header 与 payload 复制进内核快照，再写入未命名 inode。第一阶段 checkpoint 固定数据与 inode，VFS 随后只做一次正式目录接入，再用 attach-only checkpoint 固定目录项；已有同名文件时返回 `DUPLICATE`，不执行覆盖。目录接入结果不确定时返回 `INDETERMINATE`，Guest 只在正式路径的 header、payload 和 EOF 与本次请求逐字节相同时收敛为幂等成功。
 
 ### 5.4 Agent Loop 内核运行机制
 
 Agent Loop 的决策策略仍在 Guest 中，内核承担需要跨轮保存和统一调度的部分。文件变化、跨 Agent 消息、心跳、截止时间和模型完成通知都进入事件队列，并由 `agent_wait()` 取出。内核在同一次关中断期间复查队列并登记等待者，等待键使用线程 `identity_generation`。事件接力标记每次只唤醒一个实际接收者。队列总容量为 16，其中一部分槽位留给内核事件和不同来源的事件；队列为空时，线程在等待队列中休眠。
 
-Workflow Credit Domain 以 `free`、`pending`、`used` 三种状态记录资源。外层工作流 EEVDF 使用固定等权调度对象，延迟等级与实际截止时间决定 1、2、4 或 8 tick 的 CPU 时间申请；当前可运行的工作流中，虚拟截止时间最早者先执行。工具与 Context 的 terminal state 写入 Evidence Ring，控制进程可通过 Workflow Fence 取得 metadata generation、精确资源快照和 Evidence Ring 根哈希。完整流程见 [Workflow Runtime](modules/workflow-runtime.md)。
+Workflow Credit Domain 以 `free`、`pending`、`used` 三种状态记录资源。外层工作流 EEVDF 使用固定等权调度对象，延迟等级与实际截止时间决定 1、2、4 或 8 tick 的 CPU 时间申请；当前可运行的工作流中，虚拟截止时间最早者先执行。工具与 Context 的 terminal state 写入工作流记录环，控制进程可通过 Workflow Fence 取得 metadata generation、精确资源快照和记录环根摘要。完整流程见 [Workflow Runtime](modules/workflow-runtime.md)。
 
 ## 六、一次工具请求如何执行
 
@@ -143,7 +143,7 @@ Guest 提交请求
   -> 通过 copyout 将响应写回 Guest
 ```
 
-操作尚未生效便失败时，状态码直接说明原因，此前 reserve 的资源额度和 Evidence Ring 槽位会退还或丢弃。操作生效后，Context terminal record 与 Evidence Ring 票号在同一次 commit 中发布，避免出现“文件已改、记录未写”的中间状态。
+操作尚未生效便失败时，状态码直接说明原因，此前 reserve 的资源额度和工作流记录槽位会退还或丢弃。操作生效后，Context terminal record 与工作流记录票号在同一次 commit 中发布，避免出现“文件已改、记录未写”的中间状态。
 
 一条完整工作流按以下顺序运行：
 
@@ -159,7 +159,7 @@ Guest 提交请求
 
 内核 ABI 只传递结构化状态和系统操作，具体 Provider 协议由 Host 处理。`agentlive_ucore` 通过串口帧发送模型请求、接收工具调用，并把 terminal state 写入 Context。[`host_tools/agentos_relayd.py`](../host_tools/agentos_relayd.py) 负责 TLS、Provider JSON 和本地运行目录。更换模型 Provider 时无需修改内核 ABI。
 
-`agentnexus_ucore` 以任意非空用户输入建立每轮 root Task。模型自行决定是否使用工具，以及从 `source_search`、`source_read`、`inspect_runtime`、`draft_report` 和 `read_artifact` 中选择哪个工具、调用顺序和次数。需要 specialist 执行的工具才会通过内核 `MESSAGE` 和 `N1` 协议建立子 Task；Coordinator 重放计算 worker 结果并核对 digest 后才物化 brokered artifact。Host Task ledger 核对 root/child DAG、内核身份、状态迁移和 artifact/evidence 绑定；Host source attestation 还会将 `source_read` 的 citation 与 QEMU 启动前已验证的 `build_source_snapshot` 对照。`draft_report` 与 `read_artifact` 只进行本轮模型文本的保存和完整性回读，不执行外部发布。Guest 主程序见 [`user/src/agentnexus_ucore.c`](../user/src/agentnexus_ucore.c)，运行流程与命令见 [Workflow Runtime](modules/workflow-runtime.md)和[运行指南](usage.md)。
+`agentnexus_ucore` 以任意非空用户输入建立每轮 root Task，并把模型放在一组通用的 Harness 规则与工具中运行。公开工具只有三个：`search_files` 和 `read_file` 只读访问当前 Host 工作区，`inspect_system` 查看当前 Guest 的系统状态。Coordinator 通过内核 `MESSAGE` 和 `N1` 协议把文件请求交给 Research 子 Task，把系统请求交给 System 子 Task；Host workspace broker 在限定根目录内完成实际文件搜索或分段读取，再把结果提供给模型的下一次决策。Task ledger 记录 root/child Task 的关系、执行者身份和状态迁移。首版不提供编辑文件或执行 Shell 的工具，Research 与 System 也是使用内核任务和消息协议的工作进程，而不是独立子模型。Guest 主程序见 [`user/src/agentnexus_ucore.c`](../user/src/agentnexus_ucore.c)，Host 工作区访问见 [`host_tools/agentos_workspace.py`](../host_tools/agentos_workspace.py)，运行流程与命令见 [Workflow Runtime](modules/workflow-runtime.md)和[运行指南](usage.md)。
 
 ## 八、源码位置与检查方法
 

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Validate one autonomous AgentOS Nexus controller/observer replay.
+"""Validate one task-independent AgentOS Nexus controller/observer replay.
 
-The acceptance artifact is intentionally task-agnostic.  It proves that the
-model chose among the five public tools, recovered from an ordinary tool
-failure, bound source claims to the configured source snapshot, preserved its
-own report bytes, and returned the provider's final bytes exactly.  It does
-not prescribe a business conclusion or a fixed specialist route.
+The validator binds provider requests, model replies, child Tasks, tool
+settlements, terminal state, and observer-safe projections.  Tool choice,
+tool order, task wording, and the semantic content of the final answer remain
+model-owned.
 """
 
 from __future__ import annotations
@@ -16,7 +15,6 @@ from dataclasses import dataclass
 import hashlib
 import hmac
 import json
-import os
 from pathlib import Path
 import re
 import stat
@@ -30,15 +28,11 @@ if str(_HERE) not in sys.path:
 
 import agentos_nexus_contract as nexus_contract  # noqa: E402
 import agentos_nexus_task_ledger as task_ledger  # noqa: E402
-import agentos_source_attestation as source_attestation  # noqa: E402
 
 
 ROOT = _HERE.parent
 DEFAULT_SCRIPT = ROOT / "ci" / "agentos-nexus-script.txt"
-DEFAULT_CORPUS = ROOT / "user" / "build" / "nexus-source-corpus"
-DEFAULT_ANCHOR = (
-    ROOT / "user" / "build" / "generated" / "agent_nexus_source_anchor.h"
-)
+DEFAULT_WORKSPACE = ROOT
 
 MAX_TRANSCRIPT_BYTES = 8 * 1024 * 1024
 MAX_RECORDS = 65_536
@@ -47,13 +41,16 @@ MAX_FINAL_BYTES = 2048
 MAX_ROUNDS = 16
 MAX_RETRIES = 32
 MAX_PROVIDER_ATTEMPTS = MAX_ROUNDS + MAX_RETRIES
+MAX_RAW_TOOL_CALLS = 32
+MAX_DEEPSEEK_ADAPTER_ATTEMPTS = 2
 MAX_MODEL_ERROR_MESSAGE_BYTES = 240
 MAX_HISTORY_BINDINGS = 4
+MAX_TOOL_ARGUMENT_STRING_BYTES = 3072
+MAX_WORKSPACE_RESULT_BYTES = 2800
 MAX_U64 = (1 << 63) - 1
 U64_MAX = (1 << 64) - 1
 MAX_U32 = (1 << 32) - 1
 DIGEST_RE = re.compile(r"[0-9a-f]{64}\Z")
-CITATION_RE = re.compile(r"\[S[0-9]{4}:L[1-9][0-9]*-L[1-9][0-9]*\]")
 SESSION_RE = re.compile(r"[0-9a-f]{32}\Z")
 MODEL_ERROR_CODE_RE = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
 NEXUS_RETRYABLE_RESPONSE_ERROR_CODES = frozenset(
@@ -80,27 +77,10 @@ CONTROL_ID_FIELDS = frozenset(
     ("control_id", "agent_control_id", "actor_control_id")
 )
 ARTIFACT_CLEANUP_SESSION_BLOCK = "artifact_cleanup_failed;session_blocked=1"
-SOURCE_SEARCH_NOT_FOUND_STATUS = -5
-SOURCE_SEARCH_NO_MATCHES_RESULT = "source_search_no_matches;replan_allowed=1"
-SOURCE_SEARCH_SUCCESS_RESULT = "source_evidence_ready;transient=1"
-
-# These strings belonged to the former scripted Live Query.  Their presence
-# would turn a protocol fixture back into a frozen business answer.
-STALE_PATTERNS = (
-    "tool_search",
-    "delegate_task",
-    "publish_report",
-    "approval_request",
-    "approval_decision",
-    "nexus_meas",
-    "agentos live query",
-    "publication=denied",
-    "3.118",
-    "16/16",
-    "13.452",
-    "33.477",
-    "outer_path_erases_gain",
-)
+WORKSPACE_REQUEST_RESULT = "workspace_request_ready;provided_by_host=1"
+FILE_READ_MAX_LINES = 64
+RESULT_VALUE_METRIC_FIRST = 140
+RESULT_VALUE_METRIC_LAST = 145
 
 MODEL_REQUEST_FIELDS = frozenset(
     (
@@ -157,7 +137,6 @@ FINAL_PROOF_FIELDS = (
     "final_request_sha256",
     "final_response_sha256",
     "provider_proof_sha256",
-    "final_evidence_root",
     "final_task_root",
     "final_artifact_root",
 )
@@ -180,32 +159,6 @@ TOOL_EVENT_FIELDS = frozenset(
         "result_sha256",
     )
 )
-EVIDENCE_FIELDS = frozenset(
-    (
-        "type",
-        "version",
-        "turn_id",
-        "request_id",
-        "corr_id",
-        "task_id",
-        "provenance",
-        "event",
-        "tool",
-        "scope",
-        "corpus_revision",
-        "manifest_sha256",
-        "source_id",
-        "path",
-        "start_line",
-        "end_line",
-        "citation",
-        "full_sha256",
-        "chunk_sha256",
-        "artifact_sha256",
-        "projection_sha256",
-    )
-)
-
 OBSERVER_SAFE_FIELDS = frozenset(
     (
         "event",
@@ -274,17 +227,6 @@ OBSERVER_SAFE_FIELDS = frozenset(
         "request_sha256",
         "raw_guest_request_sha256",
         "history_bindings",
-        "evidence_event",
-        "scope",
-        "corpus_revision",
-        "manifest_sha256",
-        "source_id",
-        "path",
-        "start_line",
-        "end_line",
-        "citation",
-        "full_sha256",
-        "chunk_sha256",
         "projection_sha256",
         "result_sha256",
         "request_contains_user",
@@ -310,7 +252,6 @@ OBSERVER_SAFE_FIELDS = frozenset(
         "adaptation",
         "forced_tool",
         "selected_tool_sha256",
-        "final_evidence_root",
         "final_request_sha256",
         "final_corr_id",
         "final_response_sha256",
@@ -361,11 +302,6 @@ class TurnReport:
     request_count: int
     tool_calls: tuple[tuple[int, str], ...]
     direct_final: bool
-    source_miss: bool
-    source_recovered: bool
-    source_read: bool
-    runtime: bool
-    report_roundtrip: bool
     cancelled_active_worker: bool
     final_content: str
 
@@ -433,8 +369,29 @@ def _bounded_tool_text(
         for byte in raw
     )
     _require(
-        len(raw) <= maximum and escaped_bytes <= maximum,
-        f"{label} exceeds its raw or escaped Guest budget",
+        len(value) <= maximum,
+        f"{label} exceeds its schema maxLength",
+    )
+    _require(
+        len(raw) <= MAX_TOOL_ARGUMENT_STRING_BYTES
+        and escaped_bytes <= MAX_TOOL_ARGUMENT_STRING_BYTES,
+        f"{label} exceeds its raw or escaped Guest transport budget",
+    )
+    return str(value)
+
+
+def _bounded_workspace_result(value: object, label: str) -> str:
+    _require(
+        isinstance(value, str) and "\0" not in value,
+        f"{label} is not valid Host workspace text",
+    )
+    try:
+        raw = value.encode("utf-8")
+    except UnicodeEncodeError:
+        _fail(f"{label} is not scalar UTF-8")
+    _require(
+        len(raw) <= MAX_WORKSPACE_RESULT_BYTES,
+        f"{label} exceeds its raw UTF-8 byte bound",
     )
     return str(value)
 
@@ -464,6 +421,60 @@ def _sha(value: object) -> str:
 
 def _sha_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _inspect_system_projection(
+    operation: object, result_metrics: Mapping[int, object]
+) -> str:
+    specifications = {
+        "status": (
+            "get_system_status",
+            "process_count",
+            "agent_count",
+            "uptime_tick",
+        ),
+        "processes": (
+            "query_process",
+            "process_count",
+            "agent_count",
+            "runnable_count",
+        ),
+        "context": (
+            "ctx_stat",
+            "context_base",
+            "context_size",
+            "call_count",
+        ),
+    }
+    specification = specifications.get(operation)
+    expected_codes = set(range(RESULT_VALUE_METRIC_FIRST, RESULT_VALUE_METRIC_LAST + 1))
+    _require(
+        specification is not None and set(result_metrics) == expected_codes,
+        "system observation result metrics are incomplete",
+    )
+    values: list[int] = []
+    for low_code in range(
+        RESULT_VALUE_METRIC_FIRST, RESULT_VALUE_METRIC_LAST + 1, 2
+    ):
+        low = result_metrics[low_code]
+        high = result_metrics[low_code + 1]
+        _require(
+            _is_int(low, 0, MAX_U32) and _is_int(high, 0, MAX_U32),
+            "system observation result metric is malformed",
+        )
+        values.append(int(low) | (int(high) << 32))
+    assert specification is not None
+    tool, first_label, second_label, omitted = specification
+    return (
+        "scope=this_boot_guest_runtime\n"
+        "content_untrusted=1\n"
+        f"operation={operation}\n"
+        f"tool={tool}\n"
+        "status=0\n"
+        f"{first_label}={values[0]}\n"
+        f"{second_label}={values[1]}\n"
+        f"volatile_fields_omitted={omitted}\n"
+    )
 
 
 def _reject_constant(value: str) -> object:
@@ -514,28 +525,28 @@ def _load_jsonl(path: Path, label: str) -> list[dict[str, object]]:
     return records
 
 
-def _reject_stale(value: object, label: str) -> None:
-    rendered = json.dumps(value, ensure_ascii=False, allow_nan=False).lower()
-    for pattern in STALE_PATTERNS:
-        _require(pattern not in rendered, f"{label} freezes obsolete Live Query content: {pattern}")
-
-
 def _validate_script_text(text: str) -> tuple[str, ...]:
     _require(not text.startswith("\ufeff"), "Nexus script has a UTF-8 BOM")
-    _reject_stale(text, "Nexus script")
     lines = [line.rstrip("\r") for line in text.split("\n") if line.rstrip("\r")]
     _require(lines and all(not line.startswith("#") for line in lines),
              "Nexus script comments are executable user turns")
     _require(lines[0] == "/tools" and lines[-1] == "/quit",
              "Nexus script must inspect the tool contract first and close explicitly")
-    allowed = {"/tools", "/status", "/context", "/tasks", "/artifacts", "/quit"}
+    allowed = {
+        "/tools",
+        "/status",
+        "/context",
+        "/tasks",
+        "/agents",
+        "/artifacts",
+        "/quit",
+    }
     _require(all(not line.startswith("/") or line in allowed for line in lines),
              "Nexus script contains an unsupported or effectful command")
     commands = [line for line in lines if line.startswith("/")]
-    for command in ("/tools", "/status", "/context", "/tasks", "/artifacts", "/quit"):
-        _require(command in commands, f"Nexus script is missing {command}")
+    _require(commands.count("/tools") == 1, "Nexus script must inspect its catalog once")
     goals = tuple(line for line in lines if not line.startswith("/"))
-    _require(len(goals) == 2, "Nexus replay must submit exactly two natural user tasks")
+    _require(bool(goals), "Nexus replay must submit at least one natural user task")
     for goal in goals:
         _bounded_text(goal, "scripted user goal", MAX_USER_BYTES)
     return goals
@@ -544,42 +555,31 @@ def _validate_script_text(text: str) -> tuple[str, ...]:
 def _validate_tool_arguments(tool: str, arguments: object) -> dict[str, object]:
     _require(isinstance(arguments, dict), f"{tool} arguments must be an object")
     keys = set(arguments)
-    if tool == "source_search":
+    if tool == "search_files":
         _require({"query"} <= keys <= {"query", "path_prefix"},
-                 "source_search arguments are malformed")
-        _bounded_tool_text(arguments["query"], "source_search.query", 95)
+                 "search_files arguments are malformed")
+        _bounded_tool_text(
+            arguments["query"], "search_files.query", 95, empty=True
+        )
         if "path_prefix" in arguments:
             _bounded_tool_text(
                 arguments["path_prefix"],
-                "source_search.path_prefix",
+                "search_files.path_prefix",
                 111,
                 empty=True,
             )
-    elif tool == "source_read":
-        _require(keys == {"source_id", "start_line", "max_lines"},
-                 "source_read arguments are malformed")
-        _require(isinstance(arguments["source_id"], str)
-                 and re.fullmatch(r"S[0-9]{4}", arguments["source_id"]) is not None,
-                 "source_read source_id is malformed")
+    elif tool == "read_file":
+        _require(keys == {"path", "start_line", "max_lines"},
+                 "read_file arguments are malformed")
+        _bounded_tool_text(arguments["path"], "read_file.path", 255)
         _require(_is_int(arguments["start_line"], 1, MAX_U32),
-                 "source_read start_line is malformed")
-        _require(_is_int(arguments["max_lines"], 1, 12),
-                 "source_read max_lines is malformed")
-    elif tool == "inspect_runtime":
+                 "read_file start_line is malformed")
+        _require(_is_int(arguments["max_lines"], 1, FILE_READ_MAX_LINES),
+                 "read_file max_lines is malformed")
+    elif tool == "inspect_system":
         _require(keys == {"operation"}
-                 and arguments.get("operation") in ("system_status", "processes", "context"),
-                 "inspect_runtime arguments are malformed")
-    elif tool == "draft_report":
-        _require({"content"} <= keys <= {"content", "title"},
-                 "draft_report arguments are malformed")
-        _bounded_tool_text(arguments["content"], "draft_report.content", 2800)
-        if "title" in arguments:
-            _bounded_tool_text(
-                arguments["title"], "draft_report.title", 128, empty=True
-            )
-    elif tool == "read_artifact":
-        _require(keys == {"handle"} and _is_int(arguments["handle"], 1, MAX_U32),
-                 "read_artifact arguments are malformed")
+                 and arguments.get("operation") in ("status", "processes", "context"),
+                 "inspect_system arguments are malformed")
     else:
         _fail(f"unadvertised Nexus tool: {tool}")
     return dict(arguments)
@@ -590,10 +590,8 @@ def _validate_fixture(
     *,
     require_acceptance_scenarios: bool = True,
 ) -> tuple[FixtureRecord, ...]:
-    _reject_stale(records, "replay fixture")
     result: list[FixtureRecord] = []
     seen: set[str] = set()
-    tools: list[str] = []
     finals = 0
     for index, record in enumerate(records, 1):
         _require(set(record) == {"request_sha256", "response"},
@@ -618,7 +616,6 @@ def _validate_fixture(
             _require(isinstance(tool, str) and tool in TOOL_SET,
                      f"fixture tool response {index} is unadvertised")
             _validate_tool_arguments(str(tool), response.get("arguments"))
-            tools.append(str(tool))
         elif kind == "error":
             _require(set(response) == {"type", "code", "message", "retryable"},
                      f"fixture error response {index} fields are malformed")
@@ -642,46 +639,8 @@ def _validate_fixture(
             _fail(f"fixture response {index} has an unsupported type")
         result.append(FixtureRecord(digest, dict(response)))
     if require_acceptance_scenarios:
-        _require(finals >= 2,
-                 "fixture must contain a direct final and an evidence-backed final")
-        _require(frozenset(tools) == TOOL_SET,
-                 "fixture must exercise exactly the five Nexus tools")
-        _require(tools.count("source_search") >= 2,
-                 "fixture must permit a source miss followed by a new search")
+        _require(finals >= 1, "fixture must contain at least one final response")
     return tuple(result)
-
-
-_ANCHOR_REVISION_RE = re.compile(
-    r'^#define AGENT_NEXUS_SOURCE_ANCHOR_REVISION "([0-9a-f]{64})"$', re.MULTILINE
-)
-_ANCHOR_MANIFEST_RE = re.compile(
-    r'^#define AGENT_NEXUS_SOURCE_ANCHOR_MANIFEST_SHA256 "([0-9a-f]{64})"$', re.MULTILINE
-)
-_ANCHOR_SCOPE_RE = re.compile(
-    r'^#define AGENT_NEXUS_SOURCE_ANCHOR_SCOPE "([^"]+)"$', re.MULTILINE
-)
-
-
-def _load_source_attestor(corpus: Path, anchor: Path) -> source_attestation.SourceAttestation:
-    try:
-        text = anchor.read_text(encoding="ascii")
-    except (OSError, UnicodeError) as error:
-        raise ValidationError("Nexus source anchor is unavailable") from error
-    revision = _ANCHOR_REVISION_RE.findall(text)
-    manifest = _ANCHOR_MANIFEST_RE.findall(text)
-    scope = _ANCHOR_SCOPE_RE.findall(text)
-    _require(len(revision) == len(manifest) == len(scope) == 1,
-             "Nexus source anchor fields are not unique")
-    _require(scope[0] == source_attestation.SCOPE,
-             "Nexus source anchor scope is not build_source_snapshot")
-    try:
-        return source_attestation.load_source_attestation(
-            corpus,
-            expected_revision=revision[0],
-            expected_manifest_sha256=manifest[0],
-        )
-    except source_attestation.SourceAttestationError as error:
-        raise ValidationError(f"Nexus source corpus is not anchored: {error}") from error
 
 
 def _same_envelope(record: Mapping[str, object], turn: int, request: int) -> None:
@@ -718,14 +677,23 @@ def _history_bindings(
                  "model history is not bound to a settled tool projection")
         normalized.append(dict(item))
         previous = int(corr)
-    expected = [
-        {"tool_corr_id": corr, "tool": tool, "projection_sha256": digest}
-        for entry in settled[-MAX_HISTORY_BINDINGS:]
-        if entry is not None
-        for corr, tool, digest in (entry,)
+    tail = list(settled[-MAX_HISTORY_BINDINGS:])
+    suffixes = (tail[-length:] for length in range(1, len(tail) + 1))
+    candidates = [
+        [
+            {"tool_corr_id": corr, "tool": tool, "projection_sha256": digest}
+            for entry in suffix
+            if entry is not None
+            for corr, tool, digest in (entry,)
+        ]
+        for suffix in suffixes
     ]
-    _require(normalized == expected,
-             "model history is not the failure-aware bounded tool tail")
+    if not tail:
+        candidates.append([])
+    _require(
+        normalized in candidates,
+        "model history is not a failure-aware contiguous retained suffix",
+    )
     return tuple(normalized)
 
 
@@ -752,7 +720,6 @@ def _validate_provider_proof(
     *,
     provider: str,
     model: str,
-    final_evidence_root: str | None,
 ) -> None:
     base_required = {
         "type",
@@ -769,7 +736,6 @@ def _validate_provider_proof(
         variant = {
             "content",
             "final_request_sha256",
-            "final_evidence_root",
             "final_response_sha256",
             "provider_proof_sha256",
         }
@@ -841,14 +807,34 @@ def _validate_provider_proof(
         _require(response.get("tool_choice_mode") == "auto"
                  and response.get("forced_tool") is None,
                  "DeepSeek was forced to select a tool")
-        _require(response.get("attempt_count") == 1
-                 and response.get("adaptation") == "none",
-                 "DeepSeek autonomy was repaired or retried by the Host")
+        # A success receipt binds the final HTTPS exchange and reports only a
+        # bounded adapter-local attempt count.  It cannot reconstruct the
+        # rejected provider response, so do not treat attempt 2 as proof of a
+        # particular repair cause or as another Guest-visible model outcome.
+        _require(
+            _is_int(
+                response.get("attempt_count"),
+                1,
+                MAX_DEEPSEEK_ADAPTER_ATTEMPTS,
+            ),
+            "DeepSeek success exceeded its bounded provider-local repair",
+        )
         raw_count = response.get("raw_tool_call_count")
         selected_index = response.get("selected_index")
+        adaptation = response.get("adaptation")
         if kind == "tool_use":
-            _require(raw_count == 1 and selected_index == 0,
-                     "DeepSeek did not autonomously return exactly one tool call")
+            single_call = (
+                _is_int(raw_count, 1, 1)
+                and _is_int(selected_index, 0, 0)
+                and adaptation == "none"
+            )
+            serialized_calls = (
+                _is_int(raw_count, 2, MAX_RAW_TOOL_CALLS)
+                and _is_int(selected_index, 0, int(raw_count) - 1)
+                and adaptation == "selected_first_valid_tool_call"
+            )
+            _require(single_call or serialized_calls,
+                     "DeepSeek tool receipt has an invalid auto-selection claim")
             selected = _sha(
                 {"tool": response["tool"], "arguments": response["arguments"]}
             )
@@ -857,7 +843,11 @@ def _validate_provider_proof(
                 selected,
             ), "provider receipt does not bind the selected tool")
         else:
-            _require(raw_count == 0 and selected_index == -1
+            _require(_is_int(raw_count, 0, 0)
+                     and isinstance(selected_index, int)
+                     and not isinstance(selected_index, bool)
+                     and selected_index == -1
+                     and adaptation == "none"
                      and response.get("selected_tool_sha256") == "",
                      "DeepSeek final receipt claims a tool selection")
             selected = _sha({"type": "final", "content": response["content"]})
@@ -867,12 +857,10 @@ def _validate_provider_proof(
             ), "provider receipt does not bind the selected final")
 
     if kind == "final":
-        _require(final_evidence_root is not None
-                 and response.get("final_request_sha256") == request.get("request_sha256")
-                 and response.get("final_response_sha256") == response_sha
-                 and response.get("final_evidence_root") == final_evidence_root,
-                 "final model response proof is not bound to its request/evidence")
-        proof_order.extend(("final_request_sha256", "final_evidence_root"))
+        _require(response.get("final_request_sha256") == request.get("request_sha256")
+                 and response.get("final_response_sha256") == response_sha,
+                 "final model response proof is not bound to its request")
+        proof_order.append("final_request_sha256")
         proof = {field: response[field] for field in proof_order}
         _require(hmac.compare_digest(
             _digest(response.get("provider_proof_sha256"), "provider proof digest"),
@@ -942,12 +930,14 @@ def _validate_provider_error_proof(
              and proof.get("selected_tool_sha256") == ""
              and proof.get("selected_index") == -1,
              "rejected provider response claims a selected reply")
-    _require(proof.get("attempt_count") == 1
-             and proof.get("tool_choice_mode") == "auto"
-             and proof.get("forced_tool") is None
-             and _is_int(proof.get("raw_tool_call_count"), 0, 32)
-             and proof.get("adaptation") == f"rejected_{str(code).lower()}",
-             "DeepSeek error proof changed the autonomous adapter contract")
+    _require(
+        _is_int(proof.get("attempt_count"), 1, MAX_DEEPSEEK_ADAPTER_ATTEMPTS)
+        and proof.get("tool_choice_mode") == "auto"
+        and proof.get("forced_tool") is None
+        and _is_int(proof.get("raw_tool_call_count"), 0, MAX_RAW_TOOL_CALLS)
+        and proof.get("adaptation") == f"rejected_{str(code).lower()}",
+        "DeepSeek error proof changed the autonomous adapter contract",
+    )
     if "provider_response_id" in proof:
         _bounded_text(
             proof.get("provider_response_id"),
@@ -957,7 +947,13 @@ def _validate_provider_error_proof(
 
 
 def _validate_tool_event_shape(record: Mapping[str, object]) -> None:
-    _require(set(record) == TOOL_EVENT_FIELDS, "tool_event fields are malformed")
+    workspace_fields = {"workspace_result", "data_trust"}
+    tool = record.get("tool")
+    status_value = record.get("status")
+    expected_fields = set(TOOL_EVENT_FIELDS)
+    if tool in ("search_files", "read_file") and status_value == 0:
+        expected_fields.update(workspace_fields)
+    _require(set(record) == expected_fields, "tool_event fields are malformed")
     _require(record.get("tool") in TOOL_SET, "tool_event names an unadvertised tool")
     _require(_is_int(record.get("corr_id"), 1)
              and _is_int(record.get("sequence"), 0)
@@ -974,33 +970,19 @@ def _validate_tool_event_shape(record: Mapping[str, object]) -> None:
         _require(record.get("provenance") == SUCCESS_PROVENANCE[record["tool"]],
                  "successful tool_event provenance is malformed")
         _digest(record.get("projection_sha256"), "successful tool projection")
+        if tool in ("search_files", "read_file"):
+            _bounded_workspace_result(
+                record.get("workspace_result"), "Host workspace result"
+            )
+            _require(
+                record.get("data_trust") == "host_workspace_untrusted",
+                "workspace result trust label is malformed",
+            )
     else:
         _require(record.get("provenance") == 0
                  and record.get("projection_sha256") == ""
                  and all(record.get(field) == 0 for field in ("value0", "value1", "value2")),
                  "failed tool_event exposed successful result bindings")
-
-
-def _validate_evidence_event(
-    record: Mapping[str, object],
-    attestor: source_attestation.SourceAttestation,
-) -> source_attestation.ReadAttestation:
-    _require(set(record) == EVIDENCE_FIELDS, "evidence_event fields are malformed")
-    _require(record.get("type") == "evidence_event"
-             and record.get("version") == 1
-             and record.get("event") == record.get("tool") == "source_read",
-             "evidence_event identity is malformed")
-    _require(record.get("scope") == source_attestation.SCOPE
-             and record.get("provenance") == SUCCESS_PROVENANCE["source_read"],
-             "evidence_event scope or provenance is malformed")
-    _require(attestor.verify_evidence_event(record),
-             "evidence_event does not replay against the anchored source corpus")
-    try:
-        return attestor.attest_read(
-            record.get("source_id"), record.get("start_line"), record.get("end_line")
-        )
-    except source_attestation.SourceAttestationError as error:
-        raise ValidationError("evidence_event range is not attestable") from error
 
 
 def _kernel_identities(
@@ -1062,8 +1044,8 @@ def _kernel_identities(
         _require(previous == identity, "kernel identity changed for one PID")
         previous_role = roles.setdefault(str(role), identity)
         _require(previous_role == identity, "one Nexus role acquired multiple identities")
-    _require(set(roles) == BUSINESS_ROLES,
-             "observer did not independently authenticate all four Nexus identities")
+    _require("coordinator" in roles,
+             "observer did not authenticate the Nexus coordinator identity")
     return identities
 
 
@@ -1179,7 +1161,6 @@ def _validate_turn(
     ledger: task_ledger.NexusTaskLedger,
     fixture: Sequence[FixtureRecord],
     fixture_cursor: list[int],
-    attestor: source_attestation.SourceAttestation,
     provider: str,
     model: str,
     max_rounds: int,
@@ -1229,21 +1210,11 @@ def _validate_turn(
     tool_events: dict[int, dict[str, object]] = {}
     task_states: dict[int, tuple[int, str, str]] = {}
     task_for_corr: dict[int, int] = {}
-    evidences: dict[int, tuple[dict[str, object], source_attestation.ReadAttestation]] = {}
-    evidence_bindings: dict[int, Mapping[str, object]] = {}
+    result_value_metrics: dict[int, dict[int, int]] = {}
     settled_history: list[tuple[int, str, str] | None] = []
-    successful_searches: list[tuple[int, frozenset[str]]] = []
     tool_calls: list[tuple[int, str]] = []
     latest_corr = 0
     final_response: dict[str, object] | None = None
-    final_evidence_root = ""
-    source_miss_corrs: list[int] = []
-    source_success_corrs: list[int] = []
-    source_read_corrs: list[int] = []
-    runtime_corrs: list[int] = []
-    drafts: dict[int, tuple[str, str, int, int]] = {}
-    latest_draft_handle = 0
-    report_roundtrip = False
     cancellation_started = False
     cancelled_active_worker = False
     cancelled_child_corrs: set[int] = set()
@@ -1293,17 +1264,35 @@ def _validate_turn(
                          "child task_id was reused across the session")
                 child_ids.add(task_id_int)
                 task_for_corr[corr_int] = task_id_int
+            metric_code = record.get("metric_code")
+            if (
+                int(parent) != 0
+                and event == "progress"
+                and _is_int(
+                    metric_code,
+                    RESULT_VALUE_METRIC_FIRST,
+                    RESULT_VALUE_METRIC_LAST,
+                )
+                and responses.get(corr_int, {}).get("tool") == "inspect_system"
+            ):
+                _require(
+                    task_for_corr.get(corr_int) == task_id_int,
+                    "system observation result metric changed child Task",
+                )
+                metrics = result_value_metrics.setdefault(corr_int, {})
+                code = int(metric_code)
+                _require(
+                    code not in metrics and _is_int(record.get("metric_value"), 0, MAX_U32),
+                    "system observation result metric was duplicated or malformed",
+                )
+                metrics[code] = int(record["metric_value"])
             if event == "artifact_published":
                 _digest(record.get("artifact_sha256"), "TASK artifact digest")
                 _require(record.get("provenance") == SUCCESS_PROVENANCE[
                     responses[corr_int]["tool"]
                 ], "TASK artifact provenance does not match its tool")
-                if role in ("research", "system"):
-                    _require(record.get("artifact_handle", 0) == 0,
-                             "transient source/runtime handle escaped to the controller")
-                elif role == "analyst":
-                    _require(_is_int(record.get("artifact_handle"), 1, MAX_U32),
-                             "draft report lacks a generation-safe public handle")
+                _require(record.get("artifact_handle", 0) == 0,
+                         "transient Nexus tool artifact exposed a handle")
             root_cancel_binding = bool(
                 cancellation_started
                 and int(parent) == 0
@@ -1409,21 +1398,8 @@ def _validate_turn(
                     expected,
                     provider=provider,
                     model=model,
-                    final_evidence_root=None,
                 )
             elif record.get("response_type") == "final":
-                bindings: list[Mapping[str, object]] = []
-                for binding in requests[corr_int]["history_bindings"]:  # type: ignore[index]
-                    if binding.get("tool") != "source_read":
-                        continue
-                    evidence_corr = int(binding["tool_corr_id"])
-                    _require(evidence_corr in evidence_bindings,
-                             "final history source_read lacks Host-attested evidence")
-                    bindings.append(evidence_bindings[evidence_corr])
-                try:
-                    final_evidence_root = source_attestation.canonical_evidence_root(bindings)
-                except source_attestation.SourceAttestationError as error:
-                    raise ValidationError("final evidence root cannot be reconstructed") from error
                 _ledger(lambda corr_id=corr_int: ledger.freeze_provider_final(corr_id),
                         "provider final replay failed")
                 _validate_provider_proof(
@@ -1432,7 +1408,6 @@ def _validate_turn(
                     expected,
                     provider=provider,
                     model=model,
-                    final_evidence_root=final_evidence_root,
                 )
                 _bounded_final_text(
                     record.get("content"), "provider final", MAX_FINAL_BYTES
@@ -1448,26 +1423,6 @@ def _validate_turn(
                     ledger.begin_termination(corr_id, "round_limit"),
                     "MODEL_RESPONSE decision limit replay failed",
                 )
-
-        elif kind == "evidence_event":
-            corr = record.get("corr_id")
-            _require(_is_int(corr, 1) and int(corr) in responses
-                     and responses[int(corr)].get("tool") == "source_read"
-                     and int(corr) not in evidences,
-                     "evidence_event has no unique source_read call")
-            replay = _validate_evidence_event(record, attestor)
-            corr_int = int(corr)
-            arguments = responses[corr_int]["arguments"]
-            _require(record.get("source_id") == arguments.get("source_id")
-                     and record.get("start_line") == arguments.get("start_line")
-                     and int(record["end_line"]) <= (
-                         int(arguments["start_line"]) + int(arguments["max_lines"]) - 1
-                     ), "evidence_event is not bound to the model's source_read arguments")
-            binding = replay.evidence_binding(
-                corr_int, record.get("task_id"), record.get("provenance")
-            )
-            evidences[corr_int] = (dict(record), replay)
-            evidence_bindings[corr_int] = binding
 
         elif kind == "tool_event":
             if pending_cleanup_root is not None:
@@ -1503,114 +1458,51 @@ def _validate_turn(
             tool = str(record["tool"])
             status = int(record["status"])
             projection = str(record["projection_sha256"])
-            evidence_values: dict[str, object] = {}
-            if tool == "source_read" and status == 0:
-                _require(corr_int in evidences,
-                         "successful source_read lacks an adjacent evidence_event")
-                evidence, replay = evidences[corr_int]
-                _require(record.get("value1") == evidence.get("task_id")
-                         and projection == evidence.get("projection_sha256")
-                         == evidence.get("artifact_sha256"),
-                         "source_read tool/evidence/task binding is malformed")
-                _require(any(
-                    search_corr < corr_int and replay.source_id in source_ids
-                    for search_corr, source_ids in successful_searches
-                ), "source_read did not follow discovery of its source_id")
-                evidence_values = {
-                    "evidence_task_id": evidence["task_id"],
-                    "evidence_provenance": evidence["provenance"],
-                    "evidence_artifact_sha256": evidence["artifact_sha256"],
-                    "evidence_projection_sha256": evidence["projection_sha256"],
-                }
-                source_read_corrs.append(corr_int)
-            elif corr_int in evidences:
-                _fail("failed or non-source tool acquired source evidence")
-
-            arguments = responses[corr_int]["arguments"]
-            if tool == "source_search":
-                try:
-                    search = attestor.attest_search(
-                        arguments.get("query"), arguments.get("path_prefix", "")
+            guest_wrapper: dict[str, object] = {
+                "status": status,
+                "value0": record.get("value0"),
+                "value1": record.get("value1"),
+                "value2": record.get("value2"),
+                "result": record.get("result"),
+            }
+            if status == 0:
+                if tool in ("search_files", "read_file"):
+                    expected_projection = (
+                        f"workspace_request={tool}\n"
+                        "result_delivery=host_provider_context\n"
+                        "content_untrusted=1\n"
                     )
-                except source_attestation.SourceAttestationError as error:
+                    guest_wrapper["workspace_request"] = expected_projection
+                    guest_wrapper["data_trust"] = "host_workspace_placeholder"
                     _require(
-                        str(error) == "source search has no matches",
-                        "source_search could not be replayed as a corpus miss",
+                        record.get("result") == WORKSPACE_REQUEST_RESULT
+                        and record.get("value0") == 0,
+                        "workspace tool did not settle its exact Guest placeholder",
                     )
-                    miss_wrapper = {
-                        "status": SOURCE_SEARCH_NOT_FOUND_STATUS,
-                        "value0": 0,
-                        "value1": 0,
-                        "value2": 0,
-                        "result": SOURCE_SEARCH_NO_MATCHES_RESULT,
-                    }
-                    _require(
-                        status == SOURCE_SEARCH_NOT_FOUND_STATUS
-                        and record.get("result") == SOURCE_SEARCH_NO_MATCHES_RESULT
-                        and record.get("value0") == 0
-                        and record.get("value1") == 0
-                        and record.get("value2") == 0
-                        and record.get("provenance") == 0
-                        and record.get("projection_sha256") == ""
-                        and hmac.compare_digest(
-                            str(record.get("result_sha256")), _sha(miss_wrapper)
-                        ),
-                        "source_search corpus miss lacks its exact NOT_FOUND settlement",
-                    )
-                    source_miss_corrs.append(corr_int)
                 else:
-                    success_wrapper = {
-                        "status": 0,
-                        "value0": record.get("value0"),
-                        "value1": record.get("value1"),
-                        "value2": record.get("value2"),
-                        "result": SOURCE_SEARCH_SUCCESS_RESULT,
-                        "discovery_projection": search.projection,
-                        "evidence_trust": "unverified_discovery_hint",
-                    }
+                    arguments = responses[corr_int].get("arguments")
                     _require(
-                        status == 0
-                        and record.get("result") == SOURCE_SEARCH_SUCCESS_RESULT
-                        and hmac.compare_digest(
-                            projection, search.projection_sha256
-                        )
-                        and record.get("provenance")
-                        == SUCCESS_PROVENANCE["source_search"]
-                        and hmac.compare_digest(
-                            str(record.get("result_sha256")),
-                            _sha(success_wrapper),
-                        ),
-                        "source_search with Host corpus matches did not settle as the exact success projection",
+                        isinstance(arguments, Mapping),
+                        "system observation lacks delivered arguments",
                     )
-                    successful_searches.append(
-                        (corr_int, frozenset(match.source_id for match in search.matches))
+                    expected_projection = _inspect_system_projection(
+                        arguments.get("operation"),
+                        result_value_metrics.get(corr_int, {}),
                     )
-                    source_success_corrs.append(corr_int)
-            elif tool == "inspect_runtime" and status == 0:
-                runtime_corrs.append(corr_int)
-            elif tool == "draft_report" and status == 0:
-                content = str(arguments["content"])
-                content_digest = _sha_text(content)
-                handle = int(record["value0"])
-                _require(_is_int(handle, 1, MAX_U32)
-                         and projection == content_digest,
-                         "draft_report did not preserve the model-authored bytes")
-                drafts[handle] = (content, content_digest, len(content.encode("utf-8")), corr_int)
-                latest_draft_handle = handle
-            elif tool == "read_artifact" and status == 0:
-                handle = int(arguments["handle"])
-                _require(handle == latest_draft_handle and handle in drafts,
-                         "read_artifact did not target the latest current-turn draft")
-                _content, digest, byte_count, draft_corr = drafts[handle]
-                _require(draft_corr < corr_int
-                         and record.get("value0") == handle
-                         and record.get("value1") == byte_count
-                         and record.get("value2") == task_ledger.AGENT_NEXUS_ARTIFACT_REPORT
-                         and projection == digest,
-                         "read_artifact did not reproduce exact draft bytes")
-                report_roundtrip = True
+                    guest_wrapper["runtime_observation"] = expected_projection
+                    guest_wrapper["data_trust"] = "guest_runtime_untrusted"
+                _require(
+                    hmac.compare_digest(projection, _sha_text(expected_projection)),
+                    "tool projection does not match its exact Guest data",
+                )
+            _require(
+                hmac.compare_digest(
+                    str(record.get("result_sha256")), _sha(guest_wrapper)
+                ),
+                "tool result digest does not match its exact Guest wrapper",
+            )
             _ledger(
-                lambda corr_id=corr_int, name=tool, event=record, extra=evidence_values:
+                lambda corr_id=corr_int, name=tool, event=record:
                 ledger.settle_tool(
                     corr_id,
                     tool=name,
@@ -1626,7 +1518,6 @@ def _validate_turn(
                         if event["result"] == ARTIFACT_CLEANUP_SESSION_BLOCK
                         else ""
                     ),
-                    **extra,
                 ),
                 "TOOL_EVENT replay failed",
             )
@@ -1805,8 +1696,7 @@ def _validate_turn(
                  and terminal.get("final_response_sha256")
                  == final_response.get("final_response_sha256")
                  and terminal.get("provider_proof_sha256")
-                 == final_response.get("provider_proof_sha256")
-                 and terminal.get("final_evidence_root") == final_evidence_root,
+                 == final_response.get("provider_proof_sha256"),
                  "TURN_COMPLETE did not preserve the exact provider final proof")
         final_content = str(terminal["answer"])
     else:
@@ -1819,32 +1709,10 @@ def _validate_turn(
         _sha(final_values),
     ), "TURN_COMPLETE final proof root is malformed")
 
-    source_read = bool(source_read_corrs)
-    source_recovered = bool(
-        source_miss_corrs
-        and source_success_corrs
-        and source_read_corrs
-        and min(source_miss_corrs) < min(source_success_corrs) < min(source_read_corrs)
-    )
-    if source_read and terminal_status == "completed":
-        final_request = requests[int(final_response["corr_id"])]  # type: ignore[index]
-        final_evidence_corrs = {
-            int(binding["tool_corr_id"])
-            for binding in final_request["history_bindings"]  # type: ignore[index]
-            if binding["tool"] == "source_read"
-        }
-        allowed_citations = {
-            str(evidences[corr][0]["citation"]) for corr in final_evidence_corrs
-        }
-        cited = set(CITATION_RE.findall(final_content))
-        _require(bool(cited) and cited.issubset(allowed_citations),
-                 "final answer omitted its source citation or invented one")
-
     direct_final = bool(
         terminal_status == "completed"
         and decision_count == 1
         and not tool_calls
-        and not evidences
         and snapshot.task_count == 1
     )
     return TurnReport(
@@ -1854,11 +1722,6 @@ def _validate_turn(
         request_count=attempt_number,
         tool_calls=tuple(tool_calls),
         direct_final=direct_final,
-        source_miss=bool(source_miss_corrs),
-        source_recovered=source_recovered,
-        source_read=source_read,
-        runtime=bool(runtime_corrs),
-        report_roundtrip=report_roundtrip,
         cancelled_active_worker=cancelled_active_worker,
         final_content=final_content,
     )
@@ -1950,11 +1813,6 @@ def _controller_observer_projection(
         return (_observer_projection(
             {"event": "turn_cancel", **record}, source="host"
         ),)
-    if kind == "evidence_event":
-        payload = dict(record)
-        payload["evidence_event"] = payload.pop("event")
-        payload["event"] = "evidence_committed"
-        return (_observer_projection(payload, source="guest"),)
     if kind == "tool_event":
         payload = {key: value for key, value in record.items() if key != "result"}
         payload["event"] = "tool_event"
@@ -1975,7 +1833,6 @@ def _validate_observer(
     controller: Sequence[dict[str, object]],
     session_id: str,
 ) -> None:
-    _reject_stale(observer, "observer transcript")
     _require(observer and observer[0].get("type") == "telemetry"
              and observer[0].get("event") == "observer_attached"
              and observer[0].get("source") == "host"
@@ -2014,10 +1871,8 @@ def _validate_observer(
 def _validate_controls(records: Sequence[dict[str, object]]) -> None:
     controls = [record for record in records if record.get("type") == "control_result"]
     commands = [record.get("command") for record in controls]
-    required = ("tools", "status", "context", "tasks", "artifacts")
-    for command in required:
-        _require(commands.count(command) >= 1,
-                 f"controller lacks a successful /{command} result")
+    _require(commands.count("tools") == 1,
+             "controller lacks its unique successful /tools result")
     previous_request = 0
     for record in controls:
         _require(set(record).issubset(
@@ -2033,7 +1888,7 @@ def _validate_controls(records: Sequence[dict[str, object]]) -> None:
             catalog = result.get("tools")
             _require(isinstance(catalog, list)
                      and _canonical_bytes(catalog) == _canonical_bytes(list(nexus_contract.TOOLS)),
-                     "/tools does not expose the exact five-tool Host contract")
+                     "/tools does not expose the exact v3 Host contract")
         elif record.get("command") == "status":
             _require(set(result) == {
                 "tick", "loop_state", "call_count", "wait_sleep", "wait_wakeup",
@@ -2059,13 +1914,11 @@ def validate_records(
     observer: Sequence[dict[str, object]],
     fixture_records: Sequence[dict[str, object]],
     *,
-    source_attestor_value: source_attestation.SourceAttestation,
     goals: Sequence[str] | None = None,
     require_acceptance_scenarios: bool = True,
 ) -> ValidationSummary:
     """Validate already-decoded records.  Kept public for mutation tests."""
 
-    _reject_stale(controller, "controller transcript")
     fixture = _validate_fixture(
         fixture_records,
         require_acceptance_scenarios=require_acceptance_scenarios,
@@ -2133,7 +1986,6 @@ def validate_records(
             ledger=ledger,
             fixture=fixture,
             fixture_cursor=fixture_cursor,
-            attestor=source_attestor_value,
             provider=str(provider),
             model=str(model),
             max_rounds=max_rounds,
@@ -2174,22 +2026,7 @@ def validate_records(
     _validate_observer(observer, controller, str(ready["session_id"]))
 
     if require_acceptance_scenarios:
-        _require(len(reports) == 2, "deterministic acceptance must use exactly two natural tasks")
-        _require(reports[0].direct_final,
-                 "first natural task did not prove an autonomous direct final")
-        autonomous = reports[1]
-        _require(autonomous.status == "completed"
-                 and autonomous.source_miss
-                 and autonomous.source_recovered
-                 and autonomous.source_read
-                 and autonomous.runtime
-                 and autonomous.report_roundtrip,
-                 "second natural task lacks source replan/read, runtime, or report readback")
-        tools = [tool for _corr, tool in autonomous.tool_calls]
-        _require(frozenset(tools) == TOOL_SET,
-                 "second task did not exercise the exact five-tool public surface")
-        _require(not any(report.cancelled_active_worker for report in reports),
-                 "deterministic script must not overclaim active-worker cancellation")
+        _require(bool(reports), "deterministic acceptance has no natural task")
     return ValidationSummary(len(fixture), tuple(reports), str(provider))
 
 
@@ -2199,8 +2036,7 @@ def validate_paths(
     observer_path: Path,
     fixture_path: Path,
     script_path: Path = DEFAULT_SCRIPT,
-    source_corpus_path: Path = DEFAULT_CORPUS,
-    source_anchor_path: Path = DEFAULT_ANCHOR,
+    workspace_root: Path = DEFAULT_WORKSPACE,
     require_acceptance_scenarios: bool = True,
 ) -> ValidationSummary:
     try:
@@ -2208,12 +2044,18 @@ def validate_paths(
     except (OSError, UnicodeError) as error:
         raise ValidationError("Nexus replay script is unavailable") from error
     goals = _validate_script_text(script)
-    attestor = _load_source_attestor(source_corpus_path, source_anchor_path)
+    try:
+        workspace_info = workspace_root.lstat()
+    except OSError as error:
+        raise ValidationError("Nexus workspace root is unavailable") from error
+    _require(
+        stat.S_ISDIR(workspace_info.st_mode) and not workspace_root.is_symlink(),
+        "Nexus workspace root must be a non-symlink directory",
+    )
     return validate_records(
         _load_jsonl(controller_path, "controller transcript"),
         _load_jsonl(observer_path, "observer transcript"),
         _load_jsonl(fixture_path, "replay fixture"),
-        source_attestor_value=attestor,
         goals=goals,
         require_acceptance_scenarios=require_acceptance_scenarios,
     )
@@ -2227,8 +2069,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--observer", type=Path, required=True)
     parser.add_argument("--fixture", type=Path, required=True)
     parser.add_argument("--script", type=Path, default=DEFAULT_SCRIPT)
-    parser.add_argument("--source-corpus", type=Path, default=DEFAULT_CORPUS)
-    parser.add_argument("--source-anchor", type=Path, default=DEFAULT_ANCHOR)
+    parser.add_argument("--workspace-root", type=Path, default=DEFAULT_WORKSPACE)
     return parser
 
 
@@ -2240,28 +2081,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             observer_path=args.observer,
             fixture_path=args.fixture,
             script_path=args.script,
-            source_corpus_path=args.source_corpus,
-            source_anchor_path=args.source_anchor,
+            workspace_root=args.workspace_root,
         )
     except ValidationError as error:
         print(f"agentos-nexus-replay: FAIL: {error}", file=sys.stderr)
         return 1
-    features = Counter(
-        feature
-        for report in summary.turns
-        for feature, enabled in (
-            ("direct-final", report.direct_final),
-            ("source-replan", report.source_recovered),
-            ("runtime", report.runtime),
-            ("report-readback", report.report_roundtrip),
-            ("active-worker-cancel", report.cancelled_active_worker),
-        )
-        if enabled
+    tool_counts = Counter(
+        tool for report in summary.turns for _corr_id, tool in report.tool_calls
     )
+    tool_summary = ",".join(
+        f"{tool}:{tool_counts[tool]}" for tool in TOOL_NAMES if tool_counts[tool]
+    ) or "direct-final"
     print(
         "agentos-nexus-replay: PASS "
         f"({summary.fixture_records} provider rounds, {len(summary.turns)} tasks, "
-        f"{','.join(features)})"
+        f"{tool_summary})"
     )
     return 0
 

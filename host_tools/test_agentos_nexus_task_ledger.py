@@ -6,7 +6,6 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 import hashlib
 from pathlib import Path
-import re
 import sys
 import unittest
 
@@ -29,17 +28,14 @@ CORR3 = 10003
 ROOT_ID = ("coordinator", 40, 400, 4000)
 SYSTEM_ID = ("system", 41, 401, 4001)
 RESEARCH_ID = ("research", 42, 402, 4002)
-ANALYST_ID = ("analyst", 43, 403, 4003)
 SHA_A = "a" * 64
 SHA_B = "b" * 64
 SHA_C = "c" * 64
-REPORT_HANDLE = (GENERATION << 16) | 9
 
 TOOL_SPEC = {
-    "source_search": ('{"query":"nexus_root_start","path_prefix":"user/"}', RESEARCH_ID, 60),
-    "source_read": ('{"source_id":"S0001","start_line":40,"max_lines":8}', RESEARCH_ID, 60),
-    "inspect_runtime": ('{"operation":"system_status"}', SYSTEM_ID, 53),
-    "draft_report": ('{"content":"Exact model report.","title":"Result"}', ANALYST_ID, 52),
+    "search_files": ('{"query":"nexus_root_start","path_prefix":"user/"}', RESEARCH_ID, 60, 60),
+    "read_file": ('{"max_lines":64,"path":"user/src/init.c","start_line":40}', RESEARCH_ID, 60, 60),
+    "inspect_system": ('{"operation":"status"}', SYSTEM_ID, 53, 53),
 }
 
 
@@ -57,7 +53,6 @@ class NexusTaskLedgerTests(unittest.TestCase):
                 ROOT_ID,
                 SYSTEM_ID,
                 RESEARCH_ID,
-                ANALYST_ID,
             ):
                 value.set_kernel_identity(
                     role=role,
@@ -162,7 +157,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
             value.record_model_request(corr_id)
 
     def deliver(self, value: ledger.NexusTaskLedger, corr: int, tool: str) -> str:
-        arguments, _identity, _provenance = TOOL_SPEC[tool]
+        arguments, _identity, _provenance, _artifact_provenance = TOOL_SPEC[tool]
         value.record_delivered_tool(corr, tool, arguments_canonical=arguments)
         return arguments
 
@@ -172,20 +167,22 @@ class NexusTaskLedgerTests(unittest.TestCase):
         *,
         corr: int = CORR1,
         task_id: int = 1000,
-        tool: str = "source_search",
+        tool: str = "search_files",
         digest: str | None = None,
         settle: bool = True,
     ) -> tuple[str, int, int]:
         arguments = self.deliver(value, corr, tool)
-        _args, identity, provenance = TOOL_SPEC[tool]
-        content = ""
+        _args, identity, provenance, artifact_provenance = TOOL_SPEC[tool]
         handle = 0
         resource = 64
-        if tool == "draft_report":
-            content = "Exact model report."
-            digest = hashlib.sha256(content.encode()).hexdigest()
-            handle = REPORT_HANDLE
-            resource = len(content.encode())
+        if tool in ("search_files", "read_file"):
+            placeholder = (
+                f"workspace_request={tool}\n"
+                "result_delivery=host_provider_context\n"
+                "content_untrusted=1\n"
+            )
+            digest = hashlib.sha256(placeholder.encode("utf-8")).hexdigest()
+            resource = len(placeholder.encode("utf-8"))
         if digest is None:
             digest = SHA_A
         deadline = 5000
@@ -208,23 +205,15 @@ class NexusTaskLedgerTests(unittest.TestCase):
                 kind="artifact_published",
                 tick=24,
                 artifact_handle=handle,
-                provenance=provenance,
+                provenance=artifact_provenance,
                 resource_used=resource,
                 digest=digest,
-                summary="model_report_preserved"
-                if tool == "draft_report"
-                else "source_evidence_ready",
+                summary="workspace_request_ready"
+                if tool in ("search_files", "read_file")
+                else "system_observation_ready",
             )
         )
         if settle:
-            evidence: dict[str, object] = {}
-            if tool == "source_read":
-                evidence = {
-                    "evidence_task_id": task_id,
-                    "evidence_provenance": provenance,
-                    "evidence_artifact_sha256": digest,
-                    "evidence_projection_sha256": digest,
-                }
             value.settle_tool(
                 corr,
                 tool=tool,
@@ -235,7 +224,6 @@ class NexusTaskLedgerTests(unittest.TestCase):
                 provenance=provenance,
                 projection_sha256=digest,
                 result_sha256=SHA_B,
-                **evidence,
             )
         return digest, handle, resource
 
@@ -253,7 +241,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         with self.assertRaises(ledger.NexusTaskLedgerError):
             call()
 
-    def test_real_source_trace_seals_deterministically_without_bodies(self) -> None:
+    def test_workspace_trace_seals_deterministically_without_bodies(self) -> None:
         roots: list[tuple[str, str]] = []
         for _ in range(2):
             value = self.make()
@@ -283,12 +271,12 @@ class NexusTaskLedgerTests(unittest.TestCase):
         self.rejected(
             lambda: value.record_delivered_tool(
                 CORR2,
-                "source_search",
-                arguments_canonical=TOOL_SPEC["source_search"][0],
+                "search_files",
+                arguments_canonical=TOOL_SPEC["search_files"][0],
             )
         )
         self.rejected(lambda: value.record_model_request(CORR2))
-        self.deliver(value, CORR1, "source_search")
+        self.deliver(value, CORR1, "search_files")
         self.rejected(lambda: value.freeze_provider_final(CORR1))
         self.rejected(lambda: value.record_model_request(CORR2))
 
@@ -371,197 +359,15 @@ class NexusTaskLedgerTests(unittest.TestCase):
         )
         self.assertTrue(value.assert_turn_complete("cancelled").sealed)
 
-    def test_round_limit_direct_read_root_may_precede_tool_event(self) -> None:
-        value = self.make()
-        self.root_prelude(value)
-        digest, handle, resource = self.child_success(
-            value, tool="draft_report"
-        )
-        value.record_model_request(CORR2)
-        value.record_delivered_tool(
-            CORR2,
-            "read_artifact",
-            arguments_canonical=f'{{"handle":{handle}}}',
-        )
-        value.begin_termination(CORR2, "round_limit")
-        value.record_event(
-            self.event(corr_id=CORR2, kind="cancelled", status=-10, tick=80)
-        )
-        self.assertFalse(value.all_required_terminal)
-        value.settle_tool(
-            CORR2,
-            tool="read_artifact",
-            status=0,
-            value0=handle,
-            value1=resource,
-            value2=ledger.AGENT_NEXUS_ARTIFACT_REPORT,
-            provenance=52,
-            projection_sha256=digest,
-            result_sha256=SHA_C,
-        )
-        snapshot = value.assert_turn_complete("cancelled")
-        self.assertTrue(snapshot.all_required_terminal)
-
-    def test_direct_read_user_cancel_settles_before_root_and_round_limit_wins(self) -> None:
-        value = self.make()
-        self.root_prelude(value)
-        digest, handle, resource = self.child_success(
-            value, tool="draft_report"
-        )
-        value.record_model_request(CORR2)
-        value.record_delivered_tool(
-            CORR2,
-            "read_artifact",
-            arguments_canonical=f'{{"handle":{handle}}}',
-        )
-        value.begin_cancel(CORR2)
-        self.rejected(
-            lambda: value.record_event(
-                self.event(
-                    corr_id=CORR2, kind="cancelled", status=-10, tick=80
-                )
-            )
-        )
-        value.settle_tool(
-            CORR2,
-            tool="read_artifact",
-            status=0,
-            value0=handle,
-            value1=resource,
-            value2=ledger.AGENT_NEXUS_ARTIFACT_REPORT,
-            provenance=52,
-            projection_sha256=digest,
-            result_sha256=SHA_C,
-        )
-        value.record_event(
-            self.event(corr_id=CORR2, kind="cancelled", status=-10, tick=81)
-        )
-        self.assertTrue(value.assert_turn_complete("cancelled").sealed)
-
-        value = self.make()
-        self.root_prelude(value)
-        self.deliver(value, CORR1, "source_search")
-        value.begin_termination(CORR1, "round_limit")
-        self.rejected(lambda: value.begin_cancel(CORR1))
-        common = dict(
-            task_id=1000,
-            parent_task_id=ROOT,
-            corr_id=CORR1,
-            identity=RESEARCH_ID,
-            deadline_tick=5000,
-        )
-        value.record_event(self.event(**common, tick=20))
-        value.record_event(
-            self.event(**common, kind="cancelled", status=-10, tick=21)
-        )
-        value.settle_cancelled_tool_from_task(CORR1)
-        value.record_event(
-            self.event(corr_id=CORR1, kind="cancelled", status=-10, tick=30)
-        )
-        self.assertTrue(value.assert_turn_complete("cancelled").sealed)
-
-    def test_stale_read_is_recorded_as_negative_direct_proof(self) -> None:
-        baseline = self.make()
-        self.root_prelude(baseline)
-        self.child_success(baseline, tool="draft_report")
-        baseline_root = self.final(baseline, CORR2).task_root_sha256
-
-        value = self.make()
-        self.root_prelude(value)
-        self.child_success(value, tool="draft_report")
-        value.record_model_request(CORR2)
-        value.record_delivered_tool(
-            CORR2,
-            "read_artifact",
-            arguments_canonical=f'{{"handle":{REPORT_HANDLE + 1}}}',
-        )
-        value.settle_tool(
-            CORR2,
-            tool="read_artifact",
-            status=-4,
-            provenance=ledger.NEXUS_PROVENANCE_FAILURE,
-            result_sha256=SHA_C,
-        )
-        snapshot = self.final(value, CORR3)
-        self.assertNotEqual(baseline_root, snapshot.task_root_sha256)
-
-    def test_read_success_binds_latest_draft_handle_content_and_size(self) -> None:
-        mutations = (
-            {"value0": REPORT_HANDLE + 1},
-            {"value1": 1},
-            {"value2": 6},
-            {"provenance": 1},
-            {"projection_sha256": SHA_A},
-        )
-        for mutation in mutations:
-            with self.subTest(mutation=mutation):
-                value = self.make()
-                self.root_prelude(value)
-                digest, handle, resource = self.child_success(
-                    value, tool="draft_report"
-                )
-                value.record_model_request(CORR2)
-                value.record_delivered_tool(
-                    CORR2,
-                    "read_artifact",
-                    arguments_canonical=f'{{"handle":{handle}}}',
-                )
-                settlement = {
-                    "status": 0,
-                    "value0": handle,
-                    "value1": resource,
-                    "value2": ledger.AGENT_NEXUS_ARTIFACT_REPORT,
-                    "provenance": 52,
-                    "projection_sha256": digest,
-                    "result_sha256": SHA_C,
-                }
-                settlement.update(mutation)
-                self.rejected(
-                    lambda v=value, data=settlement: v.settle_tool(
-                        CORR2, tool="read_artifact", **data
-                    )
-                )
-
-    def test_direct_read_changes_both_proof_roots(self) -> None:
-        baseline = self.make()
-        self.root_prelude(baseline)
-        self.child_success(baseline, tool="draft_report")
-        first = self.final(baseline, CORR2)
-
-        value = self.make()
-        self.root_prelude(value)
-        digest, handle, resource = self.child_success(
-            value, tool="draft_report"
-        )
-        value.record_model_request(CORR2)
-        value.record_delivered_tool(
-            CORR2, "read_artifact", arguments_canonical=f'{{"handle":{handle}}}'
-        )
-        value.settle_tool(
-            CORR2,
-            tool="read_artifact",
-            status=0,
-            value0=handle,
-            value1=resource,
-            value2=7,
-            provenance=52,
-            projection_sha256=digest,
-            result_sha256=SHA_C,
-        )
-        second = self.final(value, CORR3)
-        self.assertNotEqual(first.task_root_sha256, second.task_root_sha256)
-        self.assertNotEqual(first.artifact_root_sha256, second.artifact_root_sha256)
-
     def test_tool_specific_arguments_are_exact_and_body_free(self) -> None:
         malformed = (
-            ("source_search", '{"query":"x","extra":1}'),
-            ("source_search", '{ "query":"x"}'),
-            ("source_read", '{"source_id":"bad","start_line":1,"max_lines":1}'),
-            ("source_read", '{"source_id":"S0001","start_line":0,"max_lines":1}'),
-            ("inspect_runtime", '{"operation":"host"}'),
-            ("draft_report", '{"content":""}'),
-            ("read_artifact", '{"handle":0}'),
-            ("source_search", '{"query":"x","query":"y"}'),
+            ("search_files", '{"query":"x","extra":1}'),
+            ("search_files", '{ "query":"x"}'),
+            ("read_file", '{"max_lines":1,"path":"","start_line":1}'),
+            ("read_file", '{"max_lines":1,"path":"a","start_line":0}'),
+            ("read_file", '{"max_lines":65,"path":"a","start_line":1}'),
+            ("inspect_system", '{"operation":"host"}'),
+            ("search_files", '{"query":"x","query":"y"}'),
         )
         for tool, arguments in malformed:
             with self.subTest(tool=tool, arguments=arguments):
@@ -573,41 +379,42 @@ class NexusTaskLedgerTests(unittest.TestCase):
                     )
                 )
 
-    def test_draft_binds_exact_content_and_generation_handle(self) -> None:
-        for mutation in (
-            {"digest": SHA_A},
-            {"resource_used": 1},
-            {"artifact_handle": 5},
-            {"artifact_handle": (2 << 16) | 9},
-            {"provenance": 1},
+    def test_tool_string_bounds_use_codepoints_and_separate_transport_bytes(self) -> None:
+        for tool, arguments in (
+            ("search_files", {"query": "界" * 95, "path_prefix": "😀" * 111}),
+            ("search_files", {"query": '"' * 95}),
+            (
+                "read_file",
+                {"path": "😀" * 255, "start_line": 0xFFFFFFFF, "max_lines": 64},
+            ),
         ):
-            with self.subTest(mutation=mutation):
-                value = self.make()
-                self.root_prelude(value)
-                self.deliver(value, CORR1, "draft_report")
-                common = dict(
-                    task_id=1000,
-                    parent_task_id=ROOT,
-                    corr_id=CORR1,
-                    identity=ANALYST_ID,
-                    deadline_tick=5000,
+            with self.subTest(tool=tool):
+                self.assertIsInstance(
+                    ledger._tool_argument_binding(tool, arguments), str
                 )
-                value.record_event(self.event(**common, tick=20))
-                value.record_event(self.event(**common, kind="accepted", tick=21))
-                value.record_event(self.event(**common, kind="completed", tick=22))
-                artifact = {
-                    "digest": hashlib.sha256(b"Exact model report.").hexdigest(),
-                    "resource_used": len(b"Exact model report."),
-                    "artifact_handle": REPORT_HANDLE,
-                    "provenance": 52,
-                }
-                artifact.update(mutation)
-                self.rejected(
-                    lambda v=value, c=common, a=artifact: v.record_event(
-                        self.event(
-                            **c, kind="artifact_published", tick=23, **a
-                        )
-                    )
+        for tool, arguments in (
+            ("search_files", {"query": "界" * 96}),
+            ("search_files", {"query": "x", "path_prefix": "😀" * 112}),
+            ("search_files", {"query": "bad\0query"}),
+            (
+                "read_file",
+                {"path": "😀" * 256, "start_line": 1, "max_lines": 1},
+            ),
+            (
+                "read_file",
+                {"path": "x", "start_line": 0x100000000, "max_lines": 1},
+            ),
+        ):
+            with self.subTest(tool=tool, arguments=arguments):
+                with self.assertRaises(ledger.NexusTaskLedgerError):
+                    ledger._tool_argument_binding(tool, arguments)
+        for value in (
+            "x" * (ledger.TOOL_ARGUMENT_STRING_BYTES + 1),
+            "\x01" * 600,
+        ):
+            with self.assertRaises(ledger.NexusTaskLedgerError):
+                ledger._argument_text(
+                    value, "transport boundary", maximum=4000, empty=True
                 )
 
     def test_exact_success_provenance_for_every_task_tool(self) -> None:
@@ -615,11 +422,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
             with self.subTest(tool=tool):
                 value = self.make()
                 self.root_prelude(value)
-                if tool == "draft_report":
-                    # The draft-specific trace already exercises exact 52.
-                    self.child_success(value, tool=tool)
-                    continue
-                arguments, identity, expected = TOOL_SPEC[tool]
+                arguments, identity, expected, artifact_expected = TOOL_SPEC[tool]
                 value.record_delivered_tool(CORR1, tool, arguments_canonical=arguments)
                 common = dict(
                     task_id=1000 + index,
@@ -645,40 +448,40 @@ class NexusTaskLedgerTests(unittest.TestCase):
                 )
                 # Confirm the expected constant itself is not a loose nonzero mask.
                 self.assertIn(expected, (53, 60))
+                self.assertEqual(artifact_expected, expected)
 
-    def test_source_read_four_way_digest_and_provenance_binding(self) -> None:
+    def test_workspace_placeholder_requires_exact_settlement_binding(self) -> None:
         value = self.make()
         self.root_prelude(value)
-        self.child_success(value, tool="source_read")
+        self.child_success(value, tool="read_file")
         self.assertTrue(self.final(value, CORR2).sealed)
 
         for mutation in (
-            {"evidence_task_id": 1001},
-            {"evidence_provenance": 1},
-            {"evidence_artifact_sha256": SHA_C},
-            {"evidence_projection_sha256": SHA_C},
+            {"value0": 1},
+            {"value1": 1001},
+            {"value2": SYSTEM_ID[2]},
+            {"provenance": 53},
+            {"projection_sha256": SHA_C},
         ):
             with self.subTest(mutation=mutation):
                 value = self.make()
                 self.root_prelude(value)
-                self.child_success(value, tool="source_read", settle=False)
+                digest, _handle, _resource = self.child_success(
+                    value, tool="read_file", settle=False
+                )
                 data = {
                     "status": 0,
                     "value0": 0,
                     "value1": 1000,
                     "value2": RESEARCH_ID[2],
                     "provenance": 60,
-                    "projection_sha256": SHA_A,
+                    "projection_sha256": digest,
                     "result_sha256": SHA_B,
-                    "evidence_task_id": 1000,
-                    "evidence_provenance": 60,
-                    "evidence_artifact_sha256": SHA_A,
-                    "evidence_projection_sha256": SHA_A,
                 }
                 data.update(mutation)
                 self.rejected(
                     lambda v=value, d=data: v.settle_tool(
-                        CORR1, tool="source_read", **d
+                        CORR1, tool="read_file", **d
                     )
                 )
 
@@ -690,7 +493,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
 
         value = self.make()
         self.root_prelude(value)
-        self.deliver(value, CORR1, "source_search")
+        self.deliver(value, CORR1, "search_files")
         common = dict(
             task_id=1000,
             parent_task_id=ROOT,
@@ -706,7 +509,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
 
         value = self.make()
         self.root_prelude(value)
-        self.deliver(value, CORR1, "source_search")
+        self.deliver(value, CORR1, "search_files")
         value.record_event(self.event(**common, tick=20))
         self.rejected(
             lambda: value.record_event(
@@ -725,7 +528,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
     def test_assigned_may_fail_or_cancel_but_completed_needs_acceptance(self) -> None:
         value = self.make()
         self.root_prelude(value)
-        self.deliver(value, CORR1, "source_search")
+        self.deliver(value, CORR1, "search_files")
         common = dict(
             task_id=1000,
             parent_task_id=ROOT,
@@ -747,7 +550,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
 
         value = self.make()
         self.root_prelude(value)
-        self.deliver(value, CORR1, "source_search")
+        self.deliver(value, CORR1, "search_files")
         value.record_event(self.event(**common, tick=20))
         self.rejected(
             lambda: value.record_event(
@@ -757,7 +560,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
 
         value = self.make()
         self.root_prelude(value)
-        self.deliver(value, CORR1, "source_search")
+        self.deliver(value, CORR1, "search_files")
         value.begin_cancel(CORR1)
         value.record_event(self.event(**common, tick=20))
         value.record_event(
@@ -772,7 +575,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
     def test_indeterminate_latches_session_block_and_forbids_success(self) -> None:
         value = self.make()
         self.root_prelude(value)
-        self.deliver(value, CORR1, "source_search")
+        self.deliver(value, CORR1, "search_files")
         common = dict(
             task_id=1000,
             parent_task_id=ROOT,
@@ -814,7 +617,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         for _ in range(2):
             value = self.make()
             self.root_prelude(value)
-            self.deliver(value, CORR1, "source_search")
+            self.deliver(value, CORR1, "search_files")
 
             # nexus_execute_open_decision publishes the root failure through
             # the result pipe before the enclosing TOOL_EVENT is serialized.
@@ -830,7 +633,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
 
             value.settle_tool(
                 CORR1,
-                tool="source_search",
+                tool="search_files",
                 status=-18,
                 provenance=ledger.NEXUS_PROVENANCE_FAILURE,
                 result_sha256=SHA_B,
@@ -867,7 +670,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
 
             value.settle_tool(
                 CORR1,
-                tool="source_search",
+                tool="search_files",
                 status=-18,
                 provenance=ledger.NEXUS_PROVENANCE_FAILURE,
                 result_sha256=SHA_B,
@@ -895,7 +698,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
 
         value = self.make()
         self.root_prelude(value)
-        self.deliver(value, CORR1, "source_search")
+        self.deliver(value, CORR1, "search_files")
         value.record_event(self.event(**common, tick=20))
         self.rejected(
             lambda: value.record_event(
@@ -920,12 +723,12 @@ class NexusTaskLedgerTests(unittest.TestCase):
         self.rejected(
             lambda: value.settle_tool(
                 CORR1,
-                tool="source_search",
+                tool="search_files",
                 status=0,
                 value0=handle,
                 value1=1000,
                 value2=RESEARCH_ID[2],
-                provenance=TOOL_SPEC["source_search"][2],
+                provenance=TOOL_SPEC["search_files"][2],
                 projection_sha256=digest,
                 result_sha256=SHA_B,
                 session_blocked_marker=marker,
@@ -941,7 +744,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         self.rejected(
             lambda: value.settle_tool(
                 CORR1,
-                tool="source_search",
+                tool="search_files",
                 status=-18,
                 provenance=ledger.NEXUS_PROVENANCE_FAILURE,
                 result_sha256=SHA_B,
@@ -953,7 +756,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         marker = "artifact_cleanup_failed;session_blocked=1"
         value = self.make()
         self.root_prelude(value)
-        self.deliver(value, CORR1, "source_search")
+        self.deliver(value, CORR1, "search_files")
         common = dict(
             task_id=1000,
             parent_task_id=ROOT,
@@ -970,7 +773,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         )
         value.settle_tool(
             CORR1,
-            tool="source_search",
+            tool="search_files",
             status=-18,
             provenance=ledger.NEXUS_PROVENANCE_FAILURE,
             result_sha256=SHA_B,
@@ -985,7 +788,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         marker = "artifact_cleanup_failed;session_blocked=1"
         value = self.make()
         self.root_prelude(value)
-        self.deliver(value, CORR1, "source_search")
+        self.deliver(value, CORR1, "search_files")
         common = dict(
             task_id=1000,
             parent_task_id=ROOT,
@@ -1002,7 +805,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         )
         value.settle_tool(
             CORR1,
-            tool="source_search",
+            tool="search_files",
             status=-18,
             provenance=ledger.NEXUS_PROVENANCE_FAILURE,
             result_sha256=SHA_B,
@@ -1018,7 +821,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         marker = "artifact_cleanup_failed;session_blocked=1"
         value = self.make()
         self.root_prelude(value)
-        self.deliver(value, CORR1, "source_search")
+        self.deliver(value, CORR1, "search_files")
         value.begin_cancel(CORR1)
         common = dict(
             task_id=1000,
@@ -1058,7 +861,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         marker = "artifact_cleanup_failed;session_blocked=1"
         value = self.make()
         self.root_prelude(value)
-        self.deliver(value, CORR1, "source_search")
+        self.deliver(value, CORR1, "search_files")
         value.begin_cancel(CORR1)
         common = dict(
             task_id=1000,
@@ -1077,7 +880,7 @@ class NexusTaskLedgerTests(unittest.TestCase):
         self.assertEqual(value.snapshot().settled_tool_count, 0)
         value.settle_tool(
             CORR1,
-            tool="source_search",
+            tool="search_files",
             status=-18,
             provenance=ledger.NEXUS_PROVENANCE_FAILURE,
             result_sha256=SHA_B,
@@ -1244,13 +1047,12 @@ class NexusTaskLedgerTests(unittest.TestCase):
             {"value0": 1},
             {"provenance": 1},
             {"projection_sha256": SHA_A},
-            {"evidence_task_id": 1000},
         )
         for mutation in mutations:
             with self.subTest(mutation=mutation):
                 value = self.make()
                 self.root_prelude(value)
-                self.deliver(value, CORR1, "source_search")
+                self.deliver(value, CORR1, "search_files")
                 value.record_event(
                     self.event(
                         kind="failed", status=-18, tick=40, summary=marker
@@ -1265,30 +1067,9 @@ class NexusTaskLedgerTests(unittest.TestCase):
                 settlement.update(mutation)
                 self.rejected(
                     lambda v=value, data=settlement: v.settle_tool(
-                        CORR1, tool="source_search", **data
+                        CORR1, tool="search_files", **data
                     )
                 )
-
-        value = self.make()
-        self.root_prelude(value)
-        self.child_success(value, tool="draft_report")
-        value.record_model_request(CORR2)
-        value.record_delivered_tool(
-            CORR2,
-            "read_artifact",
-            arguments_canonical=f'{{"handle":{REPORT_HANDLE}}}',
-        )
-        self.rejected(
-            lambda: value.record_event(
-                self.event(
-                    corr_id=CORR2,
-                    kind="failed",
-                    status=-18,
-                    tick=80,
-                    summary=marker,
-                )
-            )
-        )
 
     def test_unknown_corr_duplicate_and_identity_mutations_reject(self) -> None:
         value = self.make()

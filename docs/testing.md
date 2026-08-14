@@ -1,6 +1,6 @@
 # AgentOS-uCore 测试说明
 
-项目测试按实际调用顺序分三步进行：先检查公开 `ABI` 和模块调用关系，再检查 Host 协议与状态机，最后在 RISC-V64 QEMU Guest 中执行真实的系统调用、文件系统、调度、资源管理和工作流。这些检查通过后，我们再运行故障注入和双平台对照，检查异常恢复与最终结果。
+项目测试按实际调用顺序分三步进行：先检查公开 `ABI` 和模块调用关系，再检查 Host 协议与状态机，最后在 RISC-V64 QEMU Guest 中执行真实的系统调用、文件系统、调度、资源管理和工作流。随后运行故障注入和双平台对照，检查异常恢复与最终结果。
 
 ## 文档索引
 
@@ -16,14 +16,14 @@
 
 ## 1. 测试内容与入口
 
-| 检查内容 | 检查方法 | 通过条件 | 入口 |
+| 检查内容 | 检查方法 | 预期结果 | 入口 |
 | --- | --- | --- | --- |
 | `ABI` 一致性 | RISC-V 探针、静态断言、固定的布局清单 | 内核态和用户态共用的结构、系统调用号和清单摘要一致 | `make agent-uapi-check` |
 | 模块调用关系 | 检查源码归属、调用关系和 workflow fence | Context、Live Query、workflow fence 等代码仍在实际调用链中 | `make agent-module-check` |
-| Host 控制程序 | 测试 Python 和 Shell 协议处理程序 | Console、Nexus 自主合约、Task ledger、源码证据认证、Execution Contract 和资源账户能正确处理输入 | `make local-host-selftests` |
+| Host 控制程序 | 测试 Python 和 Shell 协议处理程序 | Console、Nexus 通用合约、Host 工作区 broker、Task ledger、Execution Contract 和资源账户能正确处理输入 | `make local-host-selftests` |
 | Guest 功能 | 每个场景独立启动 QEMU，并执行真实的 RISC-V 系统调用 | Agent 身份、工具、Context、VFS、调度和 Task Channel 完成整个生命周期 | `make agentos-test` |
 | 权限与恢复 | 越权输入、容量耗尽、故障注入和重启 | 非法请求被拒绝；恢复后状态一致，资源能够回收 | 各专项 Guest 测试和故障测试 |
-| 长时间会话 | controller、observer 和固定 provider 回复配合运行 | Console 的工具/审批路径与 Nexus 的自主决策、brokered Task、证据结算、报告回读和关闭顺序正确 | Console、Nexus replay |
+| 交互会话 | controller、observer、固定回复或在线 Provider 配合运行 | Console 的工具/审批路径与 Nexus 的自主决策、工作区读取、多 Agent Task 和关闭顺序正确；在线自由演示能形成自然合理的回答 | Console replay、Nexus replay、Nexus 自由演示 |
 | 业务结果 | 两套镜像使用同一输入和同一结果判定程序 | 普通 uCore 与 AgentOS-uCore 得到相同结果 | `make dual-platform-run` |
 | 性能测试 | 多次独立启动；在同一次 QEMU 启动内配对；遍历参数组合 | 保存每个样本的用时、I/O、唤醒等待和公平性 | `one_shot_metrics/data/20260811` |
 
@@ -67,8 +67,8 @@ make local-host-selftests
 | Live Query | lifecycle generation、inode incarnation、索引调用、mutation barrier，以及 traversal/indexed 结果是否一致 |
 | Task Channel | `SQ/CQ` 协议、传输、single issuer、cancel、backpressure 和 resync 流程 |
 | 工作流调度 | 资源账户、scheduler model、阻塞唤醒和资源记账 |
-| Console 与 Nexus | 串口消息、本地 socket、controller/observer、任意用户任务、五工具自主选择、Task/artifact/evidence 协议和报告回读 |
-| Nexus Host 信任根 | Host/Guest 系统策略和工具目录 digest、Task ledger 转换与身份绑定、brokered worker 结果、源码 corpus revision/manifest attestation |
+| Console 与 Nexus | 串口消息、本地 socket、controller/observer、任意用户任务、三工具自主选择、Task、工作区结果与运行记录协议 |
+| Nexus Host 工作区 | Host/Guest 系统策略和工具目录一致性、工作区路径约束、有界搜索与分段读取、Task ledger 转换与身份绑定 |
 | 双平台工具 | 普通 uCore 与 AgentOS-uCore 的状态提取、结果比较和来源清单 |
 
 每项自测都会自行构造输入。测试失败时会直接列出缺失字段、错误的状态变化或有问题的源码调用点。
@@ -100,7 +100,7 @@ make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 | Task Channel | `agenttask_ucore` | Batch、Scalar V3、`SQ/CQ`、terminal `CQE`、backpressure、resync、UTF-8 快照导入、OWNED/BORROWED 生命周期、fd transaction pin、重复 `cancel` 和 hard deadline |
 | VFS、结果发布与资源 | `agentvfs_ucore`、`agentpublish_ucore`、`iobudget_ucore`、`usersafety_ucore` | `fstat` 后重新授权、I/O 来源、结果文件原子接入、同名不覆盖、非法发布零副作用和资源回收 |
 | 综合运行 | `labdemo_ucore`、`ch8_cow_ucore` | 三个 Agent 协作、元数据、Context、时间线和基础 `COW` 行为 |
-| 赛题五项综合验收 | `agenteval_ucore` | 在同一 Guest 中依次走过 Agent 创建与 Context、结构化工具、上下文路径、文件查询和 Agent Loop，并由 Host 核对挑战值与结果指纹 |
+| 赛题五项综合测试 | `agenteval_ucore` | 在同一 Guest 中依次走过 Agent 创建与 Context、结构化工具、上下文路径、文件查询和 Agent Loop，并由 Host 确认挑战值与预期输出 |
 
 以 `agentfinal_ucore` 为例，测试必须同时看到 `context_commit_lane=1 sequence=1..3 hash=1`、rollback、active path、FIFO 和只读映射等标志行。`agentcontract_ucore` 还要检查 DAG、provenance、planned effect、deadline 和资源归零标志。完成行只表明进程已经收尾，前面的标志行才表明待测功能已经运行。
 
@@ -128,7 +128,7 @@ AGENT_TEST_CASE=agent_eevdf_ucore \
 
 单独运行时仍会重新生成文件系统镜像，并核对该场景要求的标志行。通过后输出 `[agent-tests] targeted case passed`。如需保存串口原始输出，可同时设置 `AGENT_TEST_GUEST_LOG_FILE=/absolute/path/guest.log`。
 
-`agentpublish_ucore` 的 6 条校验标志均已通过。程序读回 32 字节 header、96 字节 payload 和紧随其后的 EOF；两个同 scope 进程竞争同名文件时，结果恰好为一个 `OK` 和一个 `DUPLICATE`，正式文件不被覆盖。错误的 pointer、path、size、version 或保留字段不会留下正式文件名。Nexus 对相同字节通过正式路径回读收敛，对不同内容保持失败；非法请求与重复发布不增加资源计数，删除两份测试结果后 inode 和 block 回到基线。
+`agentpublish_ucore` 的 6 条校验标志均已通过。程序读回 32 字节 header、96 字节 payload 和紧随其后的 EOF；两个同 scope 进程竞争同名文件时，结果恰好为一个 `OK` 和一个 `DUPLICATE`，正式文件不被覆盖。错误的 pointer、path、size、version 或保留字段不会留下正式文件名。发布调用方对相同字节通过正式路径回读收敛，对不同内容保持失败；非法请求与重复发布不增加资源计数，删除两份测试结果后 inode 和 block 回到基线。
 
 五项综合评测（Task 1-5）使用单独入口：
 
@@ -146,7 +146,7 @@ AGENT_TEST_CASE=agenteval_ucore \
 | Agent 进程创建与地址空间设计 | 受控创建 Agent，读取 identity 与 Context header，直接读内核发布页并写用户缓存页 | identity、角色、Context 基址与容量符合本次启动；前 6 页由内核发布，第 7 页可由 Guest 直接写入，普通进程与 Agent 进程可以同时运行 |
 | Agent-OS 内核结构化交互接口与工具调用协议 | 枚举 Tool Registry，调用 `echo`、`query_process`、`capability_check`，再提交未知工具、编号与名称不匹配、重复参数和错误类型 | 正常请求得到版本化结构结果，错误请求被区分为明确状态；Tool Registry 与 schema 真正参与了内核解析，而不是由测试程序自行拼出结果 |
 | 上下文路径管理 | 连续执行 6 轮工具调用，分别用 syscall 与映射页读取，随后回滚、清空，并追加 133 条记录 | 两种读取路径逐条一致；回滚产生新分支，清空后可见路径归零；超过 128 条后按 FIFO 保留后缀且不发生 OOM，说明定长 Context 可以支撑持续 Agent Loop |
-| 面向 Agent 查询优化的文件系统扩展 | 创建真实文件并登记属性，执行多条件 AND、summary 模糊匹配、内容 digest/preview 和属性删除 | 返回项绑定真实 inode 且顺序、去重和摘要一致；删除一个或全部属性后结果集合随之改变，说明查询走的是 VFS 文件身份与 Metadata Catalog，而不是固定样例表 |
+| 面向 Agent 查询优化的文件系统扩展 | 创建真实文件并登记属性，执行多条件 AND、summary 模糊匹配、内容摘要/preview 和属性删除 | 返回项绑定真实 inode 且顺序、去重和摘要一致；删除一个或全部属性后结果集合随之改变，说明查询走的是 VFS 文件身份与 Metadata Catalog，而不是固定样例表 |
 | Agent Loop 内核运行机制 | 建立受信消息路由，让等待线程先睡眠再由另一 Agent 延迟唤醒；动态调整并停止 heartbeat | 等待期间 wall tick 前进且进程 sleep/wake 计数增加，消息到达后及时返回；heartbeat 周期调整生效，停止后由测试程序显式取走已入队的 timer 事件，再次等待得到 `TIMEOUT`，说明无事件时不会忙轮询 |
 
 这一组测试把五项机制放在同一个 Agent 生命周期中，可以看到前一阶段产生的 identity、Context 和文件状态如何继续供下一阶段使用。它不能替代各模块的边界与故障测试，但能排除“各模块单独通过、合在一起却无法运行”的情况。
@@ -198,13 +198,19 @@ make agentos-nexus-replay TOOLPREFIX=riscv64-linux-gnu-
 
 Console replay 检查脚本化多轮会话中 `query_file`、`echo` 和 `send_message` 的工具结果，以及审批记录、本次启动的内核时间线和正常关闭。
 
-Nexus replay 把 fixture 视为一次自主运行的协议捕获，而不是产品的固定业务流程。验证器接受“不用工具直接回答”和“模型自行选择工具”两类路径；对后者逐轮核对模型只返回一个工具调用或最终答案，不把 fixture 中的顺序和调用次数当成 runtime 策略。公开表面必须恰好包含 `source_search`、`source_read`、`inspect_runtime`、`draft_report` 和 `read_artifact` 五个工具。
+Nexus replay 是固定的协议交互回归。它接受“不用工具直接回答”和“模型自行选择工具”两类路径；对后者逐轮检查模型只返回一个工具调用或最终答案，不把回放数据中的顺序、调用次数或业务结论当成 runtime 策略。公开表面只包含 `search_files`、`read_file` 和 `inspect_system` 三个通用只读工具，也不要求在同一次回归中巡游全部工具。
 
-每个 Nexus 轮次都由 Host Task ledger 重放 root/子 Task DAG、内核身份、状态迁移、工具参数摘要、brokered artifact 和 terminal root。`source_search` 只产生发现数据；`source_read` 还必须由 Host 在启动 QEMU 前加载的不可变 `build_source_snapshot` 重放，并将 citation、revision、manifest digest、行范围和 artifact digest 绑定到 evidence root。`inspect_runtime` 只能证明当前 Guest boot 观察，不会被提升成 attested source fact。`draft_report` 的模型文本由 Analyst worker 原样保存，`read_artifact` 必须回读本轮最新句柄的完全相同字节，而且两个工具都不执行外部发布。
+文件请求由 Coordinator 通过内核 `MESSAGE` 和 `N1` 子 Task 交给 Research，系统请求则交给 System。Host workspace broker 在本次会话指定的根目录内执行实际的只读搜索或分段读取，并把结果提供给模型继续决策；Task ledger 检查 root/child 关系、执行者身份和状态迁移。回归同时覆盖路径跳转、链接逃逸、二进制文件、缺失文件和输出上限等 Host 边界。
 
 会话协商的上限为每轮 16 个模型决策与 32 次可重试 provider 错误。Nexus 生成请求必须保持 `max_tokens=114514`；DeepSeek V4 还要求 `thinking.type=enabled` 和 `reasoning_effort=max`。测试确认工具轮次间的 provider-private `reasoning_content` 只原样回传给 provider，不出现在 Guest、controller 或 telemetry。生成预算与公开输出界限分开：Guest 返回的最终正文仍不得超过 2048 个 UTF-8 字节。
 
-两项 replay 都会真正启动 QEMU Guest。固定数据只替换在线 provider 回复；工具执行、Context sequence、Task/evidence 记录、controller/observer 投影和会话关闭都由本次运行产生。具体操作见[运行方法](usage.md)。
+两项 replay 都会真正启动 QEMU Guest。固定数据只替换在线 provider 回复；工具执行、Context sequence、Task 与运行记录、controller/observer 投影和会话关闭都由本次运行产生。具体操作见[运行方法](usage.md)。
+
+Nexus 自由演示也属于交互会话测试，但目的不同。它连接在线 DeepSeek，使用 AgentOS 改进问题作为一类示例，直接观察模型能否自己选择通用工具、读到相关实现并给出一整段自然、有道理的结论。这里不要求答案的每个细节完全一致，也不检查预设的工具顺序；如果回答持续偏离问题，应优先调整通用 system policy、工作区读取或消息协作能力，而不是增加只服务该题目的专用模块。
+
+```bash
+make agentos-nexus-demo TOOLPREFIX=riscv64-linux-gnu-
+```
 
 ## 7. 双平台对照测试
 

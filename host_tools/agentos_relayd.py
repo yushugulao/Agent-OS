@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Long-running AgentOS QEMU/model relay daemon.
 
-The daemon owns transport, TLS and terminal fan-out only.  Conversation
-history, tool selection and tool execution remain in the Guest Agent loop.
+The daemon owns transport, TLS, terminal fan-out and bounded Host workspace
+reads. Conversation history and tool selection remain in the Guest Agent loop.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import hmac
 import json
@@ -17,12 +18,11 @@ import re
 import secrets
 import signal
 import socket
-import stat
 import sys
 import threading
 import time
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
@@ -35,7 +35,7 @@ if str(_HERE) not in sys.path:
 import agentos_local_protocol as local  # noqa: E402
 import agentos_nexus_contract as nexus_contract  # noqa: E402
 import agentos_nexus_task_ledger as nexus_task_ledger  # noqa: E402
-import agentos_source_attestation as source_attestation  # noqa: E402
+import agentos_workspace as workspace  # noqa: E402
 import guest_llm_relay as relay  # noqa: E402
 
 
@@ -62,7 +62,9 @@ NEXUS_READY_LINE = b"agentnexus_ucore: relay_ready=1 nexus=1"
 NEXUS_MAX_ROUNDS = 16
 NEXUS_MAX_RETRIES = 32
 NEXUS_MAX_PROVIDER_INFLIGHT = 2
-NEXUS_MAX_HISTORY_PROJECTIONS = 4
+NEXUS_HISTORY_TURNS = 4
+NEXUS_MAX_HISTORY_PROJECTIONS = NEXUS_HISTORY_TURNS
+NEXUS_DIALOGUE_HISTORY_TURNS = 2
 NEXUS_AUTONOMY_CONTRACT = (
     nexus_contract.CONTRACT_VERSION,
     nexus_contract.SYSTEM_POLICY_SHA256,
@@ -73,20 +75,31 @@ NEXUS_TOOL_CATALOG = [dict(tool) for tool in nexus_contract.TOOLS]
 NEXUS_TOOL_CATALOG_JSON = relay.canonical_json_bytes(NEXUS_TOOL_CATALOG).decode("utf-8")
 NEXUS_TOOL_NAMES = frozenset(str(tool["name"]) for tool in NEXUS_TOOL_CATALOG)
 NEXUS_CONTROL_CONTEXT_PREFIX = nexus_contract.CONTROL_CONTEXT_PREFIX
+NEXUS_FINAL_ONLY_SYSTEM_SUFFIX = (
+    "Trusted relay final-response instruction: answer the user's request now with "
+    "a natural, direct conclusion in the user's language. Do not call, request, "
+    "or describe any tool. Do not output DSML, tool_calls, invoke, parameter, or "
+    "any tool markup. Keep the answer under 1800 UTF-8 bytes."
+)
+NEXUS_DSML_TOOL_CALLS_OPEN = "<\uff5c\uff5cDSML\uff5c\uff5ctool_calls>"
+NEXUS_DSML_TOOL_CALLS_CLOSE = "</\uff5c\uff5cDSML\uff5c\uff5ctool_calls>"
+NEXUS_DSML_INVOKE_OPEN = "<\uff5c\uff5cDSML\uff5c\uff5cinvoke "
+NEXUS_DSML_INVOKE_CLOSE = "</\uff5c\uff5cDSML\uff5c\uff5cinvoke>"
 NEXUS_PROVENANCE_ALL = (1 << 6) - 1
-NEXUS_PROVENANCE_UNTRUSTED_FILE_DATA = 1 << 3
 NEXUS_SUCCESS_PROVENANCE = {
-    "source_search": 60,
-    "source_read": 60,
-    "inspect_runtime": 53,
-    "draft_report": 52,
-    "read_artifact": 52,
+    "search_files": 60,
+    "read_file": 60,
+    "inspect_system": 53,
 }
-NEXUS_SOURCE_PATH_PREFIXES = ("os/", "include/", "user/lib/", "user/include/")
-NEXUS_SOURCE_SEARCH_NOT_FOUND_STATUS = -5
-NEXUS_SOURCE_SEARCH_NO_MATCHES_RESULT = "source_search_no_matches;replan_allowed=1"
-NEXUS_SOURCE_SEARCH_SUCCESS_RESULT = "source_evidence_ready;transient=1"
-NEXUS_FEATURES = ("task_event_v1", "evidence_event_v1")
+NEXUS_WORKSPACE_TOOLS = frozenset(("search_files", "read_file"))
+NEXUS_WORKSPACE_REQUEST_RESULT = "workspace_request_ready;provided_by_host=1"
+NEXUS_WORKSPACE_RESULT_TRUST = "host_workspace_untrusted"
+NEXUS_WORKSPACE_PLACEHOLDER_TRUST = "host_workspace_placeholder"
+NEXUS_WORKSPACE_RESULT_MAX_BYTES = 2800
+NEXUS_FILE_READ_MAX_LINES = 64
+NEXUS_RESULT_VALUE_METRIC_FIRST = 140
+NEXUS_RESULT_VALUE_METRIC_LAST = 145
+NEXUS_FEATURES = ("task_event_v1",)
 NEXUS_FINAL_PROOF_FIELDS = (
     "version",
     "turn_id",
@@ -95,7 +108,6 @@ NEXUS_FINAL_PROOF_FIELDS = (
     "final_request_sha256",
     "final_response_sha256",
     "provider_proof_sha256",
-    "final_evidence_root",
     "final_task_root",
     "final_artifact_root",
 )
@@ -117,33 +129,7 @@ NEXUS_TOOL_EVENT_FIELDS = frozenset(
         "result_sha256",
     )
 )
-NEXUS_EVIDENCE_EVENT_FIELDS = frozenset(
-    (
-        "version",
-        "turn_id",
-        "request_id",
-        "corr_id",
-        "task_id",
-        "provenance",
-        "event",
-        "tool",
-        "scope",
-        "corpus_revision",
-        "manifest_sha256",
-        "source_id",
-        "path",
-        "start_line",
-        "end_line",
-        "citation",
-        "full_sha256",
-        "chunk_sha256",
-        "artifact_sha256",
-        "projection_sha256",
-    )
-)
-NEXUS_GUEST_KINDS = relay.WIRE_V2_GUEST_KINDS | frozenset(
-    ("TASK_EVENT", "EVIDENCE_EVENT")
-)
+NEXUS_GUEST_KINDS = relay.WIRE_V2_GUEST_KINDS | frozenset(("TASK_EVENT",))
 NEXUS_WIRE_KINDS = relay.WIRE_V2_HOST_KINDS | NEXUS_GUEST_KINDS
 TASK_EVENT_REQUIRED_FIELDS = frozenset(
     (
@@ -194,7 +180,7 @@ TASK_EVENTS = frozenset(
 TASK_STATES = frozenset(
     ("assigned", "accepted", "running", "waiting", "completed", "failed", "cancelled")
 )
-TASK_ROLES = frozenset(("coordinator", "system", "research", "analyst", "relay"))
+TASK_ROLES = frozenset(("coordinator", "system", "research", "relay"))
 KERNEL_AUDIT_REQUIRED_FIELDS = frozenset(
     (
         "source",
@@ -322,17 +308,6 @@ OBSERVER_TELEMETRY_FIELDS = frozenset(
         "request_sha256",
         "raw_guest_request_sha256",
         "history_bindings",
-        "evidence_event",
-        "scope",
-        "corpus_revision",
-        "manifest_sha256",
-        "source_id",
-        "path",
-        "start_line",
-        "end_line",
-        "citation",
-        "full_sha256",
-        "chunk_sha256",
         "projection_sha256",
         "result_sha256",
         "request_contains_user",
@@ -358,7 +333,6 @@ OBSERVER_TELEMETRY_FIELDS = frozenset(
         "adaptation",
         "forced_tool",
         "selected_tool_sha256",
-        "final_evidence_root",
         "final_request_sha256",
         "final_corr_id",
         "final_response_sha256",
@@ -532,7 +506,7 @@ def _nexus_tool_text(
     value: object,
     label: str,
     *,
-    maximum: int,
+    maximum_codepoints: int,
     empty: bool = False,
 ) -> str:
     if not isinstance(value, str) or (not empty and not value) or "\0" in value:
@@ -550,7 +524,16 @@ def _nexus_tool_text(
             f"{label} is not valid bounded text",
             retryable=True,
         ) from None
-    if len(raw) > maximum or escaped_bytes > maximum:
+    if len(value) > maximum_codepoints:
+        raise relay.ProviderError(
+            "BAD_TOOL_ARGUMENTS",
+            f"{label} exceeds its Nexus schema maxLength",
+            retryable=True,
+        )
+    if (
+        len(raw) > relay.MAX_NEXUS_TOOL_ARGUMENT_STRING_BYTES
+        or escaped_bytes > relay.MAX_NEXUS_TOOL_ARGUMENT_STRING_BYTES
+    ):
         raise relay.ProviderError(
             "TOOL_ARGUMENT_BUDGET",
             f"{label} exceeds the Nexus Guest request budget",
@@ -585,86 +568,61 @@ def _validate_nexus_tool_arguments(
             retryable=True,
         )
     keys = set(arguments)
-    if tool == "source_search":
+    if tool == "search_files":
         if not {"query"}.issubset(keys) or not keys.issubset(
             {"query", "path_prefix"}
         ):
             raise relay.ProviderError(
                 "BAD_TOOL_ARGUMENTS",
-                "source_search arguments do not match the Nexus contract",
-                retryable=True,
-            )
-        _nexus_tool_text(arguments["query"], "source_search.query", maximum=95)
-        if "path_prefix" in arguments:
-            _nexus_tool_text(
-                arguments["path_prefix"],
-                "source_search.path_prefix",
-                maximum=111,
-                empty=True,
-            )
-    elif tool == "source_read":
-        if keys != {"source_id", "start_line", "max_lines"}:
-            raise relay.ProviderError(
-                "BAD_TOOL_ARGUMENTS",
-                "source_read arguments do not match the Nexus contract",
-                retryable=True,
-            )
-        source_id = _nexus_tool_text(
-            arguments["source_id"], "source_read.source_id", maximum=5
-        )
-        if re.fullmatch(r"S[0-9]{4}", source_id) is None:
-            raise relay.ProviderError(
-                "BAD_TOOL_ARGUMENTS",
-                "source_read.source_id is malformed",
-                retryable=True,
-            )
-        _nexus_tool_u32(arguments["start_line"], "source_read.start_line", minimum=1)
-        _nexus_tool_u32(
-            arguments["max_lines"], "source_read.max_lines", minimum=1, maximum=12
-        )
-    elif tool == "inspect_runtime":
-        if keys != {"operation"}:
-            raise relay.ProviderError(
-                "BAD_TOOL_ARGUMENTS",
-                "inspect_runtime arguments do not match the Nexus contract",
-                retryable=True,
-            )
-        operation = _nexus_tool_text(
-            arguments["operation"], "inspect_runtime.operation", maximum=13
-        )
-        if operation not in ("system_status", "processes", "context"):
-            raise relay.ProviderError(
-                "BAD_TOOL_ARGUMENTS",
-                "inspect_runtime.operation is unsupported",
-                retryable=True,
-            )
-    elif tool == "draft_report":
-        if not {"content"}.issubset(keys) or not keys.issubset(
-            {"content", "title"}
-        ):
-            raise relay.ProviderError(
-                "BAD_TOOL_ARGUMENTS",
-                "draft_report arguments do not match the Nexus contract",
+                "search_files arguments do not match the Nexus contract",
                 retryable=True,
             )
         _nexus_tool_text(
-            arguments["content"], "draft_report.content", maximum=2800
+            arguments["query"],
+            "search_files.query",
+            maximum_codepoints=95,
+            empty=True,
         )
-        if "title" in arguments:
+        if "path_prefix" in arguments:
             _nexus_tool_text(
-                arguments["title"],
-                "draft_report.title",
-                maximum=128,
+                arguments["path_prefix"],
+                "search_files.path_prefix",
+                maximum_codepoints=111,
                 empty=True,
             )
-    elif tool == "read_artifact":
-        if keys != {"handle"}:
+    elif tool == "read_file":
+        if keys != {"path", "start_line", "max_lines"}:
             raise relay.ProviderError(
                 "BAD_TOOL_ARGUMENTS",
-                "read_artifact arguments do not match the Nexus contract",
+                "read_file arguments do not match the Nexus contract",
                 retryable=True,
             )
-        _nexus_tool_u32(arguments["handle"], "read_artifact.handle", minimum=1)
+        _nexus_tool_text(
+            arguments["path"], "read_file.path", maximum_codepoints=255
+        )
+        _nexus_tool_u32(arguments["start_line"], "read_file.start_line", minimum=1)
+        _nexus_tool_u32(
+            arguments["max_lines"], "read_file.max_lines", minimum=1,
+            maximum=NEXUS_FILE_READ_MAX_LINES,
+        )
+    elif tool == "inspect_system":
+        if keys != {"operation"}:
+            raise relay.ProviderError(
+                "BAD_TOOL_ARGUMENTS",
+                "inspect_system arguments do not match the Nexus contract",
+                retryable=True,
+            )
+        operation = _nexus_tool_text(
+            arguments["operation"],
+            "inspect_system.operation",
+            maximum_codepoints=9,
+        )
+        if operation not in ("status", "processes", "context"):
+            raise relay.ProviderError(
+                "BAD_TOOL_ARGUMENTS",
+                "inspect_system.operation is unsupported",
+                retryable=True,
+            )
     else:
         raise relay.ProviderError(
             "UNADVERTISED_TOOL",
@@ -809,36 +767,25 @@ def _history_records(request: Mapping[str, object]) -> dict[int, dict[str, objec
         projection_keys = tuple(
             key
             for key in (
-                "discovery_projection",
-                "source_evidence",
+                "workspace_request",
                 "runtime_observation",
             )
             if key in wrapper
         )
         if len(projection_keys) > 1:
             raise relay.WireProtocolError(
-                "BAD_REQUEST", "tool history has ambiguous evidence projections"
+                "BAD_REQUEST", "tool history has ambiguous data projections"
             )
         projection = wrapper.get(projection_keys[0]) if projection_keys else None
-        model_content = wrapper.get("model_authored_content")
         if projection is not None and not isinstance(projection, str):
             raise relay.WireProtocolError(
-                "BAD_REQUEST", "verified projection must be text"
-            )
-        if model_content is not None and not isinstance(model_content, str):
-            raise relay.WireProtocolError(
-                "BAD_REQUEST", "model-authored content must be text"
-            )
-        if projection is not None and model_content is not None:
-            raise relay.WireProtocolError(
-                "BAD_REQUEST", "tool history has ambiguous model content"
+                "BAD_REQUEST", "tool data projection must be text"
             )
         is_error = message.get("is_error", False)
         if not isinstance(is_error, bool):
             raise relay.WireProtocolError(
                 "BAD_REQUEST", "tool history error marker is malformed"
             )
-        bound_content = projection if projection is not None else model_content
         records[corr_id] = {
             "index": index,
             "tool": call["tool"],
@@ -847,8 +794,8 @@ def _history_records(request: Mapping[str, object]) -> dict[int, dict[str, objec
             "wrapper_canonical": relay.canonical_json_bytes(wrapper).decode("utf-8"),
             "is_error": is_error,
             "projection_sha256": (
-                hashlib.sha256(bound_content.encode("utf-8")).hexdigest()
-                if bound_content is not None
+                hashlib.sha256(projection.encode("utf-8")).hexdigest()
+                if projection is not None
                 else ""
             ),
         }
@@ -870,6 +817,91 @@ def _history_bindings(
     return tuple(values[-NEXUS_MAX_HISTORY_PROJECTIONS:])
 
 
+def _workspace_request_projection(tool: str) -> str:
+    return (
+        f"workspace_request={tool}\n"
+        "result_delivery=host_provider_context\n"
+        "content_untrusted=1\n"
+    )
+
+
+def _inspect_system_projection(
+    operation: object, result_metrics: Mapping[int, object]
+) -> str:
+    specifications = {
+        "status": (
+            "get_system_status",
+            "process_count",
+            "agent_count",
+            "uptime_tick",
+        ),
+        "processes": (
+            "query_process",
+            "process_count",
+            "agent_count",
+            "runnable_count",
+        ),
+        "context": (
+            "ctx_stat",
+            "context_base",
+            "context_size",
+            "call_count",
+        ),
+    }
+    specification = specifications.get(operation)
+    expected_codes = set(
+        range(NEXUS_RESULT_VALUE_METRIC_FIRST, NEXUS_RESULT_VALUE_METRIC_LAST + 1)
+    )
+    if specification is None or set(result_metrics) != expected_codes:
+        raise relay.WireProtocolError(
+            "BAD_TOOL_EVENT", "system observation result metrics are incomplete"
+        )
+    values: list[int] = []
+    for low_code in range(
+        NEXUS_RESULT_VALUE_METRIC_FIRST,
+        NEXUS_RESULT_VALUE_METRIC_LAST + 1,
+        2,
+    ):
+        low = result_metrics[low_code]
+        high = result_metrics[low_code + 1]
+        if (
+            not isinstance(low, int)
+            or isinstance(low, bool)
+            or not 0 <= low <= 0xFFFFFFFF
+            or not isinstance(high, int)
+            or isinstance(high, bool)
+            or not 0 <= high <= 0xFFFFFFFF
+        ):
+            raise relay.WireProtocolError(
+                "BAD_TOOL_EVENT", "system observation result metric is malformed"
+            )
+        values.append(low | (high << 32))
+    tool, first_label, second_label, omitted = specification
+    return (
+        "scope=this_boot_guest_runtime\n"
+        "content_untrusted=1\n"
+        f"operation={operation}\n"
+        f"tool={tool}\n"
+        "status=0\n"
+        f"{first_label}={values[0]}\n"
+        f"{second_label}={values[1]}\n"
+        f"volatile_fields_omitted={omitted}\n"
+    )
+
+
+def _bounded_workspace_result(value: object) -> str:
+    if not isinstance(value, str):
+        return "workspace_error=invalid_host_result"
+    value = value.replace("\0", "[NUL]")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        return "workspace_error=invalid_host_result"
+    if len(encoded) > NEXUS_WORKSPACE_RESULT_MAX_BYTES:
+        return "workspace_error=host_result_too_large"
+    return value
+
+
 @dataclass
 class ActiveTurn:
     turn_id: int
@@ -877,6 +909,7 @@ class ActiveTurn:
     generation: int
     user_content_sha256: str
     user_bytes: int
+    user_content: str = field(repr=False)
     rounds: int = 0
     retries: int = 0
     attempts: int = 0
@@ -894,6 +927,8 @@ class ProviderCompletion:
     history_bindings: tuple[dict[str, object], ...]
     user_message_index: int
     model: str
+    # Host-private delivery policy; never part of the Guest request/proof.
+    final_only: bool
     reply: relay.ModelReply | None
     error: relay.RelayError | None
 
@@ -928,6 +963,18 @@ def _nexus_model_error(error: relay.RelayError) -> relay.RelayError:
     return error
 
 
+def _is_dsml_tool_calls_markup(content: str) -> bool:
+    """Recognize a final-only DeepSeek tool call rendered as literal text."""
+
+    value = content.strip()
+    return (
+        value.startswith(NEXUS_DSML_TOOL_CALLS_OPEN)
+        and value.endswith(NEXUS_DSML_TOOL_CALLS_CLOSE)
+        and NEXUS_DSML_INVOKE_OPEN in value
+        and NEXUS_DSML_INVOKE_CLOSE in value
+    )
+
+
 class InteractiveSession:
     """Protocol-v2 state machine independent of QEMU and local socket plumbing."""
 
@@ -945,7 +992,7 @@ class InteractiveSession:
         guest_profile: str = "agentlive",
         provider_name: str | None = None,
         model_name: str | None = None,
-        source_attestor: source_attestation.SourceAttestation | None = None,
+        workspace_reader: workspace.WorkspaceReader | None = None,
     ) -> None:
         if (
             not isinstance(guest_profile, str)
@@ -1014,9 +1061,9 @@ class InteractiveSession:
         self.telemetry_sink = telemetry_sink
         self.session_id = session_id or secrets.token_hex(16)
         self.guest_profile = guest_profile
-        if guest_profile != "nexus" and source_attestor is not None:
-            raise ValueError("source attestation is only valid for the Nexus profile")
-        self.source_attestor = source_attestor
+        if guest_profile != "nexus" and workspace_reader is not None:
+            raise ValueError("workspace access is only valid for the Nexus profile")
+        self.workspace_reader = workspace_reader
         self.approval_timeout_seconds = APPROVAL_TIMEOUT_SECONDS
         self.max_tool_arguments = (
             relay.MAX_NEXUS_TOOL_ARGUMENTS
@@ -1073,11 +1120,8 @@ class InteractiveSession:
         self._last_model_response_corr = 0
         self._last_final_response: tuple[int, str] | None = None
         self._nexus_tool_ledger: dict[int, dict[str, object]] = {}
-        self._staged_evidence: dict[
-            int, tuple[dict[str, object], Mapping[str, object]]
-        ] = {}
+        self._nexus_dialogue_history: list[tuple[str, str]] = []
         self._last_final_request_sha256 = ""
-        self._final_evidence_root = ""
         self._nexus_final_frozen = False
         self._approval_bindings: set[tuple[int, int, int, str, str]] = set()
         self._model_job: tuple[int, int] | None = None
@@ -1180,6 +1224,7 @@ class InteractiveSession:
             self._generation,
             user_content_sha256,
             len(message_bytes),
+            message,
         )
         if self._nexus_task_ledger is not None:
             try:
@@ -1190,9 +1235,7 @@ class InteractiveSession:
         self._last_model_response_corr = 0
         self._last_final_response = None
         self._nexus_tool_ledger.clear()
-        self._staged_evidence.clear()
         self._last_final_request_sha256 = ""
-        self._final_evidence_root = ""
         self._nexus_final_frozen = False
         self._nexus_cancel_pending = False
         self._active_last_corr = 0
@@ -1265,9 +1308,7 @@ class InteractiveSession:
         if not terminal_outcome_owned:
             self._last_model_response_corr = 0
             self._last_final_response = None
-            self._staged_evidence.clear()
             self._last_final_request_sha256 = ""
-            self._final_evidence_root = ""
             self._nexus_final_frozen = False
             self._last_final_response_sha256 = ""
             self._last_final_provider_proof_sha256 = ""
@@ -1402,6 +1443,7 @@ class InteractiveSession:
     def close(self, reason: str = "user_requested") -> None:
         if self.closed or self.closing:
             return
+        self._nexus_dialogue_history.clear()
         self.closing = True
         self._close_reason = reason
         self._generation += 1
@@ -1447,7 +1489,6 @@ class InteractiveSession:
             **(
                 {
                     "TASK_EVENT": self._task_event,
-                    "EVIDENCE_EVENT": self._evidence_event,
                 }
                 if self.guest_profile == "nexus"
                 else {}
@@ -1566,6 +1607,19 @@ class InteractiveSession:
                     )
                 continue
             assert completion.reply is not None
+            if completion.final_only and (
+                completion.reply.type != "final"
+                or _is_dsml_tool_calls_markup(completion.reply.content)
+            ):
+                self._send_model_error(
+                    envelope,
+                    relay.ProviderError(
+                        "TOOL_CHOICE_MISMATCH",
+                        "provider did not return a usable final answer in the Nexus final-only slot",
+                        retryable=True,
+                    ),
+                )
+                continue
             if (
                 self.guest_profile == "nexus"
                 and completion.reply.type == "tool_use"
@@ -1685,34 +1739,6 @@ class InteractiveSession:
                 except nexus_task_ledger.NexusTaskLedgerError as error:
                     raise _nexus_ledger_wire_error(error) from None
                 self._last_final_request_sha256 = completion.request_sha256
-                evidence_bindings: list[Mapping[str, object]] = []
-                for binding in completion.history_bindings:
-                    corr_id = int(binding["tool_corr_id"])
-                    entry = self._nexus_tool_ledger.get(corr_id, {})
-                    evidence_digest = entry.get("evidence_projection_sha256")
-                    if (
-                        binding.get("tool") == "source_read"
-                        and isinstance(evidence_digest, str)
-                        and hmac.compare_digest(
-                            evidence_digest,
-                            str(binding["projection_sha256"]),
-                        )
-                    ):
-                        attested_binding = entry.get("attested_evidence_binding")
-                        if not isinstance(attested_binding, Mapping):
-                            raise relay.WireProtocolError(
-                                "BAD_REQUEST",
-                                "final source evidence lacks its Host attestation",
-                            )
-                        evidence_bindings.append(attested_binding)
-                try:
-                    self._final_evidence_root = (
-                        source_attestation.canonical_evidence_root(evidence_bindings)
-                    )
-                except source_attestation.SourceAttestationError as error:
-                    raise relay.WireProtocolError(
-                        "BAD_REQUEST", "final source evidence root is malformed"
-                    ) from error
                 self._nexus_final_frozen = True
             response_sha256 = hashlib.sha256(
                 relay.canonical_json_bytes(response_payload)
@@ -1743,7 +1769,6 @@ class InteractiveSession:
                     proof.update(_provider_receipt_fields(receipt))
                 if completion.reply.type == "final":
                     proof["final_request_sha256"] = self._last_final_request_sha256
-                    proof["final_evidence_root"] = self._final_evidence_root
                     self._last_final_corr_id = completion.corr_id
                     self._last_final_response_sha256 = response_sha256
                     self._last_final_provider_proof_sha256 = hashlib.sha256(
@@ -1876,12 +1901,20 @@ class InteractiveSession:
             raise relay.WireProtocolError(
                 "BAD_REQUEST", "previous Nexus tool call is not settled"
             )
-        if self._nexus_tool_ledger:
-            latest_corr = next(reversed(self._nexus_tool_ledger))
-            if latest_corr not in records:
-                raise relay.WireProtocolError(
-                    "BAD_REQUEST", "latest settled Nexus tool call is absent from history"
-                )
+        ledger_tail = tuple(self._nexus_tool_ledger)[-NEXUS_HISTORY_TURNS:]
+        supplied_corrs = tuple(records)
+        history_is_suffix = bool(
+            supplied_corrs
+            and len(supplied_corrs) <= len(ledger_tail)
+            and supplied_corrs == ledger_tail[-len(supplied_corrs):]
+        )
+        if (ledger_tail and not history_is_suffix) or (
+            not ledger_tail and supplied_corrs
+        ):
+            raise relay.WireProtocolError(
+                "BAD_REQUEST",
+                "tool history is not the Guest's contiguous retained suffix",
+            )
         for corr_id, record in records.items():
             entry = self._nexus_tool_ledger.get(corr_id)
             if entry is None or not bool(entry.get("settled")):
@@ -1905,40 +1938,22 @@ class InteractiveSession:
             scalar_fields: dict[str, object] = {
                 "status": entry["status"],
                 "value0": entry["value0"],
+                "value1": entry["value1"],
                 "value2": entry["value2"],
                 "result": entry["result"],
             }
-            if entry.get("tool") == "read_artifact":
-                scalar_fields["value1_omitted"] = "volatile_payload_size"
-            else:
-                scalar_fields["value1"] = entry["value1"]
             projection_digest = str(entry.get("projection_sha256", ""))
             tool = str(entry["tool"])
             expected_fields = set(scalar_fields)
             if projection_digest:
-                if tool in ("draft_report", "read_artifact"):
-                    content_key = "model_authored_content"
-                    scalar_fields.update(
-                        {
-                            "integrity_verified": True,
-                            "content_trust": "untrusted_model_derived",
-                        }
-                    )
-                    expected_fields.update(
-                        (content_key, "integrity_verified", "content_trust")
-                    )
-                elif tool == "source_search":
-                    content_key = "discovery_projection"
-                    scalar_fields["evidence_trust"] = "unverified_discovery_hint"
-                    expected_fields.update((content_key, "evidence_trust"))
-                elif tool == "source_read":
-                    content_key = "source_evidence"
-                    scalar_fields["evidence_trust"] = "corpus_attested"
-                    expected_fields.update((content_key, "evidence_trust"))
-                elif tool == "inspect_runtime":
+                if tool in NEXUS_WORKSPACE_TOOLS:
+                    content_key = "workspace_request"
+                    scalar_fields["data_trust"] = NEXUS_WORKSPACE_PLACEHOLDER_TRUST
+                    expected_fields.update((content_key, "data_trust"))
+                elif tool == "inspect_system":
                     content_key = "runtime_observation"
-                    scalar_fields["evidence_trust"] = "guest_runtime_unattested"
-                    expected_fields.update((content_key, "evidence_trust"))
+                    scalar_fields["data_trust"] = "guest_runtime_untrusted"
+                    expected_fields.update((content_key, "data_trust"))
                 else:
                     raise relay.WireProtocolError(
                         "BAD_REQUEST", "tool history projection type is unsupported"
@@ -1950,6 +1965,12 @@ class InteractiveSession:
                 ):
                     raise relay.WireProtocolError(
                         "BAD_REQUEST", "tool history projection digest is malformed"
+                    )
+                if tool in NEXUS_WORKSPACE_TOOLS and content != (
+                    _workspace_request_projection(tool)
+                ):
+                    raise relay.WireProtocolError(
+                        "BAD_REQUEST", "workspace request placeholder is malformed"
                     )
             if set(wrapper) != expected_fields or any(
                 wrapper.get(key) != value for key, value in scalar_fields.items()
@@ -1966,17 +1987,85 @@ class InteractiveSession:
                 raise relay.WireProtocolError(
                     "BAD_REQUEST", "tool history result digest is malformed"
                 )
-            if tool == "source_read" and projection_digest:
-                evidence_digest = entry.get("evidence_projection_sha256")
-                if evidence_digest != projection_digest:
-                    raise relay.WireProtocolError(
-                        "BAD_REQUEST", "source evidence does not match tool history"
-                    )
             if record.get("projection_sha256", "") != projection_digest:
                 raise relay.WireProtocolError(
                     "BAD_REQUEST", "tool history projection binding is malformed"
                 )
         return _history_bindings(records)
+
+    def _provider_workspace_request(
+        self,
+        request: Mapping[str, object],
+        records: Mapping[int, Mapping[str, object]],
+    ) -> dict[str, object]:
+        private_request = copy.deepcopy(dict(request))
+        messages = private_request.get("messages")
+        if not isinstance(messages, list):
+            raise relay.WireProtocolError(
+                "BAD_REQUEST", "Nexus message history is malformed"
+            )
+        for corr_id, record in records.items():
+            entry = self._nexus_tool_ledger.get(corr_id)
+            if entry is None or entry.get("tool") not in NEXUS_WORKSPACE_TOOLS:
+                continue
+            workspace_result = entry.get("workspace_result")
+            if not isinstance(workspace_result, str):
+                if entry.get("status") != 0:
+                    continue
+                raise relay.WireProtocolError(
+                    "BAD_REQUEST", "workspace result is unavailable"
+                )
+            index = record.get("index")
+            if (
+                not isinstance(index, int)
+                or isinstance(index, bool)
+                or not 0 <= index < len(messages)
+                or not isinstance(messages[index], dict)
+            ):
+                raise relay.WireProtocolError(
+                    "BAD_REQUEST", "workspace result history is malformed"
+                )
+            wrapper = record.get("wrapper")
+            if not isinstance(wrapper, Mapping):
+                raise relay.WireProtocolError(
+                    "BAD_REQUEST", "workspace result wrapper is malformed"
+                )
+            private_wrapper = {
+                key: wrapper[key]
+                for key in ("status", "value0", "value1", "value2", "result")
+            }
+            private_wrapper.update(
+                {
+                    "workspace_result": workspace_result,
+                    "data_trust": NEXUS_WORKSPACE_RESULT_TRUST,
+                }
+            )
+            messages[index]["content"] = relay.canonical_json_bytes(
+                private_wrapper
+            ).decode("utf-8")
+        return private_request
+
+    def _provider_dialogue_request(
+        self, request: Mapping[str, object]
+    ) -> dict[str, object]:
+        """Add bounded Host-private prior turns to an online Nexus request."""
+
+        private_request = copy.deepcopy(dict(request))
+        messages = private_request.get("messages")
+        if not isinstance(messages, list):
+            raise relay.WireProtocolError(
+                "BAD_REQUEST", "Nexus message history is malformed"
+            )
+        retained: list[dict[str, str]] = []
+        for user_content, final_content in self._nexus_dialogue_history:
+            retained.extend(
+                (
+                    {"role": "user", "content": user_content},
+                    {"role": "assistant", "content": final_content},
+                )
+            )
+        messages[0:0] = retained
+        return private_request
 
     def _model_request(self, payload: dict[str, object]) -> None:
         turn = self._match_active(payload)
@@ -2222,6 +2311,22 @@ class InteractiveSession:
             turn.rounds += 1
             request_round = turn.rounds
             request_attempt = 0
+        final_only = (
+            self.guest_profile == "nexus"
+            and not isinstance(self.provider, relay.ReplayProvider)
+            and turn.rounds == self.max_rounds - 1
+        )
+        provider_request_base = request
+        if (
+            self.guest_profile == "nexus"
+            and not isinstance(self.provider, relay.ReplayProvider)
+        ):
+            provider_request_base = self._provider_workspace_request(
+                request, history_records
+            )
+            provider_request_base = self._provider_dialogue_request(
+                provider_request_base
+            )
         generation = turn.generation
         self._model_job = (generation, corr_id)
         provider_token = (generation, corr_id)
@@ -2269,13 +2374,25 @@ class InteractiveSession:
                 "user_bytes": turn.user_bytes,
             }
         )
-
         def worker() -> None:
             reply: relay.ModelReply | None = None
             error: relay.RelayError | None = None
             try:
+                provider_request = copy.deepcopy(provider_request_base)
+                if final_only:
+                    provider_request["_nexus_final_only"] = True
+                    provider_request["tools"] = []
+                    provider_request.pop("tool_choice", None)
+                    system = provider_request.get("system")
+                    if not isinstance(system, str):
+                        raise relay.ProviderError(
+                            "BAD_REQUEST", "Nexus final-only request lacks system policy"
+                        )
+                    provider_request["system"] = (
+                        system + "\n\n" + NEXUS_FINAL_ONLY_SYSTEM_SUFFIX
+                    )
                 reply = self.provider.complete(
-                    request,
+                    provider_request,
                     deadline_monotonic=(
                         time.monotonic()
                         + (
@@ -2316,6 +2433,7 @@ class InteractiveSession:
                     history_bindings=history_bindings,
                     user_message_index=user_message_index,
                     model=model,
+                    final_only=final_only,
                     reply=reply,
                     error=error,
                 )
@@ -2449,160 +2567,6 @@ class InteractiveSession:
             }
         )
 
-    def _evidence_event(self, payload: dict[str, object]) -> None:
-        code = "BAD_EVIDENCE_EVENT"
-        if set(payload) != set(NEXUS_EVIDENCE_EVENT_FIELDS):
-            raise relay.WireProtocolError(code, "Nexus evidence fields are malformed")
-        turn = self._match_active(payload)
-        corr_id = _bounded_int(
-            payload["corr_id"], "corr_id", code=code, minimum=1,
-            maximum=relay.MAX_SEQUENCE,
-        )
-        settlement_after_cancel = bool(
-            self._nexus_task_ledger is not None
-            and self._nexus_task_ledger.snapshot().termination_cause
-            in ("user_interrupt", "round_limit", "session_error")
-            and corr_id in self._nexus_tool_ledger
-            and not bool(self._nexus_tool_ledger[corr_id].get("settled"))
-        )
-        if (turn.cancelled and not settlement_after_cancel) or self._nexus_final_frozen:
-            raise relay.WireProtocolError(code, "Nexus evidence arrived outside execution")
-        entry = self._nexus_tool_ledger.get(corr_id)
-        if (
-            entry is None
-            or entry.get("tool") != "source_read"
-            or bool(entry.get("settled"))
-            or corr_id in self._staged_evidence
-        ):
-            raise relay.WireProtocolError(code, "Nexus evidence has no pending source_read")
-        arguments = entry.get("arguments")
-        if not isinstance(arguments, Mapping):
-            raise relay.WireProtocolError(code, "source_read arguments are unavailable")
-        version = _bounded_int(
-            payload["version"], "version", code=code, minimum=1, maximum=1
-        )
-        task_id = _bounded_int(
-            payload["task_id"], "task_id", code=code, minimum=1,
-            maximum=0xFFFFFFFF,
-        )
-        provenance = _bounded_int(
-            payload["provenance"], "provenance", code=code, minimum=0,
-            maximum=NEXUS_PROVENANCE_ALL,
-        )
-        if provenance != NEXUS_SUCCESS_PROVENANCE["source_read"]:
-            raise relay.WireProtocolError(
-                code, "source evidence provenance does not match its contract"
-            )
-        if provenance & NEXUS_PROVENANCE_UNTRUSTED_FILE_DATA == 0:
-            raise relay.WireProtocolError(code, "source evidence lacks file provenance")
-        if payload["event"] != "source_read" or payload["tool"] != "source_read":
-            raise relay.WireProtocolError(code, "source evidence identity is malformed")
-        if self.source_attestor is None:
-            raise relay.WireProtocolError(
-                code, "Host source attestation is not configured"
-            )
-        scope = _safe_text(payload["scope"], "scope", code=code, maximum=31)
-        if scope != "build_source_snapshot":
-            raise relay.WireProtocolError(code, "source evidence scope is malformed")
-        source_id = _safe_text(
-            payload["source_id"], "source_id", code=code, maximum=7
-        )
-        if re.fullmatch(r"S[0-9]{4}", source_id) is None:
-            raise relay.WireProtocolError(code, "source evidence id is malformed")
-        path = _safe_text(payload["path"], "path", code=code, maximum=111)
-        normalized_path = path.replace("\\", "/")
-        if (
-            normalized_path != path
-            or path.startswith("/")
-            or not path.startswith(NEXUS_SOURCE_PATH_PREFIXES)
-            or any(part in ("", ".", "..") for part in path.split("/"))
-        ):
-            raise relay.WireProtocolError(code, "source evidence path is outside scope")
-        start_line = _bounded_int(
-            payload["start_line"], "start_line", code=code, minimum=1,
-            maximum=0xFFFFFFFF,
-        )
-        end_line = _bounded_int(
-            payload["end_line"], "end_line", code=code, minimum=start_line,
-            maximum=0xFFFFFFFF,
-        )
-        if end_line - start_line + 1 > 12:
-            raise relay.WireProtocolError(code, "source evidence range is too large")
-        requested_source = arguments.get("source_id")
-        requested_start = arguments.get("start_line")
-        requested_max = arguments.get("max_lines")
-        if (
-            requested_source != source_id
-            or requested_start != start_line
-            or not isinstance(requested_max, int)
-            or isinstance(requested_max, bool)
-            or requested_max < 1
-            or requested_max > 12
-            or end_line > start_line + requested_max - 1
-        ):
-            raise relay.WireProtocolError(
-                code, "source evidence does not match the delivered tool arguments"
-            )
-        citation = _safe_text(
-            payload["citation"], "citation", code=code, maximum=31
-        )
-        if citation != f"[{source_id}:L{start_line}-L{end_line}]":
-            raise relay.WireProtocolError(code, "source evidence citation is malformed")
-        evidence = {
-            "version": version,
-            "turn_id": turn.turn_id,
-            "request_id": turn.request_id,
-            "corr_id": corr_id,
-            "task_id": task_id,
-            "provenance": provenance,
-            "event": "source_read",
-            "tool": "source_read",
-            "scope": scope,
-            "corpus_revision": _digest(
-                payload["corpus_revision"], "corpus revision", code=code
-            ),
-            "manifest_sha256": _digest(
-                payload["manifest_sha256"], "manifest digest", code=code
-            ),
-            "source_id": source_id,
-            "path": path,
-            "start_line": start_line,
-            "end_line": end_line,
-            "citation": citation,
-            "full_sha256": _digest(
-                payload["full_sha256"], "source digest", code=code
-            ),
-            "chunk_sha256": _digest(
-                payload["chunk_sha256"], "chunk digest", code=code
-            ),
-            "artifact_sha256": _digest(
-                payload["artifact_sha256"], "artifact digest", code=code
-            ),
-            "projection_sha256": _digest(
-                payload["projection_sha256"], "projection digest", code=code
-            ),
-        }
-        if not hmac.compare_digest(
-            str(evidence["artifact_sha256"]), str(evidence["projection_sha256"])
-        ):
-            raise relay.WireProtocolError(
-                code, "source artifact does not bind the model projection"
-            )
-        if not self.source_attestor.verify_evidence_event(evidence):
-            raise relay.WireProtocolError(
-                code, "source evidence does not match the configured corpus"
-            )
-        try:
-            replay = self.source_attestor.attest_read(
-                source_id, start_line, end_line
-            )
-            binding = replay.evidence_binding(corr_id, task_id, provenance)
-        except source_attestation.SourceAttestationError as error:
-            raise relay.WireProtocolError(
-                code, "source evidence cannot be bound to the configured corpus"
-            ) from error
-        self._staged_evidence[corr_id] = (evidence, binding)
-
     def _tool_event(self, payload: dict[str, object]) -> None:
         if self.guest_profile != "nexus":
             if "turn_id" in payload:
@@ -2678,113 +2642,77 @@ class InteractiveSession:
         result_sha256 = _digest(
             payload["result_sha256"], "result digest", code=code
         )
-        staged_evidence = self._staged_evidence.pop(corr_id, None)
-        evidence = staged_evidence[0] if staged_evidence is not None else None
-        evidence_binding = (
-            staged_evidence[1] if staged_evidence is not None else None
-        )
-        if tool == "source_read" and status == 0:
-            if evidence is None or not projection_sha256 or not hmac.compare_digest(
-                str(evidence["projection_sha256"]), projection_sha256
-            ):
+        guest_wrapper: dict[str, object] = {
+            "status": status,
+            "value0": values["value0"],
+            "value1": values["value1"],
+            "value2": values["value2"],
+            "result": result,
+        }
+        arguments = entry.get("arguments")
+        if status == 0:
+            if not projection_sha256 or not isinstance(arguments, Mapping):
                 raise relay.WireProtocolError(
-                    code, "successful source_read lacks matching evidence"
+                    code, "successful Nexus tool lacks its result binding"
                 )
-            if evidence["task_id"] != values["value1"]:
-                raise relay.WireProtocolError(
-                    code, "source evidence task does not match the tool result"
-                )
-        elif evidence is not None:
-            evidence = None
-        if tool in ("source_search", "source_read", "inspect_runtime") and status == 0:
-            if not projection_sha256:
-                raise relay.WireProtocolError(
-                    code, "successful evidence tool lacks projection binding"
-                )
-        if tool == "source_search" and status in (
-            0,
-            NEXUS_SOURCE_SEARCH_NOT_FOUND_STATUS,
-        ):
-            arguments = entry.get("arguments")
-            if not isinstance(arguments, Mapping) or self.source_attestor is None:
-                raise relay.WireProtocolError(
-                    code, "source search lacks a Host corpus binding"
-                )
-            try:
-                source_search_replay = self.source_attestor.attest_search(
-                    arguments.get("query"), arguments.get("path_prefix", "")
-                )
-            except source_attestation.SourceAttestationError as error:
-                if str(error) != "source search has no matches":
-                    raise relay.WireProtocolError(
-                        code, "source search cannot be replayed against the Host corpus"
-                    ) from error
-                source_search_replay = None
-            if source_search_replay is None:
-                miss_wrapper = {
-                    "status": NEXUS_SOURCE_SEARCH_NOT_FOUND_STATUS,
-                    "value0": 0,
-                    "value1": 0,
-                    "value2": 0,
-                    "result": NEXUS_SOURCE_SEARCH_NO_MATCHES_RESULT,
-                }
-                expected_result_sha256 = hashlib.sha256(
-                    relay.canonical_json_bytes(miss_wrapper)
-                ).hexdigest()
+            if tool in NEXUS_WORKSPACE_TOOLS:
+                expected_projection = _workspace_request_projection(tool)
+                guest_wrapper["workspace_request"] = expected_projection
+                guest_wrapper["data_trust"] = NEXUS_WORKSPACE_PLACEHOLDER_TRUST
                 if (
-                    status != NEXUS_SOURCE_SEARCH_NOT_FOUND_STATUS
-                    or result != NEXUS_SOURCE_SEARCH_NO_MATCHES_RESULT
-                    or any(values[key] for key in ("value0", "value1", "value2"))
-                    or provenance != 0
-                    or projection_sha256
-                    or not hmac.compare_digest(
-                        result_sha256, expected_result_sha256
-                    )
+                    values["value0"] != 0
+                    or result != NEXUS_WORKSPACE_REQUEST_RESULT
                 ):
                     raise relay.WireProtocolError(
-                        code,
-                        "source search corpus miss lacks its exact NOT_FOUND settlement",
+                        code, "workspace request placeholder is malformed"
                     )
             else:
-                host_projection_sha256 = getattr(
-                    source_search_replay, "projection_sha256", None
-                )
-                host_projection = getattr(source_search_replay, "projection", None)
-                success_wrapper = {
-                    "status": 0,
-                    "value0": values["value0"],
-                    "value1": values["value1"],
-                    "value2": values["value2"],
-                    "result": NEXUS_SOURCE_SEARCH_SUCCESS_RESULT,
-                    "discovery_projection": host_projection,
-                    "evidence_trust": "unverified_discovery_hint",
-                }
-                expected_result_sha256 = hashlib.sha256(
-                    relay.canonical_json_bytes(success_wrapper)
-                ).hexdigest()
-                if (
-                    status != 0
-                    or result != NEXUS_SOURCE_SEARCH_SUCCESS_RESULT
-                    or not isinstance(host_projection, str)
-                    or not isinstance(host_projection_sha256, str)
-                    or relay.WIRE_DIGEST_RE.fullmatch(host_projection_sha256) is None
-                    or not hmac.compare_digest(
-                        projection_sha256, host_projection_sha256
-                    )
-                    or not hmac.compare_digest(
-                        result_sha256, expected_result_sha256
-                    )
-                ):
+                result_metrics = entry.get("result_value_metrics", {})
+                if not isinstance(result_metrics, Mapping):
                     raise relay.WireProtocolError(
-                        code,
-                        "source search success does not match the Host corpus projection",
+                        code, "system observation result metrics are malformed"
                     )
-                entry["discovery_attested"] = True
-        if tool in ("draft_report", "read_artifact") and status == 0:
-            if not projection_sha256:
-                raise relay.WireProtocolError(
-                    code, "successful content tool lacks projection binding"
+                expected_projection = _inspect_system_projection(
+                    arguments.get("operation"), result_metrics
                 )
+                guest_wrapper["runtime_observation"] = expected_projection
+                guest_wrapper["data_trust"] = "guest_runtime_untrusted"
+            if not hmac.compare_digest(
+                projection_sha256,
+                hashlib.sha256(expected_projection.encode("utf-8")).hexdigest(),
+            ):
+                raise relay.WireProtocolError(
+                    code, "Nexus tool projection does not match its exact Guest data"
+                )
+        expected_result_sha256 = hashlib.sha256(
+            relay.canonical_json_bytes(guest_wrapper)
+        ).hexdigest()
+        if not hmac.compare_digest(result_sha256, expected_result_sha256):
+            raise relay.WireProtocolError(
+                code, "Nexus tool result digest does not match its exact Guest wrapper"
+            )
+        workspace_result: str | None = None
+        if tool in NEXUS_WORKSPACE_TOOLS and status == 0:
+            assert isinstance(arguments, Mapping)
+            if self.workspace_reader is None:
+                workspace_result = "workspace_error=workspace_not_configured"
+            else:
+                try:
+                    if tool == "search_files":
+                        raw_workspace_result = self.workspace_reader.search_files(
+                            arguments.get("query"), arguments.get("path_prefix", "")
+                        )
+                    else:
+                        raw_workspace_result = self.workspace_reader.read_file(
+                            arguments.get("path"),
+                            arguments.get("start_line"),
+                            arguments.get("max_lines"),
+                        )
+                    workspace_result = _bounded_workspace_result(
+                        raw_workspace_result
+                    )
+                except Exception:
+                    workspace_result = "workspace_error=host_workspace_failure"
         assert self._nexus_task_ledger is not None
         try:
             self._nexus_task_ledger.settle_tool(
@@ -2797,16 +2725,6 @@ class InteractiveSession:
                 provenance=provenance,
                 projection_sha256=projection_sha256,
                 result_sha256=result_sha256,
-                evidence_task_id=(evidence["task_id"] if evidence is not None else 0),
-                evidence_provenance=(
-                    evidence["provenance"] if evidence is not None else 0
-                ),
-                evidence_artifact_sha256=(
-                    evidence["artifact_sha256"] if evidence is not None else ""
-                ),
-                evidence_projection_sha256=(
-                    evidence["projection_sha256"] if evidence is not None else ""
-                ),
                 session_blocked_marker=(
                     result
                     if result == "artifact_cleanup_failed;session_blocked=1"
@@ -2830,14 +2748,8 @@ class InteractiveSession:
                 "result_sha256": result_sha256,
             }
         )
-        if evidence is not None:
-            entry["evidence_projection_sha256"] = evidence["projection_sha256"]
-            entry["attested_evidence_binding"] = evidence_binding
-            self._controller({"type": "evidence_event", **evidence})
-            telemetry_evidence = dict(evidence)
-            telemetry_evidence["evidence_event"] = telemetry_evidence.pop("event")
-            telemetry_evidence["event"] = "evidence_committed"
-            self._telemetry(telemetry_evidence, source="guest")
+        if workspace_result is not None:
+            entry["workspace_result"] = workspace_result
         event = {
             "type": "tool_event",
             "turn_id": turn.turn_id,
@@ -2851,7 +2763,15 @@ class InteractiveSession:
             "projection_sha256": projection_sha256,
             "result_sha256": result_sha256,
         }
-        self._controller(event)
+        controller_event = dict(event)
+        if workspace_result is not None:
+            controller_event.update(
+                {
+                    "workspace_result": workspace_result,
+                    "data_trust": NEXUS_WORKSPACE_RESULT_TRUST,
+                }
+            )
+        self._controller(controller_event)
         telemetry = {key: value for key, value in event.items() if key != "result"}
         telemetry["event"] = "tool_event"
         self._telemetry(telemetry, source="guest")
@@ -2951,6 +2871,30 @@ class InteractiveSession:
         value["agent_role"] = role
         value["task_state"] = task_state
         value["event"] = event
+        pending_result_metric: tuple[dict[str, object], int, int] | None = None
+        metric_code = value.get("metric_code")
+        metric_entry = self._nexus_tool_ledger.get(int(value["corr_id"]))
+        if (
+            event == "progress"
+            and value["parent_task_id"] != 0
+            and isinstance(metric_code, int)
+            and NEXUS_RESULT_VALUE_METRIC_FIRST
+            <= metric_code
+            <= NEXUS_RESULT_VALUE_METRIC_LAST
+            and metric_entry is not None
+            and metric_entry.get("tool") == "inspect_system"
+        ):
+            stored_metrics = metric_entry.get("result_value_metrics", {})
+            if not isinstance(stored_metrics, Mapping) or metric_code in stored_metrics:
+                raise relay.WireProtocolError(
+                    "BAD_TASK_EVENT",
+                    "system observation result metric was duplicated",
+                )
+            pending_result_metric = (
+                metric_entry,
+                metric_code,
+                int(value["metric_value"]),
+            )
         assert self._nexus_task_ledger is not None
         try:
             if self._nexus_user_cancel_root_needs_synthetic_tool_settlement(value):
@@ -2969,6 +2913,11 @@ class InteractiveSession:
                 self._nexus_cancel_pending = False
         except nexus_task_ledger.NexusTaskLedgerError as error:
             raise _nexus_ledger_wire_error(error) from None
+        if pending_result_metric is not None:
+            metric_entry, metric_code, metric_value = pending_result_metric
+            result_metrics = metric_entry.setdefault("result_value_metrics", {})
+            assert isinstance(result_metrics, dict)
+            result_metrics[metric_code] = metric_value
         self._controller({"type": "task_event", **value})
         self._telemetry(value, source="guest")
 
@@ -3082,7 +3031,6 @@ class InteractiveSession:
                 )
             if (
                 not self._nexus_final_frozen
-                or self._staged_evidence
                 or any(
                     not bool(entry.get("settled"))
                     for entry in self._nexus_tool_ledger.values()
@@ -3178,7 +3126,6 @@ class InteractiveSession:
                 "final_request_sha256": self._last_final_request_sha256,
                 "final_response_sha256": self._last_final_response_sha256,
                 "provider_proof_sha256": self._last_final_provider_proof_sha256,
-                "final_evidence_root": self._final_evidence_root,
                 "final_task_root": task_snapshot.task_root_sha256,
                 "final_artifact_root": task_snapshot.artifact_root_sha256,
             }
@@ -3195,6 +3142,13 @@ class InteractiveSession:
                     "attempts": turn.attempts,
                 }
             )
+            if (
+                status == "completed"
+                and not turn.cancelled
+                and not isinstance(self.provider, relay.ReplayProvider)
+            ):
+                self._nexus_dialogue_history.append((turn.user_content, str(answer)))
+                del self._nexus_dialogue_history[:-NEXUS_DIALOGUE_HISTORY_TURNS]
         for optional in (("rounds",) if self.guest_profile != "nexus" else ()) + (
             "context_seq",
         ):
@@ -3204,9 +3158,7 @@ class InteractiveSession:
         self._last_model_response_corr = 0
         self._last_final_response = None
         self._nexus_tool_ledger.clear()
-        self._staged_evidence.clear()
         self._last_final_request_sha256 = ""
-        self._final_evidence_root = ""
         self._nexus_final_frozen = False
         self._nexus_cancel_pending = False
         self._active_last_corr = 0
@@ -3239,10 +3191,9 @@ class InteractiveSession:
         event.setdefault("status", status)
         if command == "reset" and status == "ok":
             self.session_approvals.clear()
+            self._nexus_dialogue_history.clear()
             self._nexus_tool_ledger.clear()
-            self._staged_evidence.clear()
             self._last_final_request_sha256 = ""
-            self._final_evidence_root = ""
             self._nexus_final_frozen = False
             self._nexus_cancel_pending = False
             self._active_last_corr = 0
@@ -3588,6 +3539,7 @@ class InteractiveSession:
             self.provider.assert_exhausted()
         if self._nexus_task_ledger is not None:
             self._nexus_task_ledger.clear(reset_session=True)
+        self._nexus_dialogue_history.clear()
         self.closed = True
         self._controller({"type": "session_closed", "reason": reason})
         self._telemetry({"event": "session_closed", "reason": reason})
@@ -4104,7 +4056,7 @@ class InteractiveRelayDaemon:
         quiet: bool = False,
         shutdown_grace_seconds: float = SHUTDOWN_GRACE_SECONDS,
         guest_profile: str = "agentlive",
-        source_attestor: source_attestation.SourceAttestation | None = None,
+        workspace_reader: workspace.WorkspaceReader | None = None,
     ) -> None:
         if not 0 < shutdown_grace_seconds <= 30:
             raise ValueError("shutdown grace must be in (0, 30] seconds")
@@ -4113,10 +4065,8 @@ class InteractiveRelayDaemon:
             or guest_profile not in local.GUEST_PROFILES
         ):
             raise ValueError("Guest profile is unsupported")
-        if guest_profile == "nexus" and source_attestor is None:
-            raise ValueError("Nexus requires a Host-attested source corpus")
-        if guest_profile != "nexus" and source_attestor is not None:
-            raise ValueError("source attestation is only valid for the Nexus profile")
+        if guest_profile != "nexus" and workspace_reader is not None:
+            raise ValueError("workspace access is only valid for the Nexus profile")
         self.process = process
         self.paths = paths
         self.token = token
@@ -4153,7 +4103,7 @@ class InteractiveRelayDaemon:
             guest_profile=guest_profile,
             provider_name=provider_name,
             model_name=model_name,
-            source_attestor=source_attestor,
+            workspace_reader=workspace_reader,
         )
         self.endpoints.controller_initial = lambda: {
             "type": "session_ready",
@@ -4396,73 +4346,17 @@ class InteractiveRelayDaemon:
             raise relay.WireProtocolError("BAD_LOCAL_MESSAGE", "unsupported controller message")
 
 
-_SOURCE_ANCHOR_MACROS = {
-    "revision": "AGENT_NEXUS_SOURCE_ANCHOR_REVISION",
-    "manifest_sha256": "AGENT_NEXUS_SOURCE_ANCHOR_MANIFEST_SHA256",
-}
-
-
-def _read_source_anchor(path: Path) -> tuple[str, str]:
-    """Read the two frozen corpus digests from a generated build anchor."""
-
-    try:
-        before = path.lstat()
-    except OSError as error:
-        raise ValueError(f"cannot read Nexus source anchor: {error}") from error
-    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
-        raise ValueError("Nexus source anchor must be a regular non-symlink file")
-    if before.st_size <= 0 or before.st_size > 4096:
-        raise ValueError("Nexus source anchor has an invalid size")
-    try:
-        data = path.read_bytes()
-        after = path.lstat()
-    except OSError as error:
-        raise ValueError(f"cannot read Nexus source anchor: {error}") from error
-    identity = lambda value: (
-        value.st_dev,
-        value.st_ino,
-        value.st_mode,
-        value.st_size,
-        value.st_mtime_ns,
-    )
-    if identity(before) != identity(after) or len(data) != before.st_size:
-        raise ValueError("Nexus source anchor changed while it was read")
-    try:
-        lines = data.decode("ascii").splitlines()
-    except UnicodeDecodeError as error:
-        raise ValueError("Nexus source anchor is not canonical ASCII") from error
-    values: dict[str, str] = {}
-    for name, macro in _SOURCE_ANCHOR_MACROS.items():
-        candidates = [line for line in lines if line.startswith(f"#define {macro}")]
-        pattern = re.compile(rf'^#define {re.escape(macro)} "([0-9a-f]{{64}})"$')
-        if len(candidates) != 1:
-            raise ValueError(f"Nexus source anchor {name} is missing or duplicated")
-        match = pattern.fullmatch(candidates[0])
-        if match is None:
-            raise ValueError(f"Nexus source anchor {name} is malformed")
-        values[name] = match.group(1)
-    return values["revision"], values["manifest_sha256"]
-
-
-def _configured_source_attestation(
+def _configured_workspace_reader(
     args: argparse.Namespace,
-) -> source_attestation.SourceAttestation | None:
-    corpus = args.source_corpus
-    anchor = args.source_anchor
-    if args.guest_profile != "nexus":
-        if corpus is not None or anchor is not None:
-            raise ValueError("source corpus options require --guest-profile nexus")
-        return None
-    if corpus is None or anchor is None:
-        raise ValueError(
-            "Nexus requires both --source-corpus and --source-anchor"
-        )
-    revision, manifest_sha256 = _read_source_anchor(anchor)
-    return source_attestation.load_source_attestation(
-        corpus,
-        expected_revision=revision,
-        expected_manifest_sha256=manifest_sha256,
-    )
+) -> workspace.WorkspaceReader | None:
+    root = args.workspace_root
+    if args.guest_profile == "nexus":
+        if root is None:
+            raise ValueError("--workspace-root is required for --guest-profile nexus")
+        return workspace.WorkspaceReader(root)
+    if root is not None:
+        raise ValueError("--workspace-root requires --guest-profile nexus")
+    return None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -4485,8 +4379,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-http-response-bytes", type=int, default=relay.DEFAULT_MAX_HTTP_RESPONSE_BYTES)
     parser.add_argument("--boot-timeout", type=float, default=DEFAULT_BOOT_TIMEOUT_SECONDS)
     parser.add_argument("--runtime-dir", type=Path)
-    parser.add_argument("--source-corpus", type=Path)
-    parser.add_argument("--source-anchor", type=Path)
+    parser.add_argument("--workspace-root", type=Path)
     parser.add_argument(
         "--guest-profile",
         choices=tuple(sorted(local.GUEST_PROFILES)),
@@ -4506,14 +4399,17 @@ def _provider(args: argparse.Namespace) -> relay.ModelProvider:
         return relay.ReplayProvider.from_jsonl(
             args.replay_file, require_request_digests=True
         )
-    return relay._build_provider(args)
+    return relay._build_provider(
+        args,
+        serialize_auto_tool_calls=args.guest_profile == "nexus",
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     daemon: InteractiveRelayDaemon | None = None
     try:
         args = _parser().parse_args(argv)
-        source_attestor = _configured_source_attestation(args)
+        workspace_reader = _configured_workspace_reader(args)
         provider = _provider(args)
         session_id = secrets.token_hex(16)
         paths = local.prepare_runtime_paths(session_id, base=args.runtime_dir)
@@ -4537,7 +4433,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             boot_timeout=args.boot_timeout,
             quiet=args.quiet,
             guest_profile=args.guest_profile,
-            source_attestor=source_attestor,
+            workspace_reader=workspace_reader,
         )
 
         def stop(_signum, _frame) -> None:  # type: ignore[no-untyped-def]

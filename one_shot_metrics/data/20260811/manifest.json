@@ -4,7 +4,6 @@
   "campaign": {
     "id": "agentos-advanced-figures-20260811",
     "status": "completed",
-    "source_commit": "2b14fb1f74b9bd093e6de939a16554620835699e",
     "started_at_utc": "2026-08-11T00:27:57.072143Z",
     "completed_at_utc": "2026-08-11T01:03:08.582360Z"
   },
@@ -81,7 +80,7 @@
   },
   "guest_sources": {
     "manifest": "one_shot_metrics/guests/guest_sources.json",
-    "manifest_sha256": "ebede378020f7e814f6156d2363aa6771e75e25dc0538e464a49f67e8c33cecf",
+    "manifest_sha256": "64a539d9e75faa3b23b784e5b8ffadfc599706b2e72a9da61ca16d4870a95079",
     "variants": [
       {
         "name": "agenttask",

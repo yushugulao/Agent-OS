@@ -4,11 +4,11 @@
 #include <agent.h>
 
 /* Stable, task-independent autonomous-model request contract. */
-#define AGENT_NEXUS_AUTONOMY_CONTRACT_VERSION 2U
+#define AGENT_NEXUS_AUTONOMY_CONTRACT_VERSION 3U
 #define AGENT_NEXUS_SYSTEM_POLICY_SHA256 \
-	"3c6ff394bf6494d80208898e7440ba1da4fde43787e5162e46eaeb51d90c27b4"
+	"8d0e430c8b7517ab49d24d7bc0f726bfb9d5ef031cecbca9fbc507076ba1a3ce"
 #define AGENT_NEXUS_TOOL_CATALOG_SHA256 \
-	"4d31b3dedab5b0b8084089a66b609b0f6ffecd17f6da031cd997cbbdf154ffe5"
+	"b59a831f6b1337393319c2d3e2af0d3b463ffac50447c11351226dd2989c999b"
 
 /*
  * Agent IPC currently carries a NUL-terminated 64-byte payload.  Nexus keeps
@@ -64,10 +64,10 @@ enum agent_nexus_task_state {
 
 /* ASSIGN uses status as the task type; terminal messages use Agent status. */
 enum agent_nexus_task_type {
-	AGENT_NEXUS_TASK_INSPECT_RUNTIME = 1001,
-	AGENT_NEXUS_TASK_SOURCE_SEARCH = 1002,
-	AGENT_NEXUS_TASK_SOURCE_READ = 1003,
-	AGENT_NEXUS_TASK_DRAFT_REPORT = 1004,
+	AGENT_NEXUS_TASK_INSPECT_SYSTEM = 1001,
+	AGENT_NEXUS_TASK_SEARCH_FILES = 1002,
+	AGENT_NEXUS_TASK_READ_FILE = 1003,
+	AGENT_NEXUS_TASK_RESERVED_1004 = 1004,
 	AGENT_NEXUS_TASK_INSPECT_PROCESSES = 1005,
 	AGENT_NEXUS_TASK_INSPECT_CONTEXT = 1006,
 	AGENT_NEXUS_TASK_USER_TURN = 2001,
@@ -121,15 +121,15 @@ struct agent_nexus_task {
 #define AGENT_NEXUS_ARTIFACT_READ_COORDINATOR (1ULL << 0)
 #define AGENT_NEXUS_ARTIFACT_READ_SYSTEM      (1ULL << 1)
 #define AGENT_NEXUS_ARTIFACT_READ_RESEARCH    (1ULL << 2)
-#define AGENT_NEXUS_ARTIFACT_READ_ANALYST     (1ULL << 3)
+#define AGENT_NEXUS_ARTIFACT_READ_RESERVED_3  (1ULL << 3)
 #define AGENT_NEXUS_ARTIFACT_READ_RELAY       (1ULL << 4)
-#define AGENT_NEXUS_ARTIFACT_READ_ALL         0x1fULL
+#define AGENT_NEXUS_ARTIFACT_READ_ALL         0x17ULL
 
 enum agent_nexus_product_role {
 	AGENT_NEXUS_ROLE_COORDINATOR = 1,
 	AGENT_NEXUS_ROLE_SYSTEM = 2,
 	AGENT_NEXUS_ROLE_RESEARCH = 3,
-	AGENT_NEXUS_ROLE_ANALYST = 4,
+	AGENT_NEXUS_ROLE_RESERVED_4 = 4,
 	AGENT_NEXUS_ROLE_RELAY = 5,
 };
 
@@ -144,7 +144,7 @@ enum agent_nexus_artifact_kind {
 	AGENT_NEXUS_ARTIFACT_TASK_CAPSULE = 4,
 	AGENT_NEXUS_ARTIFACT_SYSTEM_RESULT = 5,
 	AGENT_NEXUS_ARTIFACT_RESEARCH_RESULT = 6,
-	AGENT_NEXUS_ARTIFACT_REPORT = 7,
+	AGENT_NEXUS_ARTIFACT_RESERVED_7 = 7,
 	AGENT_NEXUS_ARTIFACT_APPROVAL = 8,
 };
 
@@ -209,6 +209,10 @@ struct agent_nexus_artifact_header {
 	unsigned char manifest_sha256[32];
 };
 
+#define AGENT_NEXUS_TASK_CAPSULE_VERSION 2U
+#define AGENT_NEXUS_TASK_OBJECTIVE_SIZE 2485U
+#define AGENT_NEXUS_TASK_ARGUMENT_SIZE 445U
+
 struct agent_nexus_task_capsule {
 	unsigned int version;
 	unsigned int task_type;
@@ -216,9 +220,9 @@ struct agent_nexus_task_capsule {
 	unsigned int secondary_handle;
 	unsigned int result_handle;
 	unsigned int objective_length;
-	char objective[2801];
+	char objective[AGENT_NEXUS_TASK_OBJECTIVE_SIZE];
 	unsigned int argument_length;
-	char argument[129];
+	char argument[AGENT_NEXUS_TASK_ARGUMENT_SIZE];
 	unsigned char reserved[2];
 	struct agent_nexus_artifact_actor target;
 };
@@ -232,6 +236,17 @@ _Static_assert(AGENT_NEXUS_TASK_TEXT_SIZE < AGENT_EVENT_PAYLOAD_SIZE,
 	       "Nexus task must fit the Agent event payload");
 _Static_assert(AGENT_NEXUS_TASK_OFF_VALUE1 + 4U ==
 	       AGENT_NEXUS_TASK_WIRE_SIZE, "Nexus task wire extent");
+_Static_assert(AGENT_NEXUS_TASK_RESERVED_1004 == 1004,
+	       "Nexus task ABI reserved value");
+_Static_assert(AGENT_NEXUS_ROLE_RESERVED_4 == 4,
+	       "Nexus product role ABI reserved value");
+_Static_assert(AGENT_NEXUS_ARTIFACT_READ_RESERVED_3 == (1ULL << 3),
+	       "Nexus artifact permission ABI reserved bit");
+_Static_assert((AGENT_NEXUS_ARTIFACT_READ_ALL &
+		AGENT_NEXUS_ARTIFACT_READ_RESERVED_3) == 0,
+	       "Nexus artifact permission reserved bit excluded");
+_Static_assert(AGENT_NEXUS_ARTIFACT_RESERVED_7 == 7,
+	       "Nexus artifact kind ABI reserved value");
 _Static_assert(sizeof(struct agent_nexus_artifact_actor) == 24,
 	       "Nexus artifact actor layout");
 _Static_assert(sizeof(struct agent_nexus_artifact_manifest) == 136,
@@ -251,6 +266,11 @@ _Static_assert(sizeof(struct agent_nexus_task_capsule) <=
 	       AGENT_NEXUS_ARTIFACT_MAX, "Nexus task capsule bound");
 _Static_assert(sizeof(struct agent_nexus_task_capsule) == 2992,
 	       "Nexus task capsule layout");
+_Static_assert(__builtin_offsetof(struct agent_nexus_task_capsule,
+				  argument_length) == 2512,
+	       "Nexus task capsule argument length offset");
+_Static_assert(__builtin_offsetof(struct agent_nexus_task_capsule, argument) ==
+	       2516, "Nexus task capsule argument offset");
 _Static_assert(__builtin_offsetof(struct agent_nexus_task_capsule, target) ==
 	       2968, "Nexus task capsule target offset");
 

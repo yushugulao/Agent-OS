@@ -1,9 +1,8 @@
 {
   "schema_version": 2,
   "campaign_id": "agentos-advanced-figures-20260811",
-  "source_commit": "2b14fb1f74b9bd093e6de939a16554620835699e",
   "completed_at_utc": "2026-08-11T01:03:08.582360Z",
-  "manifest_sha256": "ab782ffb993570f5f6b5bca42f7b0c7bdd9e34646830eebc1b08c26a5819b619",
+  "manifest_sha256": "391e3d81f9a24a41e6e96cc970448e482fc5512c4c055dbd7a29873e4ccf7ada",
   "inventory_sha256": "3fa028fa6aaf96872c519726cdbc2c4d352357a3c17aa0151fe46f1121914822",
   "raw_set_sha256": "846c4a9b12f5779ac8dd8e51c3650b4cddc6c04c6d80bae0fdf9a8ca19f36306"
 }

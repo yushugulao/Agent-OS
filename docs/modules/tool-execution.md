@@ -32,7 +32,7 @@ static const struct param_rule rules[] = {
 };
 ```
 
-系统启动时会自检这张表，包括工具编号是否连续、名称是否重复、参数写入位置是否重叠，以及 provenance 和副作用位是否合法。随后，内核以 `agentos.tool.manifest.v1` 作为摘要域，把工具编号、标志、能力位、provenance 规则、副作用、名称和 schema 一并送入 SHA-256，生成 `schema_digest`。Execution Contract 通过这份摘要确认工具语义没有发生变化。
+系统启动时会自检这张表，包括工具编号是否连续、名称是否重复、参数写入位置是否重叠，以及 provenance 和副作用位是否合法。随后，内核以 `agentos.tool.manifest.v1` 作为摘要域，对工具编号、标志、能力位、provenance 规则、副作用、名称和 schema 计算内容摘要，生成 `schema_digest`。Execution Contract 通过这份摘要确认工具语义没有发生变化。
 
 AgentOS 保留三代工具接口：
 
@@ -83,13 +83,13 @@ int tool_call_v3(struct agent_request_v3 *req,
 | schema 解码 | `agent_tool_protocol_resolve()`、`agent_tool_protocol_decode_v2()` | 解析名称/编号，检查带类型信息的参数，生成内核私有的 `agent_op` |
 | Contract 准入 | `agent_execution_contract_admit()` | 核对生命周期、节点、尝试次数、前驱、截止时间和输入指纹 |
 | provenance/资源 | `agent_provenance_authorize_tool()`、`resource_phase_lease_begin()` | 核对 provenance label，reserve Phase Lease |
-| Effect Gate | `agent_execution_contract_effect_begin()` | 决定执行、取消或返回缓存结果 |
+| 副作用检查 | `agent_execution_contract_effect_begin()` | 决定执行、取消或返回缓存结果 |
 | 工具执行 | `agent_execute_op()`、`agent_metadata_execute_tool()` | 执行 IPC、元数据或文件操作 |
-| terminal commit | `agent_provenance_commit_tool_output()`、`agent_execution_append_terminal()` | 结算资源，commit Context、Evidence Ring 票号和节点结果 |
+| terminal commit | `agent_provenance_commit_tool_output()`、`agent_execution_append_terminal()` | 结算资源，commit Context、工作流记录票号和节点结果 |
 
 `agent_execute_op()` 只读取内核私有副本。元数据工具先进入 `agent_metadata_tool_enter()`，再由 [`os/agent_metadata_objects.c`](../../os/agent_metadata_objects.c) 处理；其余工具由 [`os/agent_core.c`](../../os/agent_core.c) 按编号分派。单次调用、批处理和 Task Bridge 最终都会进入这条路径。
 
-V2 完成参数 schema 解码后，才检查生命周期是否允许新操作。V3 的顺序略有不同：先核对完整请求布局和生命周期绑定，再解析工具与参数范围，调用同一套 V2 解码器，然后登记普通操作并进入 `agent_execute_one()`。Execution Contract、provenance、Phase Lease 和 Effect Gate 均在工具真正执行之前核对。启用 `ENFORCE` 的工作流中，V3 的工具、schema 或绑定不合法时，内核会写下一条结构化拒绝记录。Evidence Ring 槽位不足时返回 `NO_SPACE`；槽位暂时不能 reserve 时返回 `RETRY`。
+V2 完成参数 schema 解码后，才检查生命周期是否允许新操作。V3 的顺序略有不同：先核对完整请求布局和生命周期绑定，再解析工具与参数范围，调用同一套 V2 解码器，然后登记普通操作并进入 `agent_execute_one()`。Execution Contract、provenance、Phase Lease 和副作用状态均在工具真正执行之前核对。启用 `ENFORCE` 的工作流中，V3 的工具、schema 或绑定不合法时，内核会写下一条结构化拒绝记录。工作流记录槽位不足时返回 `NO_SPACE`；槽位暂时不能 reserve 时返回 `RETRY`。
 
 ## Execution Contract
 
@@ -124,7 +124,7 @@ agent_execution_contract(&control, &result);
 <a id="来源资源与提交顺序"></a>
 ## Provenance、资源与 commit 顺序
 
-Tool Registry 为每项操作登记 provenance 规则。文件内容、外部工具输出和跨 Agent 消息分别加入 `UNTRUSTED_FILE_DATA`、`UNTRUSTED_TOOL_OUTPUT` 和 `CROSS_AGENT_DATA`。内核根据当前 Context、Execution Contract 和 Registry 规则计算输入/输出 provenance label。SHA-256 用于固定输入字节的指纹；provenance 不能代替能力位检查，也不能代替 VFS 文件访问范围检查。
+Tool Registry 为每项操作登记 provenance 规则。文件内容、外部工具输出和跨 Agent 消息分别加入 `UNTRUSTED_FILE_DATA`、`UNTRUSTED_TOOL_OUTPUT` 和 `CROSS_AGENT_DATA`。内核根据当前 Context、Execution Contract 和 Registry 规则计算输入/输出 provenance label。内容指纹用于固定输入字节；provenance 不能代替能力位检查，也不能代替 VFS 文件访问范围检查。
 
 节点开始执行前，会从 Workflow Credit Domain 中 reserve 一份 Phase Lease。工具结束后，内核统一停用并结算。未通过检查的请求不会留下 `pending` 额度；已经创建的对象则在唯一析构路径中归还额度。
 
@@ -142,7 +142,7 @@ agent_provenance_commit_tool_output(p, &provenance_decision, res->status);
 agent_execution_append_terminal(p, op, res, tick, status, ...);
 ```
 
-最后一步在 Context commit lane 记录序号、工具状态和结果。受 Execution Contract 约束的调用还会得到 Evidence Ring 票号，并更新对应节点。若取消请求在 Effect Gate 之前到达，节点可以进入 `CANCELLED`；工具已经开始修改系统状态后，则按实际 terminal state 结算。
+最后一步在 Context commit lane 记录序号、工具状态和结果。受 Execution Contract 约束的调用还会得到工作流记录票号，并更新对应节点。若取消请求在副作用检查之前到达，节点可以进入 `CANCELLED`；工具已经开始修改系统状态后，则按实际 terminal state 结算。
 
 Nexus 的 artifact 由 Guest Runtime 组织，再通过 `agent_file_publish()` 把 header 与 payload 一次交给内核。VFS 在未命名 inode 中写完全部字节并完成第一阶段 checkpoint，随后只做一次正式目录接入，再以 attach-only checkpoint 固定目录项。这样，正式路径要么不存在，要么能够读到完整内容；同名发布不会覆盖先到的文件。对于 `DUPLICATE` 和 `INDETERMINATE`，Nexus 回读正式路径，只有 header、payload 和 EOF 都与本次请求严格一致时才按幂等成功处理。Context、metadata 与 Workflow Fence 继续用 artifact handle、lifecycle generation 和 terminal record 对齐。
 
@@ -182,7 +182,7 @@ Nexus 的 artifact 由 Guest Runtime 组织，再通过 `agent_file_publish()` �
 
 每个已经接受的目标任务只产生一条 CQE。取消命令使用自己递增的 `request_id`，并以 `link_request_id` 指向目标，不会另行产生一条取消 CQE。若取消策略当场拒绝命令，取消命令的编号仍会记为已使用；`enter` 返回 `DENIED`，原目标继续运行。CQ 已满时，内核保留尚未写出的结果，等用户确认读取后继续发布。强制截止时间由定时器路径标记，任务到达可调度检查点后，内核生成带 `AGENT_TASK_CQE_F_DEADLINE` 的 CQE。
 
-任务资源 ABI 提供导入、释放和查询操作，并使用 16 字节的类型化句柄，其中包含槽位 generation。`IMPORT` 仅从当前 Agent 可读的普通文件描述符导入准确的 1–63 字节 OWNED UTF-8，并绑定该 Agent 已经存在且经过校验的最新 Context，不会借导入操作新建 Context。Task Bridge 从 offset 0 读取并额外探测 EOF，不改变文件的共享 offset；通过 NUL 与 UTF-8 检查后，内核保存不可变快照、SHA-256、producer、Context sequence 和 `UNTRUSTED_FILE_DATA` provenance，不保留文件对象指针。
+任务资源 ABI 提供导入、释放和查询操作，并使用 16 字节的类型化句柄，其中包含槽位 generation。`IMPORT` 仅从当前 Agent 可读的普通文件描述符导入准确的 1–63 字节 OWNED UTF-8，并绑定该 Agent 已经存在且经过校验的最新 Context，不会借导入操作新建 Context。Task Bridge 从 offset 0 读取并额外探测 EOF，不改变文件的共享 offset；通过 NUL 与 UTF-8 检查后，内核保存不可变快照、内容指纹、producer、Context sequence 和 `UNTRUSTED_FILE_DATA` provenance，不保留文件对象指针。
 
 SQE 可以把同一句柄作为 BORROWED 输入。当前 ECHO Task Bridge 会把内核快照复制到工具 payload：BORROWED 任务完成后资源继续处于 `LIVE`，OWNED 任务完成后则自动消费。显式 `RELEASE` 或槽位再次使用后，旧 generation 查询返回 `STALE`；成功 IMPORT 的最终 copyout 失败时，通道会回滚尚未暴露的槽位。
 

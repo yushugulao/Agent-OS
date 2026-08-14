@@ -3,8 +3,7 @@
 ifeq ($(FUNCTIONAL_REVIEW_BUILD),1)
 override FUNCTIONAL_REVIEW_FORBIDDEN_IMAGE_VARS := \
 	U USER_BIN_DIR USER_ELF_DIR HOSTCC CFLAGS CPPFLAGS LDFLAGS \
-	STORAGE_POLICY_CPPFLAGS FS_FUSE USER_BINS USER_ELFS EXEC_POLICY \
-	SYSTEM_DATA_DIR SYSTEM_DATA_NAMES SYSTEM_DATA
+		STORAGE_POLICY_CPPFLAGS FS_FUSE USER_BINS USER_ELFS EXEC_POLICY
 override FUNCTIONAL_REVIEW_EXTERNAL_IMAGE_VARS := $(strip $(foreach variable,$(FUNCTIONAL_REVIEW_FORBIDDEN_IMAGE_VARS),$(if $(filter command line environment override,$(origin $(variable))),$(variable))))
 ifneq ($(FUNCTIONAL_REVIEW_EXTERNAL_IMAGE_VARS),)
 $(error FUNCTIONAL_REVIEW_BUILD rejects external image variables: $(FUNCTIONAL_REVIEW_EXTERNAL_IMAGE_VARS))
@@ -20,15 +19,9 @@ endif
 U := ../user
 USER_BIN_DIR := target/bin
 USER_ELF_DIR := target/elf
-override SYSTEM_DATA_DIR := target/system-data
 EXEC_POLICY := $(U)/include/exec_policy_manifest.h
 USER_BINS := $(wildcard $(U)/$(USER_BIN_DIR)/*)
 USER_ELFS := $(wildcard $(U)/$(USER_ELF_DIR)/*)
-override SYSTEM_DATA_NAMES := \
-	nxsrc000 nxsrc001 nxsrc002 nxsrc003 nxsrc004 nxsrc005 nxsrc006 nxsrc007 \
-	nxsrc008 nxsrc009 nxsrc010 nxsrc011 nxsrc012 nxsrc013 nxsrc014 nxsrc015 \
-	nxsrcmeta
-override SYSTEM_DATA := $(wildcard $(addprefix $(U)/$(SYSTEM_DATA_DIR)/,$(SYSTEM_DATA_NAMES)))
 
 FS_FUSE := fs
 HOSTCC ?= cc
@@ -54,11 +47,10 @@ $(FS_FUSE): fs.c host_image_snapshot.c host_image_snapshot.h \
 		mv -f "$$tmp" $@; \
 		trap - 0 1 2 3 15
 
-fs.img: .FORCE $(FS_FUSE) $(USER_BINS) $(USER_ELFS) $(SYSTEM_DATA) $(EXEC_POLICY)
+fs.img: .FORCE $(FS_FUSE) $(USER_BINS) $(USER_ELFS) $(EXEC_POLICY)
 	@set -e; tmp="$@.$$$$.tmp"; \
 		trap 'rm -f "$$tmp"' 0 1 2 3 15; \
-		./$(FS_FUSE) "$$tmp" $(USER_BINS) \
-			$(if $(SYSTEM_DATA),--system-data $(SYSTEM_DATA),); \
+		./$(FS_FUSE) "$$tmp" $(USER_BINS); \
 		mv -f "$$tmp" $@; \
 		trap - 0 1 2 3 15
 

@@ -1,6 +1,6 @@
 # Agent Loop 内核运行机制
 
-Agent Loop 的决策过程留在 Guest，内核负责跨轮次仍需保持一致的运行机制。AgentOS 把事件等待、可信 IPC、模型请求、Workflow Credit Domain、工作流 EEVDF 和阶段记录放在同一个生命周期中。Agent（智能体）暂时没有任务时进入内核等待；文件变化、协作消息、心跳、截止时间或模型响应到达后，内核将其唤醒。工具与事件的 terminal state（终态）继续写入 Context（运行上下文）和 Evidence Ring。
+Agent Loop 的决策过程留在 Guest，内核负责跨轮次仍需保持一致的运行机制。AgentOS 把事件等待、可信 IPC、模型请求、Workflow Credit Domain、工作流 EEVDF 和阶段记录放在同一个生命周期中。Agent（智能体）暂时没有任务时进入内核等待；文件变化、协作消息、心跳、截止时间或模型响应到达后，内核将其唤醒。工具与事件的 terminal state（终态）继续写入 Context（运行上下文）和运行记录环。
 
 ## 文档索引
 
@@ -9,8 +9,8 @@ Agent Loop 的决策过程留在 Guest，内核负责跨轮次仍需保持一致
 - [三、可信 IPC 与模型请求](#三可信-ipc-与模型请求)
 - [四、Workflow Credit Domain](#四workflow-credit-domain)
 - [五、工作流 EEVDF](#五工作流-eevdf)
-- [六、Evidence Ring 与 Workflow Fence](#六evidence-ring-与-workflow-fence)
-- [七、Nexus 自主任务 Runtime](#七nexus-自主任务-runtime)
+- [六、运行记录环与 Workflow Fence](#六运行记录环与-workflow-fence)
+- [七、Nexus 多智能体 Harness Runtime](#七nexus-多智能体-harness-runtime)
 - [八、源码位置与测试](#八源码位置与测试)
 
 ## 一、运行过程
@@ -23,7 +23,7 @@ Agent Loop 的决策过程留在 Guest，内核负责跨轮次仍需保持一致
 2. `agent_wait()` 以线程身份 generation 作为等待键，在同一次关中断期间复查队列并进入睡眠。
 3. IPC 消息路由和模型请求表保存生命周期、`control_id` 与关联编号。
 4. Workflow Credit Domain 限制内核对象的创建，workflow EEVDF 在不同工作流之间分配 CPU 时间。
-5. Evidence Ring 保存 terminal record，Workflow Fence（工作流屏障）汇总文件元数据、资源用量和执行记录。
+5. 运行记录环保存 terminal record，Workflow Fence（工作流屏障）汇总文件元数据、资源用量和执行记录。
 
 一轮常见的 Agent 循环如下：
 
@@ -186,13 +186,13 @@ selected = arg min(virtual_deadline) among eligible workflows
 
 测试中的 Agent 在等待事件时实际进入睡眠，504 次准确唤醒又都在 0–1 tick 内重新获得 CPU，说明等待接口能够避免无任务时忙轮询，同时保持及时唤醒。0 tick 只表示等待短于 10 ms 的计时粒度，并不代表调度没有成本。1 至 4 个并发工作流的 Jain 指数均接近 1，说明共享 `service_cycles` 的外层 EEVDF 基本做到了按工作流分配 CPU；一个工作流扩大到 4 个忙线程时仍取得 `26.895%` 份额，略高于四等分的 `25%`，因此线程放大已经受到抑制，但还不是绝对无偏。
 
-## 六、Evidence Ring 与 Workflow Fence
+## 六、运行记录环与 Workflow Fence
 
-### 6.1 Evidence Ring
+### 6.1 运行记录环
 
-Context 的 terminal state、事件、审计记录和时间线都会写入 Evidence Ring。每个生命周期按需分配 4 页，其中 48 槽保存普通记录，16 槽保存关键记录。安全策略拒绝等重要信息写入关键分区，不会被普通成功日志占满。
+Context 的 terminal state、事件、审计记录和时间线都会写入运行记录环。每个生命周期按需分配 4 页，其中 48 槽保存普通记录，16 槽保存关键记录。安全策略拒绝等重要信息写入关键分区，不会被普通成功日志占满。
 
-写入者使用 `reserve -> fill -> commit/discard` 两阶段接口取得递增票号。工具生效前会同时在普通分区和关键分区 reserve 槽位，terminal state 确定后只 commit 其中一个。没有 commit 的票号形成缺口，并记入封存摘要。结构与接口见 [`os/agent_evidence_ring.h`](../../os/agent_evidence_ring.h) 和 [`os/agent_evidence_ring.c`](../../os/agent_evidence_ring.c)。
+写入者使用 `reserve -> fill -> commit/discard` 两阶段接口取得递增票号。工具生效前会同时在普通分区和关键分区 reserve 槽位，terminal state 确定后只 commit 其中一个。没有 commit 的票号形成缺口，并记入封存摘要。
 
 ### 6.2 生成 Workflow Fence 回执
 
@@ -203,7 +203,7 @@ Context 的 terminal state、事件、审计记录和时间线都会写入 Evide
 3. 暂停接纳新的普通操作和退出操作，并确认两项计数都为 0。
 4. 在文件元数据不再变动后取得元数据 generation，排空延迟回收的文件系统对象，并提交文件系统时点。
 5. 读取执行账户和存储账户的精确资源快照。
-6. 用 `challenge`、元数据 generation、计费轮次和资源摘要封存 Evidence Ring 段。
+6. 用 `challenge`、元数据 generation、计费轮次和资源摘要封存本段运行记录。
 7. 缓存 320 字节回执，递增屏障序号，并恢复接纳新操作。
 
 核心顺序位于 [`agent_workflow_fence_execute()`](../../os/agent_workflow_fence.c)：
@@ -213,54 +213,55 @@ agent_metadata_quiescence_fence_snapshot_current(&metadata_generation);
 fs_deferred_reclaim_drain_current();
 fs_epoch_commit();
 workflow_credit_domain_fence(key, exec, storage, &credit);
-agent_evidence_seal(key, fence_sequence, challenge,
-                    metadata_generation, credit.epoch,
-                    credit_digest, &evidence);
 ```
 
-回执包含生命周期键、请求序号、屏障序号、元数据 generation、计费轮次、8 类资源用量、资源摘要、`challenge`、前一段根哈希和本段 Evidence Ring 根哈希。当前 v1 固定带有 `PARTIAL_COVERAGE`、`CREDIT_EXACT`、`EVIDENCE_SEALED` 和 `METADATA_VOLATILE` 标记。回执使用 SHA-256 串联阶段记录，结构中没有公钥签名字段。ABI 定义见 [`include/agent_workflow_fence_abi.h`](../../include/agent_workflow_fence_abi.h)。
+取得资源快照后，内核继续封存本阶段运行记录，再生成 Workflow Fence 回执。
+
+回执包含生命周期键、请求序号、屏障序号、元数据 generation、计费轮次、8 类资源用量、资源摘要、`challenge`，以及前后两段运行记录的连续性摘要。当前 v1 固定记录覆盖范围、资源精确度、阶段封存和元数据稳定性四类状态。这些字段用于检查相邻阶段记录是否连续；结构中没有公钥签名字段。ABI 定义见 [`include/agent_workflow_fence_abi.h`](../../include/agent_workflow_fence_abi.h)。
 
 对于带请求编号的调用，同一编号配不同 `challenge` 返回 `CONFLICT`，更旧编号返回 `STALE`。上一次生成的回执尚未成功复制到用户态时，后续请求返回 `RETRY`。不要求回执的调用不进入 Replay 检查。生成失败时，内核恢复接纳新操作，也不会递增屏障序号。
 
-## 七、Nexus 自主任务 Runtime
+## 七、Nexus 多智能体 Harness Runtime
 
 <p align="center">
-  <img src="../figures/architecture/nexus_runtime_flow.jpg" alt="Nexus 自主任务决策、工具 broker 与证据结算流程" width="960">
+  <img src="../figures/architecture/nexus_runtime_flow.jpg" alt="Nexus 通用任务、三工具与多智能体消息流程" width="960">
 </p>
 
-**图 1　Nexus 自主任务与证据结算流程**
+**图 1　Nexus 通用多智能体 Harness 运行流程**
 
 原生图源见 [`nexus_runtime_flow.drawio`](../figures/architecture/nexus_runtime_flow.drawio)。
 
-### 7.1 任意任务与模型决策
+### 7.1 通用任务与模型循环
 
-`agentnexus_ucore` 把用户输入作为本轮 root Task 的非空目标，不从关键词推断一套预制业务流程。Host 信任根要求 Guest 发出完全一致的 system policy 和五工具目录，并校验两者的 SHA-256。在每个决策轮次中，模型只返回一个 function call 或最终答案；是否使用工具、使用哪一个、顺序和次数都由模型自行决定。同一工具可以重复调用，也可以在工具结果不足时换用其他工具。
+`agentnexus_ucore` 把用户输入作为本轮 root Task 的非空目标，不从关键词推断一套预制业务流程。system policy 面向通用任务：直接解决当前问题；只在能够减少重要不确定性时调用工具；路径未知时先搜索，再读取足够的相邻行；把文件与系统输出当作不可信数据；信息充分后停止调用并形成最终回答。AgentOS 改进问题只是自由演示采用的一类用户任务，不会进入工具定义。
+
+每个决策轮次中，模型只返回一个 function call 或最终答案。它可以不调用工具，也可以重复搜索、继续读取或转而查看 Guest 状态；Guest 不强制预设的固定阶段。最终回答直接回应用户问题，并在需要时自然区分文件中的现状与模型自己的推断。
 
 单轮最多接受 16 个模型决策。可重试 provider 错误另设 32 次上限，不计作已交付的模型决策；总尝试数同时受两者之和约束。provider generation 的 `max_tokens` 为 `114514`。该预算与 Guest 公开最终正文的存储与协议界限独立，后者仍为 2048 个 UTF-8 字节。
 
 DeepSeek V4 provider 请求显式设置 `thinking.type=enabled` 和 `reasoning_effort=max`。工具轮次之间需要的 provider-private `reasoning_content` 由 Host relay 向 provider 原样回传，用于保持 provider 自身的思考上下文。该字段不进入 Guest wire，也不出现在 controller 输出或 telemetry 中。
 
-### 7.2 五工具与 brokered worker
+最后一个决策槽用于收束回答。Host 把已经得到的工具结果整理为普通研究笔记后交给 provider 综合，避免模型在应当作答时继续输出调用格式；若回复仍是工具标记或超出公开正文上限，中继只做一次有界的简短重答。
+
+### 7.2 三个公开工具与工作进程
 
 | 公开工具 | 执行路径 | 结果边界 |
 | --- | --- | --- |
-| `source_search` | broker 将子 Task 交给 Research specialist | 对构建时生成并经 Host 验证的 `build_source_snapshot` 执行单个不区分大小写的字面子串搜索；结果是发现线索，不是最终引用证明 |
-| `source_read` | broker 将子 Task 交给 Research specialist | 读取候选 `source_id` 的精确行，返回可由 Host 重放验证的 citation |
-| `inspect_runtime` | broker 将子 Task 交给 System specialist | 只返回当前 Guest boot 的 `system_status`、`processes` 或 `context` 观察；不具有 source attestation |
-| `draft_report` | broker 将子 Task 交给 Analyst specialist | 原样保存模型给定的内容；Analyst 不进行第二次分析，也不添加结论 |
-| `read_artifact` | Coordinator 按当前轮次所有权直接回读 | 只接受本轮最新 `draft_report` 句柄，并返回完全相同的报告字节与 digest |
+| `search_files` | Coordinator 通过 `MESSAGE` 和 `N1` 把 child Task 交给 Research，再由 Host workspace broker 搜索 | 在当前 Host 工作区中匹配路径或文本行；空查询列出文件，可用 `path_prefix` 缩小范围，最多返回 8 项 |
+| `read_file` | Coordinator 通过 `MESSAGE` 和 `N1` 把 child Task 交给 Research，再由 Host workspace broker 读取 | 从一个工作区相对路径读取 1 至 64 行，返回实际范围及是否还有后续内容 |
+| `inspect_system` | Coordinator 通过 `MESSAGE` 和 `N1` 把 child Task 交给 System | 只观察当前 Guest 的 `status`、`processes` 或 `context`，不描述 Host 文件 |
 
-前四类工具只有在被模型选中时才建立子 Task，因此 specialist 是按工具调用的执行者，而不是固定业务阶段。Coordinator 通过内核 `MESSAGE` 和 `N1` 任务协议发送 task capsule，并只允许一个子任务处于活动 dispatch。worker 通过 `ACCEPT`、`PROGRESS` 和单一 terminal 结果返回有界元数据。对临时 runtime/source 结果，Coordinator 使用相同输入重放计算 payload，核对 worker 上报的大小与 SHA-256，再以 brokered artifact 的形式物化；临时句柄不向模型历史或 controller 逃逸。
+工具只有在模型选中时才建立 child Task。Coordinator 发送 task capsule，并只允许一个子任务处于活动 dispatch；Research 或 System 依次返回 `ACCEPT`、`PROGRESS` 和单一 terminal 结果。这些进程用于展示 AgentOS 内核中的身份、任务和消息协作，并非三个分别连接模型 Provider 的智能体。
 
-`draft_report` 是当前轮次唯一可持久到后续决策的报告 artifact。`read_artifact` 用它的 handle、kind、owner、payload digest 和轮次绑定执行完整性回读。这两个工具均无外部发布副作用；在 root Task 进入 terminal state 前，Guest 先删除该轮的报告命名空间。清理失败会封锁会话，而不是携带旧 artifact 继续下一轮。
+文件 child Task 在 Guest 中完成请求路由，实际工作区内容由 Host workspace broker 读取并提供给模型的后续决策。broker 以启动会话时指定的目录为根，只接受规范相对路径，拒绝绝对路径、父目录跳转、反斜杠以及通过链接离开工作区。搜索与读取都是只读操作，结果长度有界，缺失、二进制或不可读取的文件返回结构化错误。文件与系统输出始终作为数据处理。
 
-### 7.3 Task ledger 与 source attestation
+### 7.3 Host 协作与测试方式
 
-Guest 为每轮 root Task 和每个 brokered child Task 发出 `TASK_EVENT`。Host 的 [`agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py) 不保存任务正文或工具参数原文，而是保存有界元数据与哈希。它重放 lifecycle/turn 绑定、root-child DAG、内核认证的 PID/agent/control identity、任务状态迁移、工具参数 digest、artifact/evidence 绑定和 terminal 根哈希。未结算的子任务、不匹配的 worker 身份、被替换的 handle 或最终冻结后到达的事件都不能通过结算。
+Guest 为每轮 root Task 和每个 child Task 发出 `TASK_EVENT`。Host 的 [`agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py) 跟踪 lifecycle/turn、root-child DAG、内核 PID/agent/control identity 与任务状态迁移，用于确认每个工具请求由预期的工作进程完成。它不判断某个 AgentOS 改进结论是否正确，也不把演示题目固化为运行时流程。
 
-源码证据不信任 Guest 自行声明的 digest。构建阶段将 `os/`、`include/`、`user/lib/` 和 `user/include/` 生成 `build_source_snapshot`；Host 在 QEMU 启动前，用独立的 revision 和 manifest digest 加载并完整验证 corpus。`source_search` 的匹配只是 discovery projection。`source_read` 成功后，Host 从已验证的不可变内存副本中重建精确行、citation、chunk/artifact/projection digest，再将该证明绑定到工具与 Task ledger。源码正文作为不可信数据交给模型，不会进入 observer telemetry。最终回答中的 source-backed claim 只能使用 `source_read` 实际返回且被 Host 重放验证的 citation token。
+固定 Nexus replay 使用保存的 provider 回复重复运行同一套 QEMU、串口、三工具和 Task 消息路径，属于协议交互回归。Nexus 自由演示连接在线 DeepSeek，关注模型能否针对用户问题自行研究并给出自然合理的结论。模型表现不理想时，改进方向应是通用 system policy、文件导航、结果回注或多智能体消息协作，而不是增加只服务某道演示题的专用工具。
 
-Guest 主程序位于 [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)，共用协议见 [`user/include/agent_nexus_protocol.h`](../../user/include/agent_nexus_protocol.h)，Host 自主合约、Task ledger 和 source attestation 分别位于 [`host_tools/agentos_nexus_contract.py`](../../host_tools/agentos_nexus_contract.py)、[`host_tools/agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py) 和 [`host_tools/agentos_source_attestation.py`](../../host_tools/agentos_source_attestation.py)。运行方法见[运行指南](../usage.md#4-使用-nexus-自主任务工作流)。
+当前版本是只读 Harness：它可以搜索和读取 Host 工作区、检查 Guest 状态，但不编辑文件、不执行 Shell，也没有独立子模型。Guest 主程序位于 [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)，共用协议见 [`user/include/agent_nexus_protocol.h`](../../user/include/agent_nexus_protocol.h)，Host 合约、工作区访问与 Task ledger 分别位于 [`host_tools/agentos_nexus_contract.py`](../../host_tools/agentos_nexus_contract.py)、[`host_tools/agentos_workspace.py`](../../host_tools/agentos_workspace.py) 和 [`host_tools/agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py)。运行方法见[运行指南](../usage.md#4-使用-nexus-多智能体-harness)。
 
 ## 八、源码位置与测试
 
@@ -270,18 +271,18 @@ Guest 主程序位于 [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_
 | 模型待完成请求与智能体循环 | [`os/agent_core.c`](../../os/agent_core.c)、[`os/agent_background.c`](../../os/agent_background.c) |
 | Workflow Credit Domain 与工具执行资源记录 | [`os/workflow_credit_domain.c`](../../os/workflow_credit_domain.c)、[`os/resource_controller.c`](../../os/resource_controller.c) |
 | 工作流 EEVDF | [`os/workflow_scheduler.c`](../../os/workflow_scheduler.c)、[`os/proc.c`](../../os/proc.c) |
-| Evidence Ring 与 Workflow Fence | [`os/agent_evidence_ring.c`](../../os/agent_evidence_ring.c)、[`os/agent_workflow_fence.c`](../../os/agent_workflow_fence.c) |
+| 运行记录环与 Workflow Fence | [`os/agent_workflow_fence.c`](../../os/agent_workflow_fence.c) 及相邻运行记录模块 |
 | 运行时间线 | [`os/agent_observe_timeline.c`](../../os/agent_observe_timeline.c) |
-| Nexus 自主合约、Task ledger、brokered worker、source attestation 与 report readback | [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)、[`user/lib/agent_nexus.c`](../../user/lib/agent_nexus.c)、[`user/lib/agent_nexus_source.c`](../../user/lib/agent_nexus_source.c)、[`host_tools/agentos_nexus_contract.py`](../../host_tools/agentos_nexus_contract.py)、[`host_tools/agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py)、[`host_tools/agentos_source_attestation.py`](../../host_tools/agentos_source_attestation.py) |
+| Nexus 通用合约、工作区 broker、Task ledger 与 Research/System 消息协作 | [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)、[`user/lib/agent_nexus.c`](../../user/lib/agent_nexus.c)、[`host_tools/agentos_nexus_contract.py`](../../host_tools/agentos_nexus_contract.py)、[`host_tools/agentos_workspace.py`](../../host_tools/agentos_workspace.py) 和 [`host_tools/agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py) |
 
-Runtime 测试覆盖无丢失唤醒、慢订阅者隔离、心跳、消息路由、Workflow Credit Domain、Evidence Ring 票号、Workflow Fence 重试、EEVDF 和 Nexus Replay：
+Runtime 测试覆盖无丢失唤醒、慢订阅者隔离、心跳、消息路由、Workflow Credit Domain、运行记录环票号、Workflow Fence 重试、EEVDF 和 Nexus Replay：
 
 ```bash
 python3 -B scripts/test-wait-atomic-wiring.py
 python3 -B scripts/test-agent-live-loop.py
 python3 -B scripts/test-workflow-credit-domain.py
-python3 -B scripts/test-agent-evidence-ring.py
 python3 -B scripts/test-workflow-fence.py
+make local-host-selftests
 
 AGENT_TEST_CASE=agentloop_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 AGENT_TEST_CASE=agentsched_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-

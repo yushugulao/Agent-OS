@@ -94,17 +94,17 @@ struct workflow_lifecycle_record {
 };
 ```
 
-`members` 是仍持有该生命周期的进程数。`active_operations` 统计正在执行的普通操作，`departing_operations` 统计进程退出和异步释放。`fence_gate` 在生成 Workflow Fence 时阻止前两类操作进入。实现见 [`os/workflow_lifecycle.c`](../../os/workflow_lifecycle.c)。
+`members` 是仍持有该生命周期的进程数。`active_operations` 统计正在执行的普通操作，`departing_operations` 统计进程退出和异步释放。代码字段 `fence_gate` 表示 Workflow Fence 正在暂停前两类新操作。实现见 [`os/workflow_lifecycle.c`](../../os/workflow_lifecycle.c)。
 
-### 3.2 普通操作、退出操作与 Workflow Fence 门控
+### 3.2 普通操作、退出操作与 Workflow Fence 协调
 
 | 操作类型 | 涉及操作 | 开始条件 | 完成条件 |
 | --- | --- | --- | --- |
-| 普通操作 | 工具调用、`fork`、元数据更新等 | 生命周期处于活动状态、尚未关闭，且 Workflow Fence 门控未持有 | terminal state 已 commit，临时资源已释放 |
-| 退出操作 | `exit`、控制进程离开、异步清理 | `members > 0`，且 Workflow Fence 门控未持有 | 本阶段清理完成 |
+| 普通操作 | 工具调用、`fork`、元数据更新等 | 生命周期处于活动状态、尚未关闭，且 Workflow Fence 未暂停新操作 | terminal state 已 commit，临时资源已释放 |
+| 退出操作 | `exit`、控制进程离开、异步清理 | `members > 0`，且 Workflow Fence 未暂停新操作 | 本阶段清理完成 |
 | Workflow Fence | 控制进程生成 Workflow Fence | 生命周期尚未关闭，普通操作与退出操作计数均为 0 | 回执已 commit，或本次 Workflow Fence 中止 |
 
-普通操作门控的实现很短，可以直接放进系统调用和进程创建路径：
+普通操作的进入检查很短，可以直接放进系统调用和进程创建路径：
 
 ```c
 record = workflow_lifecycle_find_locked(key);
@@ -119,7 +119,7 @@ if (record != 0 && !record->closing && record->members > 0 &&
 
 ### 3.3 按生命周期回收
 
-生命周期收尾程序按同一个键回收 Typed Watch、Metadata Catalog、Execution Contract、Task Channel、Evidence Ring、Workflow Credit Domain 和调度对象。随后回收普通 VFS 文件访问范围，删除其中的文件，并从 Metadata Catalog 移除相应记录。标记 `preserve_on_retire` 的 artifact 会保留元数据、文件和存储计费，只解除与旧生命周期的绑定。各模块在释放前都比较完整键，因此旧订阅、请求、Contract 和句柄只会得到 `STALE`、`CONFLICT` 或 `NOT_FOUND`，不会落入下一次工作流。
+生命周期收尾程序按同一个键回收 Typed Watch、Metadata Catalog、Execution Contract、Task Channel、工作流记录环、Workflow Credit Domain 和调度对象。随后回收普通 VFS 文件访问范围，删除其中的文件，并从 Metadata Catalog 移除相应记录。标记 `preserve_on_retire` 的 artifact 会保留元数据、文件和存储计费，只解除与旧生命周期的绑定。各模块在释放前都比较完整键，因此旧订阅、请求、Contract 和句柄只会得到 `STALE`、`CONFLICT` 或 `NOT_FOUND`，不会落入下一次工作流。
 
 进程退出可能跨越一次系统调用，因而全程计入退出操作。普通 Agent 系统调用计入普通操作。Workflow Fence 不会持锁睡眠，暂时无法取得静止时点时返回 `RETRY`。
 
@@ -165,11 +165,11 @@ Context 固定保存 128 条记录。写满后覆盖最旧槽位，并同步更�
   -> 发布序号变为奇数
   -> 写入公开记录，更新路径索引和内核计数
   -> 写入最近响应和表头
-  -> commit 预留的 Evidence Ring 票号
+  -> commit 预留的工作流记录票号
   -> 发布序号恢复为偶数
 ```
 
-[`agent_context_publish_begin()`](../../os/agent_context.c) 通过 acquire-release 原子加法，把发布序号从偶数改为奇数；`agent_context_publish_end()` 再用 release 语义恢复偶数。reserve terminal record 后，发布序号会一直保持为奇数，直到对应 Evidence Ring 票号也 commit 完成。直接读取程序因此不会看到只有 Context、没有 Evidence Ring 记录的中间状态。手工追加不预留 terminal record；回滚和清空只更新活动路径或重置 Context，不增加新记录。
+[`agent_context_publish_begin()`](../../os/agent_context.c) 通过 acquire-release 原子加法，把发布序号从偶数改为奇数；`agent_context_publish_end()` 再用 release 语义恢复偶数。reserve terminal record 后，发布序号会一直保持为奇数，直到对应工作流记录票号也 commit 完成。直接读取程序因此不会看到只有 Context、没有终态记录的中间状态。手工追加不预留 terminal record；回滚和清空只更新活动路径或重置 Context，不增加新记录。
 
 ### 5.2 读取接口
 
@@ -187,7 +187,7 @@ Guest 直接读取程序的实现位于 [`user/lib/syscall.c`](../../user/lib/sy
 
 `context_rollback(sequence)` 先确认目标仍在 FIFO 窗口中，并能沿父记录重建活动路径，再从工作流生命周期取得新的分支 generation。目标记录成为新的可见头；原有记录的序号和哈希都不变，后续结果从新分支继续 commit，序号不会复用。
 
-回滚只改变 Agent 接下来看到的决策 Context。此前已经完成的文件写入、IPC 和工具副作用仍然存在，需要由应用另行执行补偿动作。`context_clear()` 会分配新分支，清空公开记录和路径索引，并把本地序号重新置零。工作流 Evidence Ring 的票号仍然递增；清空操作与普通 commit 使用相同的发布序号规则。
+回滚只改变 Agent 接下来看到的决策 Context。此前已经完成的文件写入、IPC 和工具副作用仍然存在，需要由应用另行执行补偿动作。`context_clear()` 会分配新分支，清空公开记录和路径索引，并把本地序号重新置零。工作流记录票号仍然递增；清空操作与普通 commit 使用相同的发布序号规则。
 
 ## 六、Provenance 传播
 
@@ -202,7 +202,7 @@ AgentOS 使用六种 provenance label 表示数据来源，定义见 [`include/a
 | `UNTRUSTED_TOOL_OUTPUT` | 工具输出 |
 | `CROSS_AGENT_DATA` | 跨 Agent 消息或结果 |
 
-provenance label 跟随 Context、文件读取、工具 terminal state 和 IPC 传播，合并时只增不减。选择 Execution Contract 前驱时，可以加入前置记录已有的 label，但不能删除当前 label。Tool Registry 声明允许的输入 label、输出 label、所需能力位和实际副作用掩码。[`agent_provenance_authorize_tool()`](../../os/agent_provenance.c) 在工具生效前核对生命周期、Contract generation、DAG 边、provenance 集合和副作用掩码。拒绝结果写入 Evidence Ring 的关键通道。
+provenance label 跟随 Context、文件读取、工具 terminal state 和 IPC 传播，合并时只增不减。选择 Execution Contract 前驱时，可以加入前置记录已有的 label，但不能删除当前 label。Tool Registry 声明允许的输入 label、输出 label、所需能力位和实际副作用掩码。[`agent_provenance_authorize_tool()`](../../os/agent_provenance.c) 在工具生效前核对生命周期、Contract generation、DAG 边、provenance 集合和副作用掩码。拒绝结果写入工作流关键记录通道。
 
 这些 label 便于内核快速判断数据类别，并不描述自然语言事实之间的细节。具体含义仍由 Context 记录、artifact 和上层应用保存。
 
@@ -230,18 +230,18 @@ Agent identity 和 Context 同时接受静态契约检查与 QEMU Guest 回归�
 | `agenttrust_ucore` | 可信 `exec`、不可修改映像、角色与映像绑定、引导进程授予角色 |
 | `agentfinal_ucore` | 前 6 页只读、commit lane、快照、回滚、新分支、FIFO 淘汰、直接查询 |
 | `agentscope_ucore` | 工作流文件访问范围隔离、控制进程退出后撤销权限、生命周期回收 |
-| Context 原子性脚本 | Context terminal record、Evidence Ring 票号、并发快照读取、等待发布 |
+| Context 原子性脚本 | Context terminal record、工作流记录票号、并发快照读取、等待发布 |
 | 工作流系统调用并发检查 | 普通操作、关闭与 fence 的并发关系 |
 
 Guest 输出校验器保留的代表性标记包括 `context_commit_lane=1 sequence=1..3 hash=1`、`context_rollback_branch=1 sequence_reuse=0 provenance_bound=1`、`fifo oldest=66 latest=193 dropped=65` 和 `lifecycle_reclamation=1`。运行命令如下：
 
 ```bash
 python3 -B scripts/test-exec-image-policy.py
-python3 -B scripts/test-context-evidence-atomicity.py
 python3 -B scripts/test-context-snapshot-reader-atomicity.py
 python3 -B scripts/test-workflow-syscall-cut.py
 
 AGENT_TEST_CASE=agenttrust_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+make local-host-selftests
 AGENT_TEST_CASE=agentfinal_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 AGENT_TEST_CASE=agentscope_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 ```

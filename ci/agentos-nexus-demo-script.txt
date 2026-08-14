@@ -1,0 +1,3 @@
+/tools
+请从 `agent_task_channel_enter_result`、`AGENT_TASK_CHANNEL_RING_F_CQ_FULL` 和 Task Channel 的 resync 路径入手，研究高频工具调用者目前能看到哪些提交、完成和背压反馈。如果只能增加一种供 Agent 高频读取的轻量策略摘要，最值得补什么？请先判断现有信息是否已经足够；若仍有缺口，选择一个具体信号，说明它怎样改变下一次提交决策、由谁在何时更新和失效，以及一致性与维护代价。
+/quit

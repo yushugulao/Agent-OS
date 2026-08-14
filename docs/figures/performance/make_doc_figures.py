@@ -2,8 +2,8 @@
 """Build publication figures from the 20260811 measurement tables.
 
 The script reads CSV tables only. It refuses to place outputs inside the
-measurement input directory and verifies that every input hash is unchanged after
-rendering.
+measurement input directory and confirms that the source tables remain unchanged
+while rendering.
 """
 
 from __future__ import annotations
@@ -975,9 +975,9 @@ def main() -> int:
     for stem, maker in FIGURES:
         if stem not in selected:
             continue
-        figure, evidence = maker(tables)
+        figure, metrics = maker(tables)
         outputs = export_figure(figure, output_dir, stem, formats)
-        manifest["figures"][stem] = {"evidence": evidence, "outputs": outputs}
+        manifest["figures"][stem] = {"metrics": metrics, "outputs": outputs}
         print(f"rendered {stem}: {', '.join(path['path'] for path in outputs.values())}")
 
     after = {path.name: sha256(path) for path in input_paths}

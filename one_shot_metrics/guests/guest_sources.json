@@ -1,7 +1,6 @@
 {
   "schema_version": 1,
   "campaign_id": "agentos-advanced-figures-20260811",
-  "source_commit": "2b14fb1f74b9bd093e6de939a16554620835699e",
   "files": [
     {
       "name": "agenttask",

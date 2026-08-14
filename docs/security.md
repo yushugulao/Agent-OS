@@ -8,7 +8,7 @@ Agent（智能体）工作流会同时持有身份、文件、工具结果和异
 - [请求检查顺序](#请求检查顺序)
 - [身份、生命周期与文件访问范围](#身份生命周期与文件访问范围)
 - [schema 与能力](#schema-与能力)
-- [Execution Contract 与 Effect Gate](#execution-contract-与-effect-gate)
+- [Execution Contract 与副作用检查](#execution-contract-与副作用检查)
 - [Provenance label](#provenance-传播)
 - [资源准入与 terminal commit](#资源准入与-terminal-commit)
 - [文件对象与 Live Query](#文件对象与-live-query)
@@ -29,14 +29,14 @@ Agent（智能体）工作流会同时持有身份、文件、工具结果和异
 | Task Channel | 所有者、通道 generation、`slot_generation` | 唯一提交者、只读 CQ、内核水位和完成结果 |
 | 类型化句柄 | 槽位、类型、所有权、generation | 所属生命周期、引用计数和析构 |
 | Workflow Credit Domain | 账户、计费类型、计费轮次 | reserve、阶段占用、commit 和退还 |
-| Workflow Fence | `challenge`、请求号、屏障序号 | 元数据、资源和 Evidence Ring 是否来自同一阶段 |
+| Workflow Fence | `challenge`、请求号、屏障序号 | 元数据、资源和工作流记录是否来自同一阶段 |
 
 这些标识都含有 generation。槽位编号相同而 generation 不同，内核就会把它们当成两个对象，旧请求不能借此操作新对象。
 
 <a id="请求检查链"></a>
 ## 请求检查顺序
 
-工具调用的主要检查位于 [`os/agent_core.c`](../os/agent_core.c) 的 `agent_execute_one()`。系统先取得 Context commit 权，再检查 Execution Contract 和 provenance，随后预留 Phase Lease。只有 Effect Gate 允许执行时，具体工具才会修改进程、文件或元数据。
+工具调用的主要检查位于 [`os/agent_core.c`](../os/agent_core.c) 的 `agent_execute_one()`。系统先取得 Context commit 权，再检查 Execution Contract 和 provenance，随后预留 Phase Lease。只有副作用检查允许执行时，具体工具才会修改进程、文件或元数据。
 
 ```text
 复制请求或描述符
@@ -47,7 +47,7 @@ Agent（智能体）工作流会同时持有身份、文件、工具结果和异
     -> 核对 Execution Contract 节点、前驱、尝试次数、截止时间
     -> 核对 provenance 和所需能力
     -> 预留 Phase Lease
-    -> 通过 Effect Gate 检查取消状态和副作用
+    -> 检查取消状态和副作用阶段
     -> 执行工具，再次核对文件访问范围和对象身份
     -> 写入输出 provenance 并结算资源
     -> commit Context 和 terminal record
@@ -112,7 +112,7 @@ Tool Registry 把 schema 和权限要求写在同一项中：
 
 系统启动时还会检查工具名称是否重复、编号是否连续、参数写入位置是否重叠。`schema_digest` 把工具名称、参数、能力、provenance 和副作用一起写入摘要。工具含义发生变化时，即便编号未变，摘要也会随之改变。
 
-## Execution Contract 与 Effect Gate
+## Execution Contract 与副作用检查
 
 设置 `AGENT_EXECUTION_CONTRACT_F_ENFORCE` 后，一份 Execution Contract 最多保存 24 个按依赖顺序排列的节点。每个节点注明工具和 schema、前驱、artifact 类型、允许的 provenance、副作用、截止时间、尝试次数、重试与取消规则，以及资源上限。
 
@@ -143,7 +143,7 @@ Provenance label 定义在 [`include/agent_provenance_abi.h`](../include/agent_p
 | `UNTRUSTED_TOOL_OUTPUT` | 外部工具或模型返回值 |
 | `CROSS_AGENT_DATA` | 其他 Agent 的消息和前驱结果 |
 
-这些标记按位加入后续 Context。`agent_provenance_authorize_tool()` 比较当前输入与 Tool Registry 允许的 provenance，同时核对 Execution Contract 是否漏写了 Registry 中登记的副作用。SHA-256 用于固定输入字节和规范化输入指纹；身份、文件访问范围和能力仍要单独检查。
+这些标记按位加入后续 Context。`agent_provenance_authorize_tool()` 比较当前输入与 Tool Registry 允许的 provenance，同时核对 Execution Contract 是否漏写了 Registry 中登记的副作用。内容指纹用于固定输入字节和规范化输入；身份、文件访问范围和能力仍要单独检查。
 
 拒绝原因会写入当前 Context 的 provenance 标志，并使用固定的原因码，例如生命周期过期、缺少 Execution Contract、前驱不合法、能力不足、provenance 不被接受或副作用不符。V3 响应和任务 CQE 会带回相应的执行决定原因。
 
@@ -161,7 +161,7 @@ commit：pending -> used
 
 Execution Contract 中的执行额度和存储额度，会在工具运行前转成一份 Phase Lease。它以工作流、节点、请求号和 generation 标识，并按开始、启用、停用、结算的顺序变化。额度不足返回 `NO_SPACE`。失败时预留额度退回；已经发布的对象则在销毁时退回额度。
 
-Context commit 顺序固定为：取得工具结果、结算 Phase Lease、写入输出 provenance、写入 Context 与 Evidence Ring 票号，最后更新 Execution Contract 节点。受约束调用会在执行前 reserve terminal record，避免工具已经修改系统状态却无处记录。`agent_workflow_close()` 只负责把生命周期改为关闭中并要求成员退出；成员、已有操作、任务回调、资源对象和 Context commit 全部处理完后，后台清理程序才回收工作流。
+Context commit 顺序固定为：取得工具结果、结算 Phase Lease、写入输出 provenance、写入 Context 与工作流记录票号，最后更新 Execution Contract 节点。受约束调用会在执行前 reserve terminal record，避免工具已经修改系统状态却无处记录。`agent_workflow_close()` 只负责把生命周期改为关闭中并要求成员退出；成员、已有操作、任务回调、资源对象和 Context commit 全部处理完后，后台清理程序才回收工作流。
 
 Nexus artifact 通过 `agent_file_publish()` 发布。内核先把 header 与 payload 复制到私有快照并写入未命名 inode，完整数据 checkpoint 结束后才接入正式文件名。正式路径不会出现半份内容；同名竞争至多一个调用成功，后来的调用返回 `DUPLICATE`，原文件保持不变。若目录接入结果为 `INDETERMINATE`，Guest 只在正式路径逐字节等于本次请求且紧接 EOF 时接受已有文件。Context、metadata 和 Workflow Fence 仍按 artifact handle、lifecycle generation 与 terminal record 关联，各自沿原有提交路径推进。
 
@@ -194,7 +194,7 @@ Task Channel 只有一个提交者，队列水位以内核记录为准。SQ 由�
 
 取消策略若当场拒绝取消命令，取消请求号仍会被记为已使用。此时 `enter` 返回 `DENIED`，不产生取消 CQE，原目标继续运行。CQ 已满时，内核保留尚未写出的结果；用户读取 CQ 后，再继续发布。
 
-类型化资源句柄包含槽位、类型、所有权标志和 generation。`IMPORT` 只接受当前 Agent 可读的普通文件、准确的 1–63 字节长度和 OWNED UTF-8，并要求当前 Agent 已经有一条经过校验的最新 Context；导入只绑定这条记录，不另建 Context。内核从 offset 0 取得内容，不改动共享文件 offset；EOF、NUL 和 UTF-8 检查通过后，只把不可变快照、SHA-256 与内核生成的 producer/Context/provenance 元数据放入资源表，不保留 `struct file *`。最终 copyout 失败会回滚尚未暴露的资源，因此调用方不会得到“接口失败但槽位已占用”的半成功状态。
+类型化资源句柄包含槽位、类型、所有权标志和 generation。`IMPORT` 只接受当前 Agent 可读的普通文件、准确的 1–63 字节长度和 OWNED UTF-8，并要求当前 Agent 已经有一条经过校验的最新 Context；导入只绑定这条记录，不另建 Context。内核从 offset 0 取得内容，不改动共享文件 offset；EOF、NUL 和 UTF-8 检查通过后，只把不可变快照、内容指纹与内核生成的 producer/Context/provenance 元数据放入资源表，不保留 `struct file *`。最终 copyout 失败会回滚尚未暴露的资源，因此调用方不会得到“接口失败但槽位已占用”的半成功状态。
 
 SQE 可以用 BORROWED 别名引用同一 `{slot, type, generation}`。BORROWED 任务结束后引用归还，资源保持 `LIVE`；OWNED 任务结束后资源自动消费。`RELEASE` 以及槽位再次使用都会使旧 generation 返回 `STALE`。当前 ECHO Task Bridge 从内核快照复制 payload，不再读取导入时的 fd，文件后来被改写也不会改变已经接受的任务输入。
 

@@ -30,7 +30,7 @@
   },
   "figures": {
     "01_paired_core_performance": {
-      "evidence": {
+      "metrics": {
         "sources": [
           "contest_paired.csv"
         ],
@@ -62,7 +62,7 @@
       }
     },
     "02_catalog_speedup_landscape": {
-      "evidence": {
+      "metrics": {
         "sources": [
           "agenteval_pairs.csv"
         ],
@@ -110,7 +110,7 @@
       }
     },
     "03_scan_state_groups": {
-      "evidence": {
+      "metrics": {
         "sources": [
           "agenteval_samples.csv"
         ],
@@ -155,7 +155,7 @@
       }
     },
     "04_task_latency_distributions": {
-      "evidence": {
+      "metrics": {
         "sources": [
           "task_sequences.csv"
         ],
@@ -192,7 +192,7 @@
       }
     },
     "05_eevdf_latency_fairness": {
-      "evidence": {
+      "metrics": {
         "sources": [
           "eevdf_wakeups.csv",
           "eevdf_samples.csv"
@@ -253,7 +253,7 @@
       }
     },
     "06_normalized_io_heatmaps": {
-      "evidence": {
+      "metrics": {
         "sources": [
           "contest_io_normalized.csv",
           "task_perf_normalized.csv"
@@ -305,7 +305,7 @@
       }
     },
     "07_core_end_to_end_scope": {
-      "evidence": {
+      "metrics": {
         "sources": [
           "contest_paired.csv"
         ],
