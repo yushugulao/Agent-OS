@@ -25,7 +25,7 @@
 | 采集时间 | 2026-08-11 00:27:57 至 01:03:08 UTC |
 | 数据量 | QEMU 独立启动 30 次，33 个原始输出文件，19 个 CSV 文件，共 7,498 条数据记录 |
 
-[`manifest.json`](../one_shot_metrics/data/20260811/manifest.json) 记录测试环境、工具版本、Guest 源码与构建产物摘要、采集安排和文件清单。[`validation.json`](../one_shot_metrics/data/20260811/validation.json) 检查字段格式、样本配对、参数组合、逐操作记录完整性和绘图输入，结果为 `valid=true`、`ready=true`。
+[`manifest.json`](../one_shot_metrics/data/20260811/manifest.json) 记录测试环境、工具版本、采集安排和文件清单。[`validation.json`](../one_shot_metrics/data/20260811/validation.json) 检查字段格式、样本配对、参数组合、逐操作记录完整性和绘图输入，结果为 `valid=true`、`ready=true`。
 
 ## 2. 采集方法与统计单位
 
