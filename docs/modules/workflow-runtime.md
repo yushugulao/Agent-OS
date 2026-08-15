@@ -225,11 +225,22 @@ workflow_credit_domain_fence(key, exec, storage, &credit);
 
 ## 七、Nexus 多智能体 Harness Runtime
 
+Nexus 一轮交互中 Host、Guest 与内核的协作路径如图 1 所示。图左侧是 QEMU Guest 内的 Relay、Context、Metadata Catalog 和工作进程，右侧是提供模型与版本化文件字节的 Host relay，底部是保存身份、Task Channel、Context 和工作流状态的 AgentOS kernel runtime；箭头串起从用户输入到模型决策、工具执行和最终结算的主线。
+
 <p align="center">
   <img src="../figures/architecture/nexus_runtime_flow.jpg" alt="Nexus 通用任务、三工具与多智能体消息流程" width="960">
 </p>
 
 **图 1　Nexus 通用多智能体 Harness 运行流程**
+
+图中的单轮主线可以按以下顺序阅读：
+
+1. **输入。** Relay 接收非空用户目标，建立本轮 root Task，并在自己的 Context active path 上追加 USER 节点。
+2. **模型。** Guest 从 active path 重建消息，经 Host relay 请求 Provider 或固定 Replay；模型每次返回一个工具调用或最终答案。
+3. **候选。** `search_files` 和 `read_file` 先取得 Host manifest，再由 Guest Metadata Catalog 与 Live Query 选择并复核候选；`inspect_system` 则直接观察 Guest 状态。
+4. **Task。** Coordinator 把工具请求封装为 child Task，通过内核 Task Channel 委派给 Research 或 System，内核负责 claim、complete、cancel 与唯一终态。
+5. **Artifact 与 Context。** 工作进程把结果写入预绑定的 Guest artifact；Coordinator 复核后追加 TOOL 节点并继续模型循环，成功答案最终进入 FINAL 节点。
+6. **结算。** CQE、Execution Contract 和 root Task 依次收敛，成功轮次保留新的 active path，失败或取消则回滚本轮；Host ledger 只接收 Guest 已完成结算的事件投影。
 
 原生图源见 [`nexus_runtime_flow.drawio`](../figures/architecture/nexus_runtime_flow.drawio)。
 

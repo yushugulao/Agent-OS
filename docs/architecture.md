@@ -23,13 +23,19 @@ AgentOS-uCore 建立在 RISC-V uCore 之上。进程、虚拟内存、文件系�
 
 普通 uCore 应用可以在用户态编写这些逻辑，但每个应用都要重复维护，内核也无法替应用保证跨子系统的原子性。AgentOS 把身份检查、Context、Typed Watch、资源记账和工作流调度做成通用内核功能。模型协议和交互界面仍留在用户态与 Host。当前系统运行于单 Hart RISC-V64 Guest，同时最多维护 4 个活动工作流。相关容量定义在 [`os/workflow_lifecycle.h`](../os/workflow_lifecycle.h) 和 [`os/agent.h`](../os/agent.h)。
 
+同一份 Agent 任务在普通 uCore 与 AgentOS-uCore 中的两条执行路径如图 1 所示。图的上方固定了相同的任务要求与输入，左、右两侧分别展开由应用自行维护 Agent 运行状态的路径，以及由内核提供通用 Agent 机制的路径。
+
 <p align="center">
   <img src="figures/architecture/plain_agentos_comparison.jpg" alt="普通 uCore 与 AgentOS-uCore 的智能体任务实现对比" width="940">
 </p>
 
 **图 1　普通 uCore 与 AgentOS-uCore 的智能体任务实现对比**
 
-图中对比了同一类 Agent 程序的两种实现方式。普通 uCore 只提供进程、内存、文件和基础 IPC，应用需要自行维护身份、Context、工具检查、文件轮询和资源统计。AgentOS-uCore 在内核中提供这些通用能力，应用只负责具体任务和工具逻辑。原生图源见 [`plain_agentos_comparison.drawio`](figures/architecture/plain_agentos_comparison.drawio)。
+**普通 uCore 路径。** 应用先自行保存 Agent 身份与 Context，再分别实现工具参数检查、执行规则、文件轮询、等待和资源统计，最后调用通用的系统调用、VFS、IPC 与进程调度能力。Agent 语义散落在各个应用模块中，内核只能看到彼此独立的进程和系统调用。
+
+**AgentOS-uCore 路径。** 内核先用身份、生命周期和 Context 统一标识本轮工作，再由 Typed Tool、Live Query/Watch 和 Workflow Credit Domain 分别处理工具检查、文件事件与资源记账，外层 EEVDF 按工作流分配 CPU 服务量。具体系统调用、文件访问和线程运行仍落到 uCore 原有机制，应用可以把主要精力放在任务拆分与工具逻辑上。
+
+**共同结果。** 两条路径接收相同输入，也能产生相同任务结果；区别在于 AgentOS-uCore 把需要跨进程、跨轮次保持一致的状态交给内核维护，使身份检查、事件唤醒和资源结算沿同一条执行链完成。原生图源见 [`plain_agentos_comparison.drawio`](figures/architecture/plain_agentos_comparison.drawio)。
 
 ## 二、总体架构
 

@@ -105,7 +105,7 @@
 
 大语言模型（Large Language Model，LLM）根据输入上下文逐步生成文本、代码或结构化数据，单次生成本身不会持续观察外部环境。AI Agent 在模型之外加入目标分解、Context、工具调用和结果回读，让系统沿“观察、规划、行动、再观察”的 [ReAct](https://arxiv.org/abs/2210.03629) 式循环推进任务。对 AgentOS-uCore 而言，关键变化是模型决策会被 Guest Runtime 转换成读取文件、创建任务或修改系统状态的请求。
 
-这类系统正从“生成一段内容”走向“读取工作区、调用工具并持续改变系统状态”。[OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/) 将提示注入、敏感信息泄露、不当输出处理、过度代理和无界资源消耗列为重要风险；[NIST AI 600-1](https://doi.org/10.6028/NIST.AI.600-1) 也把部署前测试、内容来源、事件披露、人工复核和跟踪记录纳入生成式 AI 风险管理。对操作系统项目而言，当模型能够触发真实副作用时，仅判断输出文本是否合理，已经不足以回答“谁以什么权限、依据什么上下文、调用了哪个工具、消耗了多少资源”。
+这类系统正从“生成一段内容”走向“读取工作区、调用工具并持续改变系统状态”。[OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/) 将提示注入、敏感信息泄露、不当输出处理、过度代理和无界资源消耗列为重要风险；[NIST AI 600-1](https://doi.org/10.6028/NIST.AI.600-1) 也把部署前测试、内容来源、事件披露、人工复核和跟踪记录纳入生成式 AI 风险管理。与 AgentOS-uCore 执行路径直接相关的五类风险如图 1 所示。读图时可以沿“模型输入与输出、数据访问、工具执行、资源消耗”这条主线，观察模型决策进入操作系统后需要经过的四组控制。
 
 <p align="center">
   <a href="docs/figures/background/owasp_llm_top10_2025_highlighted.png">
@@ -113,7 +113,12 @@
   </a>
 </p>
 
-> 红框标出与工具副作用、权限、Context 和资源治理直接相关的类别。原图：[OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/)（[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)）。
+<p align="center"><strong>图 1　与 AgentOS-uCore 设计直接相关的 OWASP 风险类别</strong><br><sub>红框为本文关注的类别；原图：<a href="https://genai.owasp.org/llm-top-10/">OWASP Top 10 for LLM Applications 2025</a>（<a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>）</sub></p>
+
+1. **输入与输出检查。** 提示注入会影响模型决策，不当输出处理则可能把模型生成的内容直接变成命令或参数。Guest Runtime 先把模型输出解析为结构化请求，内核再依据 Tool Registry 中的 schema 校验参数，使未经检查的文本不能直接触发工具副作用。
+2. **Context 与数据访问。** 敏感信息泄露不仅取决于模型说了什么，也取决于模型能够读取哪些 Context、文件和 artifact。系统用访问范围与对象句柄约束读取，并把文件来源和调用结果写入 provenance，供后续步骤复核决策依据。
+3. **能力与执行约束。** 过度代理通常表现为 Agent 获得了超过当前任务所需的工具或委派能力。AgentOS-uCore 将 capability 与 Execution Contract 组合使用，逐次检查工具、参数、前置任务和截止时间；Task Channel 同时记录子任务委派及其唯一终态。
+4. **资源记账与调度。** 资源消耗失控会把一次错误循环放大为持续的 CPU、存储或工具调用开销。Workflow Credit Domain 汇总同一工作流的资源使用量，等待与调度机制据此休眠、唤醒、限额和结算各个 Agent。
 
 一个可执行 Agent 通常沿“接收目标与输入 → 读取 Context → 规划下一步 → 调用工具产生副作用 → 记录结果并继续或结束”的闭环运行。单个请求还会扩展为多个进程或 Agent 的委托关系。于是，**identity（执行者是谁）**、**capability（允许做什么）**、**structured tool（以何种参数产生副作用）**、**Context 与 provenance（决策依据来自哪里）**、**terminal state（任务是否完成或取消）**以及**工作流资源账本**，都必须在一次模型调用结束后继续保持一致。若这些状态只由各应用进程自行维护，重启、并发、迟到响应和对象复用都可能造成状态分歧。
 
@@ -142,15 +147,23 @@ AgentOS-uCore 将**副作用检查、身份与委托生命周期、Context/prove
 
 ### 2.3 总体架构
 
+AgentOS-uCore 的总体架构如图 2 所示。系统沿一次 Agent 任务的真实执行过程组织为 Host Relay、Guest 应用与工作流、Agent UAPI/Guest Runtime、AgentOS 内核功能和 uCore 基座五个协作部分。任务请求从模型与工作区进入 Guest，逐层转换为结构化系统调用；执行结果、事件和 provenance 再沿相反方向返回工作流。
+
 <p align="center">
   <a href="docs/figures/architecture/agentos_overview.png">
     <img src="docs/figures/architecture/agentos_overview.png" alt="AgentOS-uCore 总体架构" width="1000">
   </a>
 </p>
 
-AgentOS-uCore 自下而上分为五层。uCore 基础内核负责进程、内存、VFS、IPC、调度和设备 I/O。AgentOS 内核模块负责 Agent identity、Context、Structured Tool、Live Query、事件、资源和工作流调度。用户态 UAPI 与 Guest Runtime 将这些内核接口封装起来，供应用程序调用。Host Relay 负责串口中继、TLS 与模型 Provider 适配。Agent Live、Nexus 和科研工作流负责拆分目标、选择工具并安排各阶段协作。
+<p align="center"><strong>图 2　AgentOS-uCore 总体架构</strong></p>
 
-这些状态都跟随 uCore 对象一起变化。进程创建并完成 `exec` 后，内核发布 Agent identity；建立地址空间时映射 Context；VFS 修改文件时同步更新元数据。进程进入运行队列、获得 CPU、睡眠或经历时钟中断时，调度器更新工作流状态。进程退出后，系统依次回收订阅、队列、执行侧 Workflow Credit Domain 和生命周期槽位；标记 `preserve_on_retire` 的文件访问范围及其存储计费可以继续保留。各模块的接入位置见[系统架构](docs/architecture.md)，原生图源见 [`agentos_overview.drawio`](docs/figures/architecture/agentos_overview.drawio)。
+1. **Host Relay。** Host 侧连接模型 Provider、版本化工作区与 QEMU 串口，把外部模型响应和文件字节送入 Guest，并将 Guest 请求转交给对应服务。它负责通信与适配，实际的任务状态和执行许可仍由 Guest 与内核维护。
+2. **Guest 应用与工作流。** Agent Live、Nexus Harness 和科研工作流接收目标，拆分任务并选择下一步工具。它们输出结构化调用或子任务请求，随后消费工具结果、文件候选和完成事件，继续推进业务流程。
+3. **Agent UAPI 与 Guest Runtime。** 这一层把 Context/File、Catalog/Watch、Typed Tool、Task SQ/CQ、Event/Wait 与 Fence 等接口封装为稳定调用，将上层意图转换为版本化参数，并把内核返回值恢复为应用可直接处理的对象。
+4. **AgentOS 内核功能。** 内核模块围绕身份与 Context、工具与数据、运行时与调度三组机制协同工作：先核对调用者、capability 和 Execution Contract，再执行工具或文件操作，同时更新查询、事件、provenance、任务终态与 Workflow Credit Domain。
+5. **uCore 基座。** 进程、页表、VFS/inode、IPC、等待队列、调度器、时钟与设备驱动提供真实的内核对象和执行路径。AgentOS 机制接入这些原有路径，使文件写入能够更新查询结果，事件能够唤醒等待进程，进程退出能够触发资源回收。
+
+五个部分共同形成“请求向下、结果向上、状态随内核对象同步”的执行链。进程完成 `exec` 后发布 Agent identity，地址空间建立时映射 Context，VFS 修改文件时同步元数据，退出时回收订阅、队列、资源账本和生命周期槽位。由此，上层工作流不必再维护一套容易分歧的影子状态。各模块的接入位置见[系统架构](docs/architecture.md)，原生图源见 [`agentos_overview.drawio`](docs/figures/architecture/agentos_overview.drawio)。
 
 ### 2.4 核心模块
 

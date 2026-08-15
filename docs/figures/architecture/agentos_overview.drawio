@@ -55,7 +55,7 @@
         <mxCell id="agentos_zone" parent="1" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;container=1;pointerEvents=0;align=center;verticalAlign=top;spacingTop=20;spacingLeft=26;fontSize=38;fontStyle=1;fontColor=#315A75;fillColor=#F7F9FC;strokeColor=#315A75;strokeWidth=3.2;fontFamily=Comic Sans MS;spacingRight=0;labelBackgroundColor=none;" value="AgentOS 内核功能层" vertex="1">
           <mxGeometry height="850" width="2520" x="340" y="790" as="geometry" />
         </mxCell>
-        <mxCell id="identity_domain" parent="agentos_zone" style="rounded=1;arcSize=18;whiteSpace=wrap;container=1;pointerEvents=0;align=center;verticalAlign=top;spacingTop=18;spacingLeft=20;fontSize=28;fontStyle=1;fontColor=#227A74;fillColor=#EAF6F3;strokeColor=#2F9C95;strokeWidth=2.4;dashed=1;dashPattern=10 6;fontFamily=Comic Sans MS;horizontal=1;html=1;" value="01  身份&amp;amp;&amp;amp;Context&amp;amp;&amp;amp;生命周期" vertex="1">
+        <mxCell id="identity_domain" parent="agentos_zone" style="rounded=1;arcSize=18;whiteSpace=wrap;container=1;pointerEvents=0;align=center;verticalAlign=top;spacingTop=18;spacingLeft=20;fontSize=28;fontStyle=1;fontColor=#227A74;fillColor=#EAF6F3;strokeColor=#2F9C95;strokeWidth=2.4;dashed=1;dashPattern=10 6;fontFamily=Comic Sans MS;horizontal=1;html=1;" value="01  身份 / Context / 生命周期" vertex="1">
           <mxGeometry height="650" width="480" x="40" y="90" as="geometry" />
         </mxCell>
         <mxCell id="k_identity" parent="identity_domain" style="image;aspect=fixed;html=1;points=[];align=center;image=https://app.diagrams.net/img/lib/azure2/identity/User_Settings.svg;verticalLabelPosition=bottom;verticalAlign=top;align=center;spacingTop=10;whiteSpace=wrap;html=1;fontSize=27;fontStyle=1;fontColor=#227A74;labelWidth=220;labelBackgroundColor=none;fontFamily=Comic Sans MS;" value="Agent 身份" vertex="1">
@@ -67,7 +67,7 @@
         <mxCell id="k_lifecycle" parent="identity_domain" style="sketch=0;aspect=fixed;strokeColor=none;shadow=0;fillColor=#2F9C95;shape=mxgraph.gcp2.arrow_cycle;verticalLabelPosition=bottom;verticalAlign=top;align=center;spacingTop=10;whiteSpace=wrap;html=1;fontSize=27;fontStyle=1;fontColor=#227A74;labelWidth=220;labelBackgroundColor=none;fontFamily=Comic Sans MS;" value="Lifecycle" vertex="1">
           <mxGeometry height="95" width="150" x="275" y="465" as="geometry" />
         </mxCell>
-        <mxCell id="data_domain" parent="agentos_zone" style="rounded=1;arcSize=18;whiteSpace=wrap;html=1;container=1;pointerEvents=0;align=center;verticalAlign=top;spacingTop=18;spacingLeft=20;fontSize=28;fontStyle=1;fontColor=#386AAB;fillColor=#EDF3FB;strokeColor=#4F83CC;strokeWidth=2.4;dashed=1;dashPattern=10 6;fontFamily=Comic Sans MS;" value="02  工具&amp;amp;&amp;amp;数据平面" vertex="1">
+        <mxCell id="data_domain" parent="agentos_zone" style="rounded=1;arcSize=18;whiteSpace=wrap;html=1;container=1;pointerEvents=0;align=center;verticalAlign=top;spacingTop=18;spacingLeft=20;fontSize=28;fontStyle=1;fontColor=#386AAB;fillColor=#EDF3FB;strokeColor=#4F83CC;strokeWidth=2.4;dashed=1;dashPattern=10 6;fontFamily=Comic Sans MS;" value="02  工具与数据平面" vertex="1">
           <mxGeometry height="650" width="1280" x="550" y="90" as="geometry" />
         </mxCell>
         <mxCell id="k_metadata" parent="data_domain" style="shape=image;html=1;imageAspect=0;aspect=fixed;image=https://icons.diagrams.net/assets/azure/1/Data_Catalog.svg;verticalLabelPosition=bottom;verticalAlign=top;align=center;spacingTop=10;whiteSpace=wrap;html=1;fontSize=25;fontStyle=1;fontColor=#386AAB;labelWidth=220;labelBackgroundColor=none;fontFamily=Comic Sans MS;" value="Metadata Catalog" vertex="1">
@@ -114,7 +114,7 @@
             <mxPoint x="940" y="400" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="runtime_domain" parent="agentos_zone" style="rounded=1;arcSize=18;whiteSpace=wrap;html=1;container=1;pointerEvents=0;align=center;verticalAlign=top;spacingTop=18;spacingLeft=20;fontSize=28;fontStyle=1;fontColor=#A37218;fillColor=#FFF6E6;strokeColor=#E3A93C;strokeWidth=2.4;dashed=1;dashPattern=10 6;fontFamily=Comic Sans MS;" value="03  运行时&amp;amp;&amp;amp;调度" vertex="1">
+        <mxCell id="runtime_domain" parent="agentos_zone" style="rounded=1;arcSize=18;whiteSpace=wrap;html=1;container=1;pointerEvents=0;align=center;verticalAlign=top;spacingTop=18;spacingLeft=20;fontSize=28;fontStyle=1;fontColor=#A37218;fillColor=#FFF6E6;strokeColor=#E3A93C;strokeWidth=2.4;dashed=1;dashPattern=10 6;fontFamily=Comic Sans MS;" value="03  运行时与调度" vertex="1">
           <mxGeometry height="650" width="620" x="1860" y="90" as="geometry" />
         </mxCell>
         <mxCell id="k_event" parent="runtime_domain" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#E3A93C;strokeColor=none;dashed=0;aspect=fixed;pointerEvents=1;shape=mxgraph.aws4.eventbridge_custom_event_bus_resource;verticalLabelPosition=bottom;verticalAlign=top;align=center;spacingTop=10;whiteSpace=wrap;html=1;fontSize=26;fontStyle=1;fontColor=#A37218;labelWidth=220;labelBackgroundColor=none;fontFamily=Comic Sans MS;" value="Event Queue" vertex="1">
