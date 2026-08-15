@@ -138,7 +138,7 @@ Nexus 的跨轮延续以 Guest Relay Agent 的 AgentOS Context active path 为�
 
 Host 不私建、挑选、补写或替换 Provider 请求中的跨轮正文与 Guest 工具历史。在线 Provider 与固定 Replay 都接收 Guest 构造的同一消息形状。失败或取消的轮次会把 Relay active path 回滚到本轮开始前；成功的 `/reset` 会同时清空 Relay Context、4 KiB 缓存、工作区 Catalog/Typed Watch 和 Host 侧关联状态。这一设计复用 AgentOS 原有的 Context active path，没有增加一套外部会话记忆服务。
 
-首版公开能力保持只读，不提供文件编辑、Shell 执行或任意命令运行。Research 和 System 通过 AgentOS 内核 Task Channel 的 `delegate_task`、claim/complete 和 Guest artifact 协作，并不是各自连接 Provider 的独立子模型。详细过程见[Nexus 多智能体 Harness Runtime](modules/workflow-runtime.md#七nexus-多智能体-harness-runtime)。
+当前公开能力保持只读，不提供文件编辑、Shell 执行或任意命令运行。Research 和 System 通过 AgentOS 内核 Task Channel 的 `delegate_task`、claim/complete 和 Guest artifact 协作；两者都是 Guest 工作进程，模型请求统一由 Relay 经 Host relay 发起。详细过程见[Nexus 多智能体 Harness Runtime](modules/workflow-runtime.md#七nexus-多智能体-harness-runtime)。
 
 | 工具 | 行为与限制 |
 | --- | --- |
@@ -186,7 +186,7 @@ make agentos-nexus \
   AGENTOS_NEXUS_SCRIPT=/absolute/path/to/questions.txt
 ```
 
-每轮都有一个 root Task。需要工具时，Coordinator 用内核 Task Channel 的 `delegate_task` 建立 child Task：`search_files`、`read_file` 交给 Research，`inspect_system` 交给 System。56 字节 descriptor 只绑定目标身份、任务关联和 capsule handle；大段输入与结果保存在 Guest artifact。目标 Agent claim 后处理 capsule，并通过 complete 提交 terminal 状态，Coordinator 从唯一 CQE 结算，再等待 Execution Contract 到达 `RECLAIMED` 后读取结果并恢复事件投影。首版每个 issuer 同时只保留一个未结算委派，并拒绝 self delegation 或让同一活动端点同时成为 owner/target。Task ledger 同时跟踪父子关系、内核身份和状态迁移。工具名称只描述通用能力，与本次演示选择什么问题无关。
+每轮都有一个 root Task。需要工具时，Coordinator 用内核 Task Channel 的 `delegate_task` 建立 child Task：`search_files`、`read_file` 交给 Research，`inspect_system` 交给 System。56 字节 descriptor 绑定目标身份、task type、task/correlation/parent 编号和 capsule handle；大段输入与结果保存在 Guest artifact。目标 Agent claim 后处理 capsule，并通过 complete 提交 terminal 状态；任务完成结算时，Coordinator 从至多一条 terminal CQE 取得结果，再等待 Execution Contract 到达 `RECLAIMED` 后读取 artifact 并恢复事件投影。当前实现让每个 issuer 同时只保留一个未结算委派，并拒绝 self delegation 或让同一活动端点同时成为 owner/target。Task ledger 同时跟踪父子关系、内核身份和状态迁移。工具名称只描述通用能力，与本次演示选择什么问题无关。
 
 单轮最多接受 16 个模型决策，并单独允许最多 32 次可重试 provider 错误；可重试传输失败不会冒充成模型的新决策。provider 生成请求的 `max_tokens` 为 `114514`。这是模型生成预算，不会扩大 Guest 对外公开的最终答案；最终正文仍限制为 2048 个 UTF-8 字节。
 

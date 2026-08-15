@@ -185,7 +185,7 @@ Nexus 的 artifact 由 Guest Runtime 组织，再通过 `agent_file_publish()` �
 
 [`user/src/agenttask_ucore.c`](../../user/src/agenttask_ucore.c) 用重复请求号制造一次协议错误，并检查两次 `enter` 的结果。第一次应返回 `RESYNC_REQUIRED` 和新的通道 generation；第二次使用零队尾清除持续重新同步标记。普通 `STALE` 不增加 `protocol_faults` 或 `resync_count`。
 
-每个已经接受的目标任务只产生一条 CQE。取消命令使用自己递增的 `request_id`，并以 `link_request_id` 指向目标，不会另行产生一条取消 CQE。若取消策略当场拒绝命令，取消命令的编号仍会记为已使用；`enter` 返回 `DENIED`，原目标继续运行。CQ 已满时，内核保留尚未写出的结果，等用户确认读取后继续发布。普通桥接任务的强制截止时间由定时器路径标记，任务到达可调度检查点后，内核生成带 `AGENT_TASK_CQE_F_DEADLINE` 的 CQE；已经被另一个 Agent claim 的委派则使用下述协作式终态确认。
+已经接受的目标任务形成可交付终态后，至多产生一条 CQE。取消命令使用自己递增的 `request_id`，并以 `link_request_id` 指向目标，不会另行产生一条取消 CQE。若取消策略当场拒绝命令，取消命令的编号仍会记为已使用；`enter` 返回 `DENIED`，原目标继续运行。CQ 已满时，内核保留尚未写出的结果，等用户确认读取后继续发布。普通桥接任务的强制截止时间由定时器路径标记，任务到达可调度检查点后，内核生成带 `AGENT_TASK_CQE_F_DEADLINE` 的 CQE；已经被另一个 Agent claim 的委派则使用下述协作式终态确认。
 
 任务资源 ABI 提供导入、释放和查询操作，并使用 16 字节的类型化句柄，其中包含槽位 generation。`IMPORT` 从当前 Agent 可读的普通文件描述符导入 OWNED 资源，并绑定该 Agent 已经存在且经过校验的最新 Context，不会借导入操作新建 Context。`AGENT_ARTIFACT_UTF8` 接受准确的 1–63 字节文本；`AGENT_ARTIFACT_TASK` 只接受准确的 56 字节 `agent_task_delegate_descriptor`。Task Bridge 从 offset 0 读取并额外探测 EOF，不改变文件的共享 offset。UTF-8 资源要通过 NUL 与编码检查，TASK 资源要通过描述符版本、大小、标志和保留字段检查；随后内核保存不可变快照、内容指纹、producer、Context sequence 和 provenance，不保留文件对象指针。
 
@@ -193,9 +193,9 @@ SQE 可以把同一句柄作为 BORROWED 输入。ECHO Task Bridge 会把 UTF-8 
 
 ### 跨 Agent 委派
 
-`agent_task_delegate_descriptor` 固定为 56 字节，只保存目标 PID、Agent/control 身份、任务类型、task/correlation/parent 标识和 capsule handle。输入和结果正文留在 Guest artifact 中，Task descriptor 只负责绑定 handle。发起者用 `AGENT_TOOL_DELEGATE_TASK` 提交 SQE 后，节点进入真实的 Execution Contract `RUNNING` 与内核 pending 队列。目标必须具有 `AGENT_CAP_TASK_ACCEPT`，并取得发起者授予的 `AGENT_IPC_ROUTE_TASK`；该 TASK route 与一般 `MESSAGE`/`LLM_DONE` 事件 route 分开。首版不接受 self delegation，也不允许一个活动端点同时成为 owner 与 target，使委派图保持二分无环。
+`agent_task_delegate_descriptor` 固定为 56 字节，只保存目标 PID、Agent/control 身份、任务类型、task/correlation/parent 标识和 capsule handle。输入和结果正文留在 Guest artifact 中，Task descriptor 只负责绑定 handle。发起者用 `AGENT_TOOL_DELEGATE_TASK` 提交 SQE 后，节点进入真实的 Execution Contract `RUNNING` 与内核 pending 队列。目标必须具有 `AGENT_CAP_TASK_ACCEPT`，并取得发起者授予的 `AGENT_IPC_ROUTE_TASK`；该 TASK route 与一般 `MESSAGE`/`LLM_DONE` 事件 route 分开。当前实现不接受 self delegation，也不允许一个活动端点同时成为 owner 与 target，使委派图保持二分无环。
 
-目标 Agent 调用 `agent_task_delegate_claim()`，取得描述符以及 owner PID/Agent/control、channel generation、request id 和 slot generation 的完整副本。内核在 claim 返回前重新核对目标身份、生命周期、能力与 route，登记执行者并进入 effect-start。目标从 capsule 对应的 Guest artifact 取得输入，发布预绑定的结果 artifact，再调用 `agent_task_delegate_complete()` 提交业务状态。CQE 的输出类型保持 `NONE`，发起者从 capsule 绑定的 artifact 读取应用结果；首版每个 owner issuer 同时只允许一个尚未结算的委派。
+目标 Agent 调用 `agent_task_delegate_claim()`，取得描述符以及 owner PID/Agent/control、channel generation、request id 和 slot generation 的完整副本。内核在 claim 返回前重新核对目标身份、生命周期、能力与 route，登记执行者并进入 effect-start。目标从 capsule 对应的 Guest artifact 取得输入，发布预绑定的结果 artifact，再调用 `agent_task_delegate_complete()` 提交业务状态。CQE 的输出类型保持 `NONE`，发起者从 capsule 绑定的 artifact 读取应用结果；每个 owner issuer 当前同时只允许一个尚未结算的委派。
 
 effect-start 同时建立一项仅供本委派使用的 delegated effect lease。它绑定执行者 PID/Agent/`control_id`、主线程 identity generation 以及 channel/request/slot 代次；只有 Contract 明确允许 PROCESS 作用时，内核才会登记一个同样带 TID/generation 的 helper。直接作用的 mask 必须是 Contract manifest side-effect mask 的子集，每个进行中的调用还会固定当前委派代次。活动引用归零后，正常 complete、终态 cleanup ACK 或目标 quiescence 才结束 lease；它不能把一个 delegated task 扩张成 workflow 范围的作用权限。
 

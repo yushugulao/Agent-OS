@@ -182,11 +182,11 @@ Metadata Catalog 只接收 `agent_file_meta_set()` 显式登记、仅在运行�
 
 文件提交还要同时核对租约号、inode 的 `incarnation` 和 `expected_version`。
 
-Nexus 访问 Host 工作区时，Host broker 只持有会话显式配置并固定到已打开 handle 的 workspace root。Host 分页返回 generation、object id、相对路径和 revision，Guest 为当前页面建立真实的 Metadata Catalog stub inode，并用不截断的 Live Query 选择候选；generation 变化必须由 control stub 的 Typed Watch `UPDATE` 推进。Catalog 只是有界候选窗口，不是全文索引。Host 只能在 Guest 回传的候选对象内匹配正文，或返回与 object/path/revision 同时绑定的指定字节；正文回到 Guest 后成为 Research artifact 和 Context，而不是由 Host 在 Provider 历史中补写结果。
+Nexus 访问 Host 工作区时，Host broker 只持有会话显式配置并固定到已打开 handle 的 workspace root。Host 分页返回 generation、object id、相对路径和 revision，Guest 为当前页面建立真实的 Metadata Catalog stub inode，并用不截断的 Live Query 选择候选；generation 变化必须由 control stub 的 Typed Watch `UPDATE` 推进。Catalog 管理当前页面的有界候选，全文匹配由 Host 在 Guest 回传的候选对象内完成。Host 也可以返回与 object/path/revision 同时绑定的指定字节；正文回到 Guest 后形成 Research artifact，并通过 TOOL Context 投影进入后续 Provider 历史。
 
 ## Task Channel 协议
 
-Task Channel 只有一个提交者，队列水位以内核记录为准。SQ 由提交者写入，CQ 在用户页表中只读。每个已经接受的目标任务只产生一条 CQE；取消命令使用独立的请求号，通过 `link_request_id` 指向目标。
+Task Channel 只有一个提交者，队列水位以内核记录为准。SQ 由提交者写入，CQ 在用户页表中只读。已经接受的目标任务形成可交付终态后，至多产生一条 CQE；取消命令使用独立的请求号，通过 `link_request_id` 指向目标。
 
 过期请求和通道协议失步分别处理：
 
@@ -205,7 +205,7 @@ Task Channel 只有一个提交者，队列水位以内核记录为准。SQ 由�
 
 SQE 可以用 BORROWED 别名引用同一 `{slot, type, generation}`。BORROWED 任务结束后引用归还，资源保持 `LIVE`；OWNED 任务结束后资源自动消费。`RELEASE` 以及槽位再次使用都会使旧 generation 返回 `STALE`。ECHO Task Bridge 从内核快照复制 payload，不再读取导入时的 fd；`delegate_task` 也只读取已导入的 TASK 快照。因此文件后来被改写不会改变已经接受的任务输入。
 
-跨 Agent 委派还要求发起者向目标授予独立的 `AGENT_IPC_ROUTE_TASK`，目标持有 `AGENT_CAP_TASK_ACCEPT`，且描述符中的目标 PID、Agent/control 身份和当前生命周期全部一致。TASK route 与 `MESSAGE`/`LLM_DONE` 事件 route 分开。首版拒绝 self delegation，并拒绝让活动端点同时承担 owner 与 target，使委派关系保持二分无环。提交成功后，任务进入 Execution Contract `RUNNING` 和内核 pending 队列；`agent_task_delegate_claim()` 在把描述符及 owner/channel/request/slot 绑定复制给目标之前，再次检查身份、生命周期、能力和 route，并登记 effect-start。首版每个 owner issuer 同时只接受一个尚未结算的委派。
+跨 Agent 委派还要求发起者向目标授予独立的 `AGENT_IPC_ROUTE_TASK`，目标持有 `AGENT_CAP_TASK_ACCEPT`，且描述符中的目标 PID、Agent/control 身份和当前生命周期全部一致。TASK route 与 `MESSAGE`/`LLM_DONE` 事件 route 分开。当前实现拒绝 self delegation，并拒绝让活动端点同时承担 owner 与 target，使委派关系保持二分无环。提交成功后，任务进入 Execution Contract `RUNNING` 和内核 pending 队列；`agent_task_delegate_claim()` 在把描述符及 owner/channel/request/slot 绑定复制给目标之前，再次检查身份、生命周期、能力和 route，并登记 effect-start。每个 owner issuer 当前同时只接受一个尚未结算的委派。
 
 claim 后的 delegated effect lease 不是 workflow 级绕过。它精确绑定执行者 PID/Agent/`control_id`、主线程 identity generation 和 channel/request/slot 代次；Contract 允许的 helper 也必须匹配内核登记的 TID 与 identity generation。每次直接作用只能申请 Contract manifest side-effect mask 的子集，并在调用期间持有 lease 引用。正常 complete、最新终态 offer 的 cleanup ACK，或目标进程完成 quiescence 后，内核会等活动引用全部归零再撤销 lease；该机制不承诺强制终止永久无响应的执行者。
 

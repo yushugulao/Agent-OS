@@ -96,7 +96,7 @@ struct agent_event {
 
 跨 Agent 的 `MESSAGE` 先确认发送方和接收方都仍是有效 Agent，再比较文件访问范围和完整生命周期键。每个接收方最多保存 16 条消息路由。每条路由以发送方 `control_id` 为键，并记录允许的事件类型。普通发送者需要 `MESSAGE_SEND` 能力位。替他人配置路由需要 `ROUTE_MANAGE`，而且控制进程必须同时控制发送方与接收方。
 
-Task Channel 的跨 Agent 委派使用独立的 `AGENT_IPC_ROUTE_TASK`，不把 task capsule 当作 `MESSAGE` 事件。目标还必须具有 `AGENT_CAP_TASK_ACCEPT`。发起者的 `delegate_task` SQE 进入内核 pending 队列后，目标用 `agent_task_delegate_claim()` 取得不可变 descriptor，再以 `agent_task_delegate_complete()` 提交 terminal 状态；发起者从自己的 CQ 取得唯一的 terminal CQE。任务正文和结果由 Guest artifact 承载，descriptor 只保存身份、关联编号和 capsule handle。首版拒绝 self delegation，并让活动委派端点保持二分无环。
+在初赛的设计中，跨 Agent 委派复用了普通 `MESSAGE` 事件：消息携带固定的 N1 typed Task 状态和 capsule handle，任务 objective 与正文保存在 capsule artifact 中；用户态负责核对 task/correlation 和状态迁移，并自行裁决领取、完成、取消与迟到结果。我们随后为委派增加独立的 `AGENT_IPC_ROUTE_TASK` 和 Task Channel，把 claim 时点与终态竞争交给内核任务槽管理。目标必须具有 `AGENT_CAP_TASK_ACCEPT`，发起者的 `delegate_task` SQE 进入内核 pending 队列后，目标用 `agent_task_delegate_claim()` 取得不可变 descriptor，再以 `agent_task_delegate_complete()` 提交 terminal 状态。任务结算时，发起者从自己的 CQ 至多取得一条 terminal CQE；任务正文和结果继续由 Guest artifact 承载，descriptor 保存目标身份、task type、task/correlation/parent 编号和 capsule handle。内核拒绝 self delegation 和活动端点交叉担任 owner/target，并限制每个 issuer 同时只有一个未结算委派，这三项约束共同维持二分无环的活动委派关系。
 
 发送成功后，内核队列项会保存发送方 PID、`control_id`、起因序号、调用跨度和 provenance（来源追溯）标记。公开的 `agent_event` 只返回事件字段，控制编号和来源信息留在内核附加区。接收方处理事件时，内核会先把 `CROSS_AGENT_DATA` 等标记合并到当前 provenance 状态，再追加一条带因果关系的 Context 记录。
 
@@ -280,7 +280,7 @@ DeepSeek V4 provider 请求显式设置 `thinking.type=enabled` 和 `reasoning_e
 
 Guest 在提交 SQE 前把完整取消绑定交给同一生命周期的 Relay controller。用户取消到达后，controller 以 syscall 568 的 `REQUEST_CANCEL`、`CANCELLED` 和零 ACK 字段回传 owner/channel/request/slot/task/correlation，并同时满足 `ORCHESTRATE`、`WAIT_CANCEL` 与 caller 到 owner 的 TASK route。`OK` 只确认控制请求已经线性化：QUEUED 由 owner lane 终结，CLAIMED 的 Research/System 仍会在 complete 时收到 `CANCELLED` 或优先级更高的 `TIMEOUT` offer，先撤销预绑定结果再 `ACK_TERMINAL`；READY 的先到结果不被迟到取消覆盖。PREPARING/CLAIMING 时 controller 重试同一绑定，结果 copyout 丢失也由内核回执支持相同重试。
 
-Coordinator 从唯一 CQE 取得 terminal 状态后，先确认 CQ、释放 Task resource，再调用 `RETIRE`。Contract 首先进入 `RETIRING` 并停止新准入；直接调用和运行引用全部归零后才返回 `OK/RECLAIMED`。Coordinator 确认 `RECLAIMED` 后才恢复 observer、读取结果 artifact、发布 `TASK_EVENT`/`TOOL_EVENT` 并允许下一代 Contract。CREATE 发布时只为普通 inode 操作固定引用，长期阻塞的 pipe/device 控制读取不会阻止 Contract 建立；活动 Contract 内的普通 pipe write 仍按 IPC 副作用检查，因此 observer/Host 事件输出不会成为旁路。正常 complete、cleanup ACK 或目标 quiescence 会在活动作用返回后撤销 delegated lease。首版每个 issuer 同时只允许一个未结算的委派，也不会强制终止永久无响应的执行者。
+Coordinator 从唯一 CQE 取得 terminal 状态后，先确认 CQ、释放 Task resource，再调用 `RETIRE`。Contract 首先进入 `RETIRING` 并停止新准入；直接调用和运行引用全部归零后才返回 `OK/RECLAIMED`。Coordinator 确认 `RECLAIMED` 后才恢复 observer、读取结果 artifact、发布 `TASK_EVENT`/`TOOL_EVENT` 并允许下一代 Contract。CREATE 发布时只为普通 inode 操作固定引用，长期阻塞的 pipe/device 控制读取不会阻止 Contract 建立；活动 Contract 内的普通 pipe write 仍按 IPC 副作用检查，因此 observer/Host 事件输出不会成为旁路。正常 complete、cleanup ACK 或目标 quiescence 会在活动作用返回后撤销 delegated lease。当前实现把每个 issuer 的未结算委派限制为一个，也不会强制终止永久无响应的执行者。
 
 每次 `search_files` 或 `read_file` 都从 cursor 0 和空 generation 开始取得 Host manifest，一条工具链最多使用 8,192 个 wire attempt，包括 stale 后的重启。Host 每页最多返回 32 个带 object id、path、revision 和 size 的项目；generation 绑定一次目录快照，object id 稳定绑定相对路径，revision 绑定同一已打开对象的实际内容。Guest 在有界运行时 arena 中保留页面的完整字段，同时建立 1 个 control inode 和最多 32 个 data-stub inode；data stub 以 `host/<object_id>` 作为 logical path，按 4 个 stage、每组最多 8 项登记 project、workflow、generation-derived run、kind 和 status。每个 stage 都通过 `agent_file_query()` 选择，Guest 要求返回数量精确且 `truncated=0`，随后再用运行时 arena 中的完整路径检查 prefix 或 exact match。因此 Metadata Catalog 是当前页面的有界目录窗口，不是整仓全文索引。
 
@@ -292,7 +292,7 @@ Host workspace broker 只持有会话显式指定并固定在目录句柄上的 
 
 Guest 为每轮 root Task 和每个 child Task 发出 `TASK_EVENT`。Host 的 [`agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py) 跟踪 lifecycle/turn、root-child DAG、内核 PID/agent/control identity 与任务状态迁移，用于确认每个工具请求由预期的工作进程完成。它不判断某个 AgentOS 改进结论是否正确，也不把演示题目固化为运行时流程。
 
-固定 Nexus replay 使用保存的 provider 回复重复运行同一套 QEMU、串口、三工具、Task Channel、Metadata Catalog、Typed Watch、artifact 和 Relay Context 路径，属于协议交互回归。在线模式与 replay 都直接使用 Guest 重建的同一消息与真实 TOOL artifact 投影；Host ledger 只核对关联和 Guest 投影，不把自己作为跨轮正文来源，也不私下补写工具结果。Nexus 自由演示连接在线 DeepSeek，关注模型能否针对用户问题自行研究并给出自然合理的结论。模型表现不理想时，改进方向应是通用 system policy、文件导航、Context 路径、结果回注或多智能体任务协作，而不是增加只服务某道演示题的专用工具。
+固定 Nexus replay 使用保存的 provider 回复重复运行同一套 QEMU、串口、三工具、Task Channel、Metadata Catalog、Typed Watch、artifact 和 Relay Context 路径，属于协议交互回归。在线模式与 replay 都直接使用 Guest 重建的同一消息与真实 TOOL artifact 投影；Host ledger 只核对关联和 Guest 投影，不把自己作为跨轮正文来源，也不私下补写工具结果。Nexus 自由演示连接在线 DeepSeek，关注模型能否针对用户问题自行研究并给出自然合理的结论。模型表现不理想时，我们会调整通用 system policy、文件导航、Context 路径、结果回注或多智能体任务协作，避免增加只服务某道演示题的专用工具。
 
 当前版本是只读 Harness：它可以搜索和读取 Host 工作区、检查 Guest 状态，但不编辑文件、不执行 Shell，也没有独立子模型。`/reset` 与会话关闭都会使 Guest 的工作区 Catalog/Typed Watch 状态失效，下一次工具调用从新的 manifest 开始。Guest 主程序位于 [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)，共用协议见 [`user/include/agent_nexus_protocol.h`](../../user/include/agent_nexus_protocol.h)，Host 合约、工作区访问与 Task ledger 分别位于 [`host_tools/agentos_nexus_contract.py`](../../host_tools/agentos_nexus_contract.py)、[`host_tools/agentos_workspace.py`](../../host_tools/agentos_workspace.py) 和 [`host_tools/agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py)。运行方法见[运行指南](../usage.md#4-使用-nexus-多智能体-harness)。
 

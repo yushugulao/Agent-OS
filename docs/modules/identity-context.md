@@ -121,7 +121,7 @@ if (record != 0 && !record->closing && record->members > 0 &&
 
 ### 3.3 按生命周期回收
 
-生命周期收尾程序按同一个键回收 Typed Watch、Metadata Catalog、Execution Contract、Task Channel、delegated task、工作流记录环、Workflow Credit Domain 和调度对象。随后回收普通 VFS 文件访问范围，删除其中的文件，并从 Metadata Catalog 移除相应记录。标记 `preserve_on_retire` 的 artifact 会保留元数据、文件和存储计费，只解除与旧生命周期的绑定。各模块在释放前都比较完整键，因此旧订阅、请求、Contract 和句柄只会得到 `STALE`、`CONFLICT` 或 `NOT_FOUND`，不会落入下一次工作流。若 delegated task 已经被目标 claim，关闭会生成协作式终态 offer 并唤醒目标；目标清理预绑定结果并确认最新 offer 后，owner 才收到唯一 terminal CQE。首版不能强制收敛永久无响应的已 claim 执行者。
+生命周期收尾程序按同一个键回收 Typed Watch、Metadata Catalog、Execution Contract、Task Channel、delegated task、工作流记录环、Workflow Credit Domain 和调度对象。随后回收普通 VFS 文件访问范围，删除其中的文件，并从 Metadata Catalog 移除相应记录。标记 `preserve_on_retire` 的 artifact 会保留元数据、文件和存储计费，只解除与旧生命周期的绑定。各模块在释放前都比较完整键，因此旧订阅、请求、Contract 和句柄只会得到 `STALE`、`CONFLICT` 或 `NOT_FOUND`，不会落入下一次工作流。若 delegated task 已经被目标 claim，关闭会生成协作式终态 offer 并唤醒目标；目标清理预绑定结果并确认最新 offer 后，owner 才收到唯一 terminal CQE。当前实现不能强制收敛永久无响应的已 claim 执行者。
 
 进程退出可能跨越一次系统调用，因而全程计入退出操作。普通 Agent 系统调用计入普通操作。Workflow Fence 不会持锁睡眠，暂时无法取得静止时点时返回 `RETRY`。
 

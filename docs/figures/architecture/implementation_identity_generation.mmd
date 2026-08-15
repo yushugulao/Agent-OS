@@ -1,15 +1,15 @@
 flowchart TB
   subgraph early["Early Design"]
     direction LR
-    e1["Scope ID"] --> e2["Slot Reuse"] --> e3["ABA Risk"]
+    e1["Agent ID"] --> e2["Distributed Scope / Control"] --> e3["Fragmented Identity"]
   end
 
   subgraph current["Current Design"]
     direction LR
-    c1["Lifecycle Key"] --> c2["Generation Check"] --> c3["Stale Reject"]
+    c1["Lifecycle Slot"] --> c2["Generation Check"] --> c3["Stale Reject"]
   end
 
-  e3 -. "Redesign" .-> c1
+  e3 -. "Unify" .-> c1
 
   classDef earlyStep fill:#F4F6F7,stroke:#8996A3,color:#263746,stroke-width:1.5px;
   classDef risk fill:#FDEDEC,stroke:#C65B5B,color:#6E2020,stroke-width:2px;

@@ -139,7 +139,7 @@ AGENT_TEST_CASE=agenteval_ucore \
 
 [`scripts/run-agent-tests.sh`](../scripts/run-agent-tests.sh) 会为该程序选择 `CHAPTER=agent_eval`，生成一次非零随机挑战值，再调用 [`host_tools/evaluation_contract.py`](../host_tools/evaluation_contract.py) 检查输出字段、测试负载指纹、结果指纹和整套测试约定。
 
-综合程序不是只打印五个“通过”标志，而是把每项能力对应到可以从 Guest 日志复核的系统行为：
+综合程序在输出五个“通过”标志的同时，还把每项能力对应到可以从 Guest 日志复核的系统行为：
 
 | 赛题关注点 | `agenteval_ucore` 中的操作 | 可观察结果与判断 |
 | --- | --- | --- |
@@ -166,7 +166,7 @@ AGENT_TEST_CASE=agenttask_ucore     make agentos-test TOOLPREFIX=riscv64-linux-g
 
 这些场景会尝试用普通进程冒用 Agent 身份，并构造错误的 lifecycle generation、跨 scope 消息、过期 Execution Contract、非法用户指针、共享队列满载和重复请求。Task resource 还会提交嵌入 NUL、非法 UTF-8、长度与 EOF 不符、不可读 fd 和过期 generation。系统拒绝这些输入后，测试会继续运行，并在生命周期结束后核对资源是否回到原值。
 
-`agenttask_ucore` 的资源标志已在定向 QEMU 中通过。合法输入取自当前文件访问范围，ECHO 返回导入时保存的 UTF-8 快照；BORROWED 完成后保持 `LIVE`，OWNED 完成后自动消费，显式释放和槽位复用前的旧 generation 都返回 `STALE`。测试还让一个 sibling 关闭已经 unlink 的 fd，同时由另一条路径完成导入，两边都能正常收尾；descriptor transaction 的静态检查继续核对 pin、读取与结算顺序。结果表明资源快照、所有权和 ABA 防护没有只停留在资源接口上，而是贯穿了真实的 SQ/CQ 提交与完成过程。
+`agenttask_ucore` 的资源标志已在定向 QEMU 中通过。合法输入取自当前文件访问范围，ECHO 返回导入时保存的 UTF-8 快照；BORROWED 完成后保持 `LIVE`，OWNED 完成后自动消费，显式释放和槽位复用前的旧 generation 都返回 `STALE`。测试还让一个 sibling 关闭已经 unlink 的 fd，同时由另一条路径完成导入，两边都能正常收尾；descriptor transaction 的静态检查继续核对 pin、读取与结算顺序。资源快照、所有权和 ABA 防护由资源接口延伸到真实的 SQ/CQ 提交与完成过程。
 
 ### 5.2 故障测试
 
@@ -184,7 +184,7 @@ make virtio-disk-test TOOLPREFIX=riscv64-linux-gnu-
 | `workflow-teardown-race-test` | 在 Agent 仍活动时并发执行 workflow teardown | fence drain 完成后，引用和工作流资源回到原值 |
 | `virtio-disk-test` | 注入 VirtIO 磁盘错误 | `bio`、VFS 和 Guest 收到相同的失败状态，系统能够完成收尾 |
 
-结果文件发布遵循“先写未命名 inode 并 checkpoint，再接入正式目录项”的两阶段 fs epoch 顺序。`agentpublish_ucore` 验证正式路径的完整内容、并发不覆盖和失败零副作用，静态顺序检查固定两次 checkpoint 与单次目录接入的先后关系。36 组文件系统故障回归不直接调用发布接口，而是验证两条路径共用的块与 inode 分配、回收和重启恢复机制。三类结果分别覆盖接口行为、发布顺序和底层持久化基础。
+结果文件发布遵循“先写未命名 inode 并 checkpoint，再接入正式目录项”的两阶段 fs epoch 顺序。`agentpublish_ucore` 验证正式路径的完整内容、并发不覆盖和失败零副作用，静态顺序检查固定两次 checkpoint 与单次目录接入的先后关系。36 组文件系统故障回归在共用的块与 inode 分配、回收及重启恢复机制中注入故障。三类结果分别覆盖接口行为、发布顺序和底层持久化基础。
 
 ## 6. 交互会话测试
 
@@ -202,7 +202,7 @@ Nexus replay 是固定的协议交互回归。它接受“不用工具直接回�
 
 child Task 由 Coordinator 通过真正的内核 Task Channel `delegate_task` 交给 Research 或 System。回归检查 56 字节 descriptor、`AGENT_ARTIFACT_TASK` resource、目标 claim/complete、结果 artifact 和唯一 terminal CQE，也确认 self delegation 与让同一活动端点同时成为 owner/target 的组合被拒绝。任务在 claim 后遇到 cancel、deadline、owner 退出或生命周期关闭时，测试覆盖 `RETRY/CLAIMED` offer、清理预绑定结果、`ACK_TERMINAL` 准确回传，以及更高 generation 的 `TIMEOUT` offer 不会重跑业务。
 
-controller 取消回归使用 syscall 568 的 `REQUEST_CANCEL`，检查同一生命周期、`ORCHESTRATE`/`WAIT_CANCEL`、caller 到 owner 的 TASK route 和 owner/channel/request/slot/task/correlation 完整绑定；`OK` 只代表控制请求线性化。QUEUED 由 owner lane 终结，CLAIMED 仍需 provider cleanup ACK，PREPARING/CLAIMING 返回 `RETRY`，READY 的先到结果不被迟到取消覆盖，同一绑定可恢复丢失的 copyout。任务正文不经 `MESSAGE` 传递；Task descriptor 只绑定目标身份、任务关联和 capsule handle。首版每个 issuer 同时只允许一个未结算委派，也不承诺永久无响应的已 claim 执行者会自动收敛。
+controller 取消回归使用 syscall 568 的 `REQUEST_CANCEL`，检查同一生命周期、`ORCHESTRATE`/`WAIT_CANCEL`、caller 到 owner 的 TASK route 和 owner/channel/request/slot/task/correlation 完整绑定；`OK` 只代表控制请求线性化。QUEUED 由 owner lane 终结，CLAIMED 仍需 provider cleanup ACK，PREPARING/CLAIMING 返回 `RETRY`，READY 的先到结果不被迟到取消覆盖，同一绑定可恢复丢失的 copyout。任务正文不经 `MESSAGE` 传递；Task descriptor 绑定目标身份、task type、task/correlation/parent 编号和 capsule handle。当前实现让每个 issuer 同时只保留一个未结算委派，也不承诺永久无响应的已 claim 执行者会自动收敛。
 
 Nexus 还检查 Contract `RETIRE` 从 `RETRY/RETIRING` 到 `OK/RECLAIMED` 的两阶段收敛：只有直接调用与运行引用归零后，Coordinator 才恢复 observer/Host event 输出、读取结果 artifact 并发布任务投影。CREATE 发布时会为普通 inode 操作固定引用，但不会计入阻塞的 pipe/device 控制读取；活动 Contract 中的普通 pipe write 仍须通过 IPC 副作用检查。System/Sentinel 和 Research/Investigator 的结果发布同时要求 `AGENT_CAP_ARTIFACT_WRITE`、artifact manifest permission、VFS 文件访问范围与 delegated effect lease。
 
