@@ -20,9 +20,15 @@
 
 ### 1.2 摘要
 
-**AgentOS-uCore 是一组面向 AI Agent（智能体）的 uCore 内核功能。我们从 RISC-V uCore 出发，在进程、文件系统、等待队列和调度器中加入 Agent 身份、Context（运行上下文）、Structured Tool（结构化工具）、文件状态、事件处理、资源管理和工作流调度。上层程序可以直接使用这些内核能力组织多轮任务和多 Agent 协作。**
+**AgentOS-uCore 是一组面向 AI Agent（智能体）的操作系统内核功能。我们在进程、文件系统、等待队列和调度器中加入 Agent 身份、Context（运行上下文）、Structured Tool（结构化工具）、文件状态、事件处理、资源管理和工作流调度。上层程序可以直接使用这些内核能力组织多轮任务和多 Agent 协作。**
 
-内核用生命周期键 `{id, generation}` 区分每次运行。创建 Agent 时，系统会分配角色、能力位和文件访问范围。Context 记录每一步的起因、调用跨度、分支和 provenance（来源追溯）。Execution Contract 列出工具、前置任务、输入指纹、截止时间和资源上限。Live Query 借助 Metadata Catalog 与 Typed Watch，及时报告文件集合变化。Workflow Credit Domain 和 EEVDF 调度器分别管理跨进程资源与 CPU 时间。Agent Live 控制台和 Nexus 把这些功能组合成可在 QEMU RISC-V64 Guest（客户机）中直接运行的应用。
+[LearningOS/uCore](https://github.com/LearningOS/uCore-Tutorial-Code-2025S) 是 LearningOS 社区维护的 C 语言教学内核，覆盖进程、虚拟内存、文件系统和系统调用等操作系统主路径。[uCore-Tutorial-Test-2025S](https://github.com/LearningOS/uCore-Tutorial-Test-2025S) 提供配套测试；本项目直接扩展其进程、页表、VFS、系统调用和调度对象。
+
+[RISC-V](https://docs.riscv.org/reference/isa/v20260120/unpriv/intro.html) 是开放且模块化的指令集架构，基础整数指令集可以与标准扩展组合，RV64 的通用寄存器宽度为 64 位。本项目把内核与 Guest 编译为 RV64 镜像，使进程创建、异常处理、页表切换和系统调用沿目标架构的执行路径运行。
+
+[QEMU](https://www.qemu.org/docs/master/system/target-riscv.html) 是全系统模拟器，能够在 Host 上模拟处理器、内存和设备；其中 `qemu-system-riscv64` 的 `virt` 机型为 RISC-V 系统软件提供通用虚拟平台。本项目用它启动 RV64 内核与 Guest，通过串口完成交互，并在相同机型上复现冷启动、故障路径和性能测试。
+
+内核用生命周期键 `{id, generation}` 区分每次运行。创建 Agent 时，系统会分配角色、能力位和文件访问范围。Context 记录每一步的起因、调用跨度、分支和 provenance（来源追溯）。Execution Contract 列出工具、前置任务、输入指纹、截止时间和资源上限。Live Query 借助 Metadata Catalog 与 Typed Watch，及时报告文件集合变化。Workflow Credit Domain 和工作流调度器分别管理跨进程资源与 CPU 时间。Agent Live 控制台和 Nexus 把这些功能组合成可在 QEMU RISC-V64 Guest（客户机）中直接运行的应用。
 
 性能测量共完成 30 次独立的 QEMU 启动，保存 33 份原始输出、19 个 CSV 数据表和 7,498 条结构化记录。在 96 条文件记录上的 16 组配对测试中，索引查询的核心阶段每次都快于逐项扫描，中位加速比为 3.118 倍；完整流程中索引路径仅在 3/16 组配对中更快，其耗时减去遍历路径的中位差值为 +13.452 毫秒。504 次工作流唤醒从进入可运行状态到真正获得 CPU，等待时间均为 `0–1 tick`。
 
@@ -36,7 +42,7 @@
 | 发起工具请求 | Agent-OS 内核结构化交互接口与工具调用协议 | Tool Registry 按 schema 解析请求；V2/V3、Batch 和 Task Channel 最终进入同一执行路径，并返回带状态码的结构化结果 | [结构化交互与工具调用协议](docs/modules/tool-execution.md) |
 | 延续多轮推理 | 上下文路径管理 | Context 保存请求、结果、起因、调用跨度和分支；支持直接读取、快照查询、回滚和 128 条 FIFO 淘汰 | [Context 设计](docs/modules/identity-context.md#五context-commit读取与回滚) |
 | 按属性和内容特征查找文件 | 面向 Agent 查询优化的文件系统扩展 | Metadata Catalog 组合匹配业务字段，索引缩小候选集合，查询结果进入用户管理的 Context 缓存，Typed Watch 报告结果集合变化 | [Live Query](docs/modules/live-query.md) |
-| 等待下一轮输入并协调多个 Agent | Agent Loop 内核运行机制 | Agent 无事件时在等待队列中休眠，由心跳、文件变化、IPC 或模型响应唤醒；工作流 EEVDF 按工作流结算 CPU 服务量 | [Workflow Runtime](docs/modules/workflow-runtime.md) |
+| 等待下一轮输入并协调多个 Agent | Agent Loop 内核运行机制 | Agent 无事件时在等待队列中休眠，由心跳、文件变化、IPC 或模型响应唤醒；工作流调度器按工作流结算 CPU 服务量 | [Workflow Runtime](docs/modules/workflow-runtime.md) |
 | 运行完整场景 | Agent Live 与 Nexus | 单 Agent 连续处理模型回复与工具请求；Nexus 作为通用多智能体 Harness 接收用户任务，按需读取当前 Host 工作区和 Guest 运行状态 | [运行指南](docs/usage.md) |
 
 ### 1.4 主要创新
@@ -44,7 +50,7 @@
 1. **用一套生命周期管理整条工作流。** Agent、Context、Typed Watch、Execution Contract、Task Channel、Workflow Credit Domain 和 Workflow Fence 都带有 `{id, generation}`。系统据此识别同一次运行，并在关闭后按顺序回收各类对象。
 2. **让内核检查每次工具调用。** 工具真正修改系统状态之前，内核会检查参数 schema、能力位、前置关系、尝试次数、截止时间、输入指纹、provenance 和资源额度。单次调用、批处理和 SQ/CQ 最终走同一条工具执行路径。
 3. **按文件状态查询并接收变化通知。** 文件的业务字段与 VFS 中的实际身份一同登记到 Metadata Catalog。索引先缩小查找范围，Typed Watch 再把 `ENTER`、`UPDATE`、`LEAVE` 等集合变化送入 Agent 事件循环。
-4. **以工作流为单位管理资源和 CPU 时间。** 资源额度按 `free`、`pending`、`used` 三种状态记账。EEVDF 调度器把同一工作流的多个进程合在一起，再按虚拟截止时间选择下一个工作流。
+4. **以工作流为单位管理资源和 CPU 时间。** 资源额度按 `free`、`pending`、`used` 三种状态记账。工作流调度器把同一工作流的多个进程合在一起，再按虚拟截止时间选择下一个工作流。
 5. **保留可追查的 Context 与 terminal record。** 工具结果、文件内容和跨 Agent 消息都携带 provenance label。控制进程可在阶段结束时通过 Workflow Fence 取得 Context 的 terminal state、metadata generation、资源用量和工作流记录摘要。
 
 ### 1.5 团队成员
@@ -97,7 +103,9 @@
 
 ### 2.1 背景与意义
 
-AI Agent 正从“生成一段内容”走向“读取工作区、调用工具并持续改变系统状态”。[OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/) 将提示注入、敏感信息泄露、不当输出处理、过度代理和无界资源消耗列为重要风险；[NIST AI 600-1](https://doi.org/10.6028/NIST.AI.600-1) 也把部署前测试、内容来源、事件披露、人工复核和跟踪记录纳入生成式 AI 风险管理。对操作系统项目而言，当模型能够触发真实副作用时，仅判断输出文本是否合理，已经不足以回答“谁以什么权限、依据什么上下文、调用了哪个工具、消耗了多少资源”。
+大语言模型（Large Language Model，LLM）根据输入上下文逐步生成文本、代码或结构化数据，单次生成本身不会持续观察外部环境。AI Agent 在模型之外加入目标分解、Context、工具调用和结果回读，让系统沿“观察、规划、行动、再观察”的 [ReAct](https://arxiv.org/abs/2210.03629) 式循环推进任务。对 AgentOS-uCore 而言，关键变化是模型决策会被 Guest Runtime 转换成读取文件、创建任务或修改系统状态的请求。
+
+这类系统正从“生成一段内容”走向“读取工作区、调用工具并持续改变系统状态”。[OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/) 将提示注入、敏感信息泄露、不当输出处理、过度代理和无界资源消耗列为重要风险；[NIST AI 600-1](https://doi.org/10.6028/NIST.AI.600-1) 也把部署前测试、内容来源、事件披露、人工复核和跟踪记录纳入生成式 AI 风险管理。对操作系统项目而言，当模型能够触发真实副作用时，仅判断输出文本是否合理，已经不足以回答“谁以什么权限、依据什么上下文、调用了哪个工具、消耗了多少资源”。
 
 <p align="center">
   <a href="docs/figures/background/owasp_llm_top10_2025_highlighted.png">
@@ -111,10 +119,12 @@ AI Agent 正从“生成一段内容”走向“读取工作区、调用工具�
 
 业界已有方案从编排、互操作、隔离和状态管理等角度解决这些问题：
 
+[Model Context Protocol（MCP）](https://modelcontextprotocol.io/specification/2026-07-28) 把模型应用组织为 Host、Client 与 Server，并用 resources、prompts、tools 等对象描述可发现和可调用的能力。[Agent2Agent Protocol（A2A）](https://a2a-protocol.org/latest/specification/) 面向智能体之间的协作，用能力发现、消息、Task、Artifact 和状态更新串起委派过程。AgentOS-uCore 借鉴两者显式描述工具、任务和产物的方式，在 Guest 侧落实 Tool Registry、Task Channel 与 artifact 句柄。
+
 | **方案** | **主要特性** | **从系统职责看仍有的局限** |
 | --- | --- | --- |
 | Agent 编排框架 | 提供状态图、记忆、重试与人工审批，便于快速组织模型和工具 | 策略通常随应用进程运行，跨进程身份、系统调用副作用和退出后的统一回收仍需额外实现 |
-| 工具互操作协议 | 统一工具描述、参数和消息传输，降低模型与外部服务的接入成本 | 协议规定“如何通信”，不天然提供本机内核中的权限裁决、任务生命周期和资源结算 |
+| MCP 与 A2A 等互操作协议 | 降低模型、工具和 Agent 之间的接入成本 | 本机的权限裁决、进程生命周期与资源结算仍由运行环境负责 |
 | 容器、沙箱与 ACL/cgroup | 隔离进程和文件，限制 CPU、内存等资源 | 粒度多为进程、容器或路径，难以直接表达每次工具调用的 schema、前置任务、来源链和工作流 generation |
 | 数据库、向量库与工作流引擎 | 持久化记忆、检索结果和任务状态，支持故障恢复 | 会在应用层形成另一套对象状态；其版本绑定、迟到结果失效和内核对象清理仍需协调 |
 
@@ -149,7 +159,7 @@ AgentOS-uCore 自下而上分为五层。uCore 基础内核负责进程、内存
 | Agent identity 与 Context | 可信映像、角色、能力位、文件访问范围、生命周期 generation、7 页 Context | 受控创建 Agent，记录每一步的起因、调用跨度、分支和 provenance |
 | Structured Tool | 26 项 Tool Registry、V2/V3、批处理、Task Channel（SQ/CQ） | 工具生效前检查请求，并按任务特点选择调用方式 |
 | Live Query | Metadata Catalog、三类等值索引、Typed Watch、重新同步 | 按业务状态查找文件，并根据文件集合变化触发后续工作 |
-| Workflow Runtime | 事件队列、可信 IPC、心跳、Workflow Credit Domain、工作流 EEVDF | 让 Agent 进入睡眠并等待事件，按工作流管理资源与 CPU 时间 |
+| Workflow Runtime | 事件队列、可信 IPC、心跳、Workflow Credit Domain、工作流调度 | 让 Agent 进入睡眠并等待事件，按工作流管理资源与 CPU 时间 |
 | Workflow Fence | 工作流记录环、Context commit lane、Workflow Fence | 汇总 terminal record、metadata generation 和资源用量，并返回回执 |
 
 各模块的设计见 [Agent identity、生命周期与 Context](docs/modules/identity-context.md)、[Structured Tool 与 Execution Contract](docs/modules/tool-execution.md)、[Live Query](docs/modules/live-query.md)和 [Workflow Runtime](docs/modules/workflow-runtime.md)。
@@ -235,7 +245,9 @@ Agent Loop 的“思考、行动、观察、再思考”在 Guest 中组织，�
 
 Workflow Credit Domain 管理进程、线程、文件对象、文件系统块、inode、缓冲区、Agent 状态页和物理页。每份额度分为 `free`、`pending`、`used` 三种状态。创建对象时先 reserve，发布成功后 commit 为 `used`；失败时 `pending` 退回 `free`，对象销毁后也归还 `free`。工具运行时，Phase Lease 还会锁定本次执行所需的资源，结束后统一结算。
 
-Workflow EEVDF 把同一工作流中的进程合成一个外层调度对象。延迟等级和实际截止时间决定每次申请的 CPU 时间。进程睡眠后，调度器按规则修正 `vruntime`。选择任务时，系统从当前可以运行的工作流中挑选虚拟截止时间最早者。同一工作流的成员共用 `service_cycles` 账户；选中工作流后，再由 uCore 原有策略挑选具体线程。
+[EEVDF（Earliest Eligible Virtual Deadline First）](https://docs.kernel.org/scheduler/sched-eevdf.html) 是一种比例份额调度算法，用 lag 衡量调度实体相对理想服务量的欠账或超前。算法先保留 lag 符合条件的实体，再选择虚拟截止时间最早者，因此能同时表达份额和延迟需求。AgentOS-uCore 把外层调度实体从线程提升为工作流，让同一工作流中的进程共享 `service_cycles`、`vruntime` 和 `virtual_deadline`。这样，一个工作流不能仅靠增加线程扩大外层 CPU 份额。
+
+延迟等级和实际截止时间决定每次申请的 CPU 时间。进程睡眠后，调度器按规则修正 `vruntime`；选中工作流后，再由 uCore 原有策略挑选具体线程。
 
 ```text
 事件入队 -> 唤醒等待队列 -> 进程进入可运行状态
