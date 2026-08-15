@@ -143,7 +143,7 @@ Execution Contract 可以 `CREATE`、`QUERY` 或 `RETIRE`。每个生命周期�
 
 `RETIRE` 是两阶段操作。第一次调用先把当前代改为 `RETIRING` 并关闭新准入；`bare_inflight` 或 `running_count` 尚未归零时返回 `RETRY/RETIRING`，调用方使用同一 Contract key 继续轮询。引用全部退出后返回 `OK/RECLAIMED`，这时 `ENFORCE` 才解除。`QUERY` 和重复 `RETIRE` 会保留并返回这一代的 `RECLAIMED` 快照；下一次 `CREATE` 才回收它并分配单调递增的新 generation，旧 key 随后返回 `STALE`。
 
-CREATE 使用的发布边界只固定普通 inode 上正在进行的 read/write/fstat 和 Task resource 文件操作。pipe、device 与 stdio 的长期控制读取不增加这项引用，因此不会因为阻塞读取而阻止 Contract 建立；Contract 活动期间的普通 pipe write 仍作为 IPC 副作用经过直接作用检查，不能借控制通道绕过 Contract。Nexus 因而把非 provider 的 observer/Host event 输出延后到 `RECLAIMED` 之后。
+CREATE 发布时只为普通 inode 上正在进行的 read/write/fstat 和 Task resource 文件操作固定引用。pipe、device 与 stdio 的长期控制读取不增加这项引用，因此不会因为阻塞读取而阻止 Contract 建立；Contract 活动期间的普通 pipe write 仍作为 IPC 副作用经过直接作用检查，不能借控制通道绕过 Contract。Nexus 因而把非 provider 的 observer/Host event 输出延后到 `RECLAIMED` 之后。
 
 V3 请求保留完整的 V2 前缀，后面增加 Execution Contract 键、节点号、尝试次数、schema digest、输入指纹、来源 Context 序号、来源节点、生产者的控制编号和进程号，以及 artifact 类型。响应增加决定原因、工作流记录票号、输出 provenance、结果类型和完成标志。设置 `AGENT_RESPONSE_V3_F_CACHED` 表示本次调用直接取用了已经完成的结果。
 

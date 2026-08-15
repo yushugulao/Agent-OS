@@ -132,7 +132,7 @@ V3 请求按顺序检查以下内容：
 
 `RETIRE` 先把 Contract 改为 `RETIRING`，从而关闭新准入；仍有直接调用或运行引用时返回 `RETRY/RETIRING`。只有全部引用退出后才返回 `OK/RECLAIMED` 并解除 `ENFORCE`。这一代的完整结果会保留到下一次 `CREATE`，新 Contract 使用更大的 generation，旧 key 随后失效。Nexus 只在 `RECLAIMED` 后恢复普通 Host/event/artifact 作用并投影任务事件。
 
-CREATE 前的发布边界只固定普通 inode 文件操作。pipe、device 和 stdio 的阻塞控制读取不持有 Contract 引用，因而不会阻止新 Contract；但活动 Contract 内的普通 pipe write 仍被识别为 IPC 副作用并经过直接作用检查。控制流可以继续接收取消，不能借 pipe 输出绕过 manifest 或 delegated lease。
+CREATE 发布前只为正在进行的普通 inode 文件操作固定引用。pipe、device 和 stdio 的阻塞控制读取不持有 Contract 引用，因而不会阻止新 Contract；但活动 Contract 内的普通 pipe write 仍被识别为 IPC 副作用并经过直接作用检查。控制流可以继续接收取消，不能借 pipe 输出绕过 manifest 或 delegated lease。
 
 <a id="provenance-传播"></a>
 ## Provenance label
@@ -207,7 +207,7 @@ SQE 可以用 BORROWED 别名引用同一 `{slot, type, generation}`。BORROWED 
 
 跨 Agent 委派还要求发起者向目标授予独立的 `AGENT_IPC_ROUTE_TASK`，目标持有 `AGENT_CAP_TASK_ACCEPT`，且描述符中的目标 PID、Agent/control 身份和当前生命周期全部一致。TASK route 与 `MESSAGE`/`LLM_DONE` 事件 route 分开。首版拒绝 self delegation，并拒绝让活动端点同时承担 owner 与 target，使委派关系保持二分无环。提交成功后，任务进入 Execution Contract `RUNNING` 和内核 pending 队列；`agent_task_delegate_claim()` 在把描述符及 owner/channel/request/slot 绑定复制给目标之前，再次检查身份、生命周期、能力和 route，并登记 effect-start。首版每个 owner issuer 同时只接受一个尚未结算的委派。
 
-claim 后的 delegated effect lease 不是 workflow 级绕过。它精确绑定执行者 PID/Agent/`control_id`、主线程 identity generation 和 channel/request/slot 代次；Contract 允许的 helper 也必须匹配内核登记的 TID 与 identity generation。每次直接作用只能申请 Contract manifest side-effect mask 的子集，并在调用期间持有 lease 引用。正常 complete、最新终态 offer 的 cleanup ACK，或目标进程完成 quiescence 后，内核才在活动引用归零的边界撤销 lease；该机制不承诺强制终止永久无响应的执行者。
+claim 后的 delegated effect lease 不是 workflow 级绕过。它精确绑定执行者 PID/Agent/`control_id`、主线程 identity generation 和 channel/request/slot 代次；Contract 允许的 helper 也必须匹配内核登记的 TID 与 identity generation。每次直接作用只能申请 Contract manifest side-effect mask 的子集，并在调用期间持有 lease 引用。正常 complete、最新终态 offer 的 cleanup ACK，或目标进程完成 quiescence 后，内核会等活动引用全部归零再撤销 lease；该机制不承诺强制终止永久无响应的执行者。
 
 目标通常以 `flags == 0` 调用 `agent_task_delegate_complete()`。如果 claim 之后的截止时间、取消、owner 退出或生命周期关闭先取得终态优先级，内核返回 `RETRY`、`CLAIMED` 及带 generation 的终态 offer。目标必须先使预绑定输出失效，再以相同业务状态、`ACK_TERMINAL` 和准确的 offer 字段确认；若 offer 升级为更高 generation 的 `TIMEOUT`，就再次清理并确认。内核只在确认最新 offer 后把任务置为 `READY`，再由 owner 的 Task Channel 发布唯一 terminal CQE。V1 依赖执行者协作，不会强制终止 claim 后永久无响应的 provider。
 

@@ -50,7 +50,7 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make agent-module-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-这条命令依次检查模块边界、Live Query 与文件系统的连接，以及 workflow fence。检查程序直接查找实际使用的函数和调用点，确认状态由指定模块管理，lifecycle generation 索引仍然有效，目录修改会经过 mutation barrier，resync 时仍能送达通知，销毁 workflow 时也会等到引用清理完成。
+这条命令依次检查模块职责、Live Query 与文件系统的连接，以及 workflow fence。检查程序直接查找实际使用的函数和调用点，确认状态由指定模块管理，lifecycle generation 索引仍然有效，目录修改会经过 mutation barrier，resync 时仍能送达通知，销毁 workflow 时也会等到引用清理完成。
 
 ## 3. Host 自测
 
@@ -149,7 +149,7 @@ AGENT_TEST_CASE=agenteval_ucore \
 | 面向 Agent 查询优化的文件系统扩展 | 创建真实文件并登记属性，执行多条件 AND、summary 模糊匹配、内容摘要/preview 和属性删除 | 返回项绑定真实 inode 且顺序、去重和摘要一致；删除一个或全部属性后结果集合随之改变，说明查询走的是 VFS 文件身份与 Metadata Catalog，而不是固定样例表 |
 | Agent Loop 内核运行机制 | 建立受信消息路由，让等待线程先睡眠再由另一 Agent 延迟唤醒；动态调整并停止 heartbeat | 等待期间 wall tick 前进且进程 sleep/wake 计数增加，消息到达后及时返回；heartbeat 周期调整生效，停止后由测试程序显式取走已入队的 timer 事件，再次等待得到 `TIMEOUT`，说明无事件时不会忙轮询 |
 
-这一组测试把五项机制放在同一个 Agent 生命周期中，可以看到前一阶段产生的 identity、Context 和文件状态如何继续供下一阶段使用。它不能替代各模块的边界与故障测试，但能排除“各模块单独通过、合在一起却无法运行”的情况。
+这一组测试把五项机制放在同一个 Agent 生命周期中，可以看到前一阶段产生的 identity、Context 和文件状态如何继续供下一阶段使用。它不能替代针对各模块职责和异常路径的测试，但能排除“各模块单独通过、合在一起却无法运行”的情况。
 
 ## 5. 权限检查与故障恢复
 
@@ -204,9 +204,9 @@ child Task 由 Coordinator 通过真正的内核 Task Channel `delegate_task` �
 
 controller 取消回归使用 syscall 568 的 `REQUEST_CANCEL`，检查同一生命周期、`ORCHESTRATE`/`WAIT_CANCEL`、caller 到 owner 的 TASK route 和 owner/channel/request/slot/task/correlation 完整绑定；`OK` 只代表控制请求线性化。QUEUED 由 owner lane 终结，CLAIMED 仍需 provider cleanup ACK，PREPARING/CLAIMING 返回 `RETRY`，READY 的先到结果不被迟到取消覆盖，同一绑定可恢复丢失的 copyout。任务正文不经 `MESSAGE` 传递；Task descriptor 只绑定目标身份、任务关联和 capsule handle。首版每个 issuer 同时只允许一个未结算委派，也不承诺永久无响应的已 claim 执行者会自动收敛。
 
-Nexus 还检查 Contract `RETIRE` 从 `RETRY/RETIRING` 到 `OK/RECLAIMED` 的两阶段收敛：只有直接调用与运行引用归零后，Coordinator 才恢复 observer/Host event 输出、读取结果 artifact 并发布任务投影。普通 inode 操作参与 CREATE 发布边界，阻塞的 pipe/device 控制读取不参与；活动 Contract 中的普通 pipe write 仍须通过 IPC 副作用检查。System/Sentinel 和 Research/Investigator 的结果发布同时要求 `AGENT_CAP_ARTIFACT_WRITE`、artifact manifest permission、VFS 文件访问范围与 delegated effect lease。
+Nexus 还检查 Contract `RETIRE` 从 `RETRY/RETIRING` 到 `OK/RECLAIMED` 的两阶段收敛：只有直接调用与运行引用归零后，Coordinator 才恢复 observer/Host event 输出、读取结果 artifact 并发布任务投影。CREATE 发布时会为普通 inode 操作固定引用，但不会计入阻塞的 pipe/device 控制读取；活动 Contract 中的普通 pipe write 仍须通过 IPC 副作用检查。System/Sentinel 和 Research/Investigator 的结果发布同时要求 `AGENT_CAP_ARTIFACT_WRITE`、artifact manifest permission、VFS 文件访问范围与 delegated effect lease。
 
-工作区回归从 Host 的版本化 manifest 开始：Guest 用 1 个 control inode 和最多 32 个 data-stub inode 建立 Metadata Catalog 窗口，按 4 个 stage 执行返回不截断的 Live Query，并在有界运行时内存中再次核对完整路径。control stub 的 Typed Watch 必须收到 generation `UPDATE`，旧窗口才会失效并从 cursor 0 重建。Host 搜索只能接收 Guest Catalog 选出的候选，读取必须绑定 object/path/revision；stale 结果要清空累积并重试。真实正文回到 Guest 后依次成为 Research 输入 artifact、Research 结果 artifact、TOOL Context 和模型历史。回归还覆盖路径跳转、链接逃逸、二进制文件、缺失文件和输出上限等 Host 边界。
+工作区回归从 Host 的版本化 manifest 开始：Guest 用 1 个 control inode 和最多 32 个 data-stub inode 建立 Metadata Catalog 窗口，按 4 个 stage 执行返回不截断的 Live Query，并在有界运行时内存中再次核对完整路径。control stub 的 Typed Watch 必须收到 generation `UPDATE`，旧窗口才会失效并从 cursor 0 重建。Host 搜索只能接收 Guest Catalog 选出的候选，读取必须绑定 object/path/revision；stale 结果要清空累积并重试。真实正文回到 Guest 后依次成为 Research 输入 artifact、Research 结果 artifact、TOOL Context 和模型历史。回归还覆盖 Host 对路径跳转、链接逃逸、二进制文件、缺失文件和输出上限的处理。
 
 跨轮测试以 Relay Agent 的 Context active path 为主线：USER、已结算 TOOL 和成功 FINAL 必须形成短 Context 节点；4 KiB 用户缓存只为仍在 active path 上的成功 USER/FINAL 对补充完整正文。测试分别覆盖映射页 direct active query、syscall 回退、缓存容量不足时按整轮淘汰、失败或取消后的路径回滚，以及 `/reset` 同时清空 Relay Context、缓存和工作区 Catalog/watch 状态。Host 测试确认中继不私建、补写或替换 Provider 请求中的对话与工具结果；在线 Provider 和固定 Replay 都直接接收 Guest 构造的消息及真实工具 artifact 投影。
 

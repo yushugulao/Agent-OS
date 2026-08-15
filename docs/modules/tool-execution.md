@@ -124,7 +124,7 @@ agent_execution_contract(&control, &result);
 
 `RETIRE` 会先把当前代置为 `RETIRING` 并关闭新准入。只要 `bare_inflight` 或 `running_count` 仍非零，调用就返回 `RETRY/RETIRING`；引用全部退出后才返回 `OK/RECLAIMED`，解除 `ENFORCE` 并允许下一次 `CREATE` 分配更大的 generation。`RECLAIMED` 快照在下一代建立前仍可 `QUERY`，旧 key 在新代建立后返回 `STALE`。
 
-CREATE 的发布边界只为普通 inode 上的 read/write/fstat 和 Task resource 文件操作固定引用。长期阻塞的 pipe/device/stdio 控制读取不阻塞 Contract 建立；Contract 活动期间的普通 pipe write 仍按 IPC 副作用进入直接作用检查，不能作为输出旁路。Nexus 在 `RECLAIMED` 之前暂停非 provider 的 observer/Host event 输出。
+CREATE 发布时只为普通 inode 上的 read/write/fstat 和 Task resource 文件操作固定引用。长期阻塞的 pipe/device/stdio 控制读取不阻塞 Contract 建立；Contract 活动期间的普通 pipe write 仍按 IPC 副作用进入直接作用检查，不能作为输出旁路。Nexus 在 `RECLAIMED` 之前暂停非 provider 的 observer/Host event 输出。
 
 <a id="来源资源与提交顺序"></a>
 ## Provenance、资源与 commit 顺序

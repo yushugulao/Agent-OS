@@ -140,7 +140,7 @@ Host 不私建、挑选、补写或替换 Provider 请求中的跨轮正文与 G
 
 首版公开能力保持只读，不提供文件编辑、Shell 执行或任意命令运行。Research 和 System 通过 AgentOS 内核 Task Channel 的 `delegate_task`、claim/complete 和 Guest artifact 协作，并不是各自连接 Provider 的独立子模型。详细过程见[Nexus 多智能体 Harness Runtime](modules/workflow-runtime.md#七nexus-多智能体-harness-runtime)。
 
-| 工具 | 边界 |
+| 工具 | 行为与限制 |
 | --- | --- |
 | `search_files` | 分页取得当前 Host 工作区 manifest，由 Guest Metadata Catalog 与 Live Query 选择候选，再在这些候选中匹配路径或正文；查询为空时列出候选文件，可用 `path_prefix` 缩小范围，每次最多返回 8 项 |
 | `read_file` | 先由 Guest Catalog 精确选中 manifest 对象，再从当前 revision 读取 1 至 64 行，并说明返回范围及后面是否还有内容 |

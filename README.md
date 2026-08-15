@@ -101,13 +101,13 @@ AI Agent 正从“生成一段内容”走向“读取工作区、调用工具�
 
 <p align="center">
   <a href="docs/figures/background/owasp_llm_top10_2025_highlighted.png">
-    <img src="docs/figures/background/owasp_llm_top10_2025_highlighted.png" alt="OWASP Top 10 for LLM Applications 2025 中与 AgentOS 系统边界直接相关的风险类别" width="900">
+    <img src="docs/figures/background/owasp_llm_top10_2025_highlighted.png" alt="OWASP Top 10 for LLM Applications 2025 中与 AgentOS 权限、Context 和资源治理直接相关的风险类别" width="900">
   </a>
 </p>
 
 > 红框标出与工具副作用、权限、Context 和资源治理直接相关的类别。原图：[OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/)（[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)）。
 
-一个可执行 Agent 通常沿“接收目标与输入 → 读取 Context → 规划下一步 → 调用工具产生副作用 → 记录结果并继续或结束”的闭环运行。单个请求还会扩展为多个进程或 Agent 的委托关系。于是，**identity（执行者是谁）**、**capability（允许做什么）**、**structured tool（以何种参数产生副作用）**、**Context 与 provenance（决策依据来自哪里）**、**terminal state（任务是否完成或取消）**以及**工作流资源账本**，都会跨越一次模型调用的边界。若这些状态只由各应用进程自行维护，重启、并发、迟到响应和对象复用都可能造成状态分歧。
+一个可执行 Agent 通常沿“接收目标与输入 → 读取 Context → 规划下一步 → 调用工具产生副作用 → 记录结果并继续或结束”的闭环运行。单个请求还会扩展为多个进程或 Agent 的委托关系。于是，**identity（执行者是谁）**、**capability（允许做什么）**、**structured tool（以何种参数产生副作用）**、**Context 与 provenance（决策依据来自哪里）**、**terminal state（任务是否完成或取消）**以及**工作流资源账本**，都必须在一次模型调用结束后继续保持一致。若这些状态只由各应用进程自行维护，重启、并发、迟到响应和对象复用都可能造成状态分歧。
 
 业界已有方案从编排、互操作、隔离和状态管理等角度解决这些问题：
 
@@ -201,7 +201,7 @@ Task resource 可以从当前进程可读的普通文件导入 1–63 字节 UTF
 
 同一生命周期中的 controller 可以通过 syscall 568 的 `AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL` 请求取消。请求必须复用 owner/channel/request/slot/task/correlation 的完整绑定，并要求 `ORCHESTRATE`、`WAIT_CANCEL` 以及 caller 到 owner 的 TASK route。`OK` 只确认控制请求已经线性化，不是任务已经产生 CQE；被 claim 的执行者仍要清理预绑定结果并确认内核给出的最新 `CANCELLED` 或 `TIMEOUT` 终态。首版不会强制终止永久无响应的执行者。
 
-Execution Contract 的 `RETIRE` 分两步收敛：先进入 `RETIRING` 并停止新准入，仍有直接调用或运行引用时返回 `RETRY`；引用归零后才返回 `OK/RECLAIMED`。只有 `RECLAIMED` 后，普通 Host/event/artifact 作用和下一代 Contract 才能继续。CREATE 的发布边界只固定普通 inode 操作，不让长期阻塞的 pipe/device 控制读取卡住新 Contract；Contract 活动期间的普通 pipe write 仍按 IPC 副作用检查。
+Execution Contract 的 `RETIRE` 分两步收敛：先进入 `RETIRING` 并停止新准入，仍有直接调用或运行引用时返回 `RETRY`；引用归零后才返回 `OK/RECLAIMED`。只有 `RECLAIMED` 后，普通 Host/event/artifact 作用和下一代 Contract 才能继续。CREATE 发布时只为普通 inode 操作固定引用，不让长期阻塞的 pipe/device 控制读取卡住新 Contract；Contract 活动期间的普通 pipe write 仍按 IPC 副作用检查。
 
 实现代码见 [`os/agent_core.c`](os/agent_core.c)、[`os/agent_tool_protocol.c`](os/agent_tool_protocol.c)、[`os/agent_execution_contract.c`](os/agent_execution_contract.c)、[`os/agent_task_channel.c`](os/agent_task_channel.c) 和 [`os/agent_task_bridge.c`](os/agent_task_bridge.c)。公开结构见 [`include/agent_tool_abi.h`](include/agent_tool_abi.h)、[`include/agent_execution_contract_abi.h`](include/agent_execution_contract_abi.h) 与 [`include/agent_task_channel_abi.h`](include/agent_task_channel_abi.h)。
 

@@ -259,7 +259,7 @@ DeepSeek V4 provider 请求显式设置 `thinking.type=enabled` 和 `reasoning_e
 
 ### 7.3 三个公开工具与工作进程
 
-| 公开工具 | 执行路径 | 结果边界 |
+| 公开工具 | 执行路径 | 返回内容 |
 | --- | --- | --- |
 | `search_files` | Guest 分页接收 manifest，用 Metadata Catalog/Live Query 选出候选；Host 只扫描这些候选；实际结果作为 artifact 通过 Task Channel 交给 Research | 匹配路径或文本行；空查询列出候选文件，可用 `path_prefix` 缩小范围，聚合后最多返回 8 项 |
 | `read_file` | Guest 先以完整路径找到 manifest 对象并用 Catalog 精确复核；Host 返回 object/path/revision 绑定的字节；实际结果作为 artifact 通过 Task Channel 交给 Research | 从一个工作区相对路径读取 1 至 64 行，返回实际范围及是否还有后续内容 |
@@ -269,7 +269,7 @@ DeepSeek V4 provider 请求显式设置 `thinking.type=enabled` 和 `reasoning_e
 
 Guest 在提交 SQE 前把完整取消绑定交给同一生命周期的 Relay controller。用户取消到达后，controller 以 syscall 568 的 `REQUEST_CANCEL`、`CANCELLED` 和零 ACK 字段回传 owner/channel/request/slot/task/correlation，并同时满足 `ORCHESTRATE`、`WAIT_CANCEL` 与 caller 到 owner 的 TASK route。`OK` 只确认控制请求已经线性化：QUEUED 由 owner lane 终结，CLAIMED 的 Research/System 仍会在 complete 时收到 `CANCELLED` 或优先级更高的 `TIMEOUT` offer，先撤销预绑定结果再 `ACK_TERMINAL`；READY 的先到结果不被迟到取消覆盖。PREPARING/CLAIMING 时 controller 重试同一绑定，结果 copyout 丢失也由内核回执支持相同重试。
 
-Coordinator 从唯一 CQE 取得 terminal 状态后，先确认 CQ、释放 Task resource，再调用 `RETIRE`。Contract 首先进入 `RETIRING` 并停止新准入；直接调用和运行引用全部归零后才返回 `OK/RECLAIMED`。Coordinator 只在这个边界后恢复 observer、读取结果 artifact、发布 `TASK_EVENT`/`TOOL_EVENT` 并允许下一代 Contract。CREATE 的发布边界只固定普通 inode 操作，长期阻塞的 pipe/device 控制读取不会阻止 Contract 建立；活动 Contract 内的普通 pipe write 仍按 IPC 副作用检查，因此 observer/Host 事件输出不会成为旁路。正常 complete、cleanup ACK 或目标 quiescence 会在活动作用返回后撤销 delegated lease。首版每个 issuer 同时只允许一个未结算的委派，也不会强制终止永久无响应的执行者。
+Coordinator 从唯一 CQE 取得 terminal 状态后，先确认 CQ、释放 Task resource，再调用 `RETIRE`。Contract 首先进入 `RETIRING` 并停止新准入；直接调用和运行引用全部归零后才返回 `OK/RECLAIMED`。Coordinator 确认 `RECLAIMED` 后才恢复 observer、读取结果 artifact、发布 `TASK_EVENT`/`TOOL_EVENT` 并允许下一代 Contract。CREATE 发布时只为普通 inode 操作固定引用，长期阻塞的 pipe/device 控制读取不会阻止 Contract 建立；活动 Contract 内的普通 pipe write 仍按 IPC 副作用检查，因此 observer/Host 事件输出不会成为旁路。正常 complete、cleanup ACK 或目标 quiescence 会在活动作用返回后撤销 delegated lease。首版每个 issuer 同时只允许一个未结算的委派，也不会强制终止永久无响应的执行者。
 
 每次 `search_files` 或 `read_file` 都从 cursor 0 和空 generation 开始取得 Host manifest，一条工具链最多使用 8,192 个 wire attempt，包括 stale 后的重启。Host 每页最多返回 32 个带 object id、path、revision 和 size 的项目；generation 绑定一次目录快照，object id 稳定绑定相对路径，revision 绑定同一已打开对象的实际内容。Guest 在有界运行时 arena 中保留页面的完整字段，同时建立 1 个 control inode 和最多 32 个 data-stub inode；data stub 以 `host/<object_id>` 作为 logical path，按 4 个 stage、每组最多 8 项登记 project、workflow、generation-derived run、kind 和 status。每个 stage 都通过 `agent_file_query()` 选择，Guest 要求返回数量精确且 `truncated=0`，随后再用运行时 arena 中的完整路径检查 prefix 或 exact match。因此 Metadata Catalog 是当前页面的有界目录窗口，不是整仓全文索引。
 

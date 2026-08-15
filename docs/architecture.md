@@ -39,7 +39,7 @@ AgentOS-uCore 按职责分为五部分。uCore 基础内核提供进程、VFS、
 | --- | --- | --- |
 | Agent 应用 | `agentlive_ucore`、`agentnexus_ucore`、科研工作流 | 拆分目标、安排角色、调用工具并汇总结果 |
 | Guest Runtime | Guest UAPI、Task Channel（SQ/CQ）、有界串口帧 | 把应用动作编码成内核请求，并在 Guest 内收发模型消息 |
-| Host Relay | 串口中继、TLS、Provider、Replay 与工作区 broker | 连接外部模型服务，并在显式 root 边界内提供 manifest 与指定版本字节，不决定文件候选或业务任务 |
+| Host Relay | 串口中继、TLS、Provider、Replay 与工作区 broker | 连接外部模型服务，并在显式配置的工作区 root 范围内提供 manifest 与指定版本字节，不决定文件候选或业务任务 |
 | AgentOS 内核模块 | Agent identity、生命周期、Context、Execution Contract、Live Query、事件、Workflow Credit Domain、EEVDF、Workflow Fence | 检查工作流操作，保存状态，负责等待唤醒，并生成 terminal record |
 | uCore 基础内核 | 进程与线程、页表、VFS、IPC、时钟、调度、VirtIO | 提供 RISC-V 操作系统的基础对象和运行环境 |
 
