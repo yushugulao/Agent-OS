@@ -1,0 +1,31 @@
+flowchart TB
+  subgraph early["Early Design"]
+    direction LR
+    e1["N1 Task"] --> e2["MESSAGE"] --> e3["User State"] --> e4["Cancel Message"]
+  end
+
+  subgraph current["Current Design"]
+    direction TB
+    subgraph ctop["Submit Path"]
+      direction LR
+      c1["56 B Descriptor"] --> c2["SQ + Contract"] --> c3["Claim + Lease"]
+    end
+    subgraph cbottom["Finish Path"]
+      direction RL
+      c4["Artifact"] --> c5["Complete /<br/>Offer ACK"] --> c6["READY"] --> c7["Owner<br/>Enter"] --> c8["At-Most-One<br/>CQE"]
+    end
+    ctop --> cbottom
+  end
+
+  e4 -. "Redesign" .-> c1
+
+  classDef earlyStep fill:#F4F6F7,stroke:#8996A3,color:#263746,stroke-width:1.5px;
+  classDef risk fill:#FDEDEC,stroke:#C65B5B,color:#6E2020,stroke-width:2px;
+  classDef currentStep fill:#EAF2F8,stroke:#5E8FAF,color:#17324D,stroke-width:1.8px;
+  class e1,e2 earlyStep;
+  class e3,e4 risk;
+  class c1,c2,c3,c4,c5,c6,c7,c8 currentStep;
+  style early fill:#FBFCFD,stroke:#AAB7C4,stroke-width:1.5px
+  style current fill:#F7FBFE,stroke:#7FA8C2,stroke-width:1.5px
+  style ctop fill:#FFFFFF,stroke:#B8C8D4,stroke-width:1px,stroke-dasharray:4 3
+  style cbottom fill:#FFFFFF,stroke:#B8C8D4,stroke-width:1px,stroke-dasharray:4 3

@@ -49,6 +49,9 @@ MAX_LOCAL_CLIENTS = 8
 MAX_CLIENT_QUEUE = 128
 MAX_PEER_INBOUND_QUEUE = 32
 MAX_LOCAL_DRAIN = 16
+# Admission queues the replay prefix before the peer writer starts.  Reserve
+# half of that bounded queue for live events arriving just after publication.
+MAX_KERNEL_IDENTITY_REPLAY_PIDS = MAX_CLIENT_QUEUE // 2
 MAX_MODEL_ERROR_MESSAGE_BYTES = 240
 SERIAL_WRITE_TIMEOUT_SECONDS = 5.0
 APPROVAL_TIMEOUT_SECONDS = 25.0
@@ -5037,6 +5040,7 @@ class LocalEndpoints:
         self._lock = threading.RLock()
         self._controller: _Peer | None = None
         self._observers: set[_Peer] = set()
+        self._kernel_identity_prefix_by_pid: dict[int, dict[str, object]] = {}
         self.controller_initial: Callable[[], Mapping[str, object]] | None = None
         self.observer_initial: Callable[[], Mapping[str, object]] | None = None
         self._acceptors = (
@@ -5060,11 +5064,46 @@ class LocalEndpoints:
 
     def broadcast(self, message: Mapping[str, object]) -> None:
         with self._lock:
+            self._cache_kernel_identity(message)
             peers = tuple(self._observers)
         for peer in peers:
             # A full per-observer queue disconnects only that observer.  It can
             # never block serial/model progress or faster observers.
             peer.send(message)
+
+    def _cache_kernel_identity(self, message: Mapping[str, object]) -> None:
+        """Keep the latest validated kernel identity envelope unchanged per PID."""
+
+        source = message.get("source")
+        if source == "kernel_audit":
+            required = KERNEL_AUDIT_REQUIRED_FIELDS
+        elif source == "kernel_snapshot":
+            required = KERNEL_SNAPSHOT_REQUIRED_FIELDS
+        else:
+            return
+        pid = message.get("pid")
+        if (
+            message.get("type") != "telemetry"
+            or not required.issubset(message)
+            or message.get("event") != source
+            or message.get("fresh") is not (source == "kernel_audit")
+            or not isinstance(pid, int)
+            or isinstance(pid, bool)
+            or not 1 <= pid <= (1 << 31) - 1
+            or message.get("role") not in TASK_ROLES
+        ):
+            return
+        cache = getattr(self, "_kernel_identity_prefix_by_pid", None)
+        if cache is None:
+            # Some focused transport tests construct a deliberately bare
+            # endpoint without invoking __init__.
+            cache = {}
+            self._kernel_identity_prefix_by_pid = cache
+        if pid in cache:
+            del cache[pid]
+        elif len(cache) >= MAX_KERNEL_IDENTITY_REPLAY_PIDS:
+            del cache[next(iter(cache))]
+        cache[pid] = copy.deepcopy(dict(message))
 
     def has_controller(self) -> bool:
         with self._lock:
@@ -5156,6 +5195,13 @@ class LocalEndpoints:
                     return False, None
                 if not peer.send(snapshot):
                     return False, None
+            if peer.role == "observer":
+                cached_prefix = getattr(
+                    self, "_kernel_identity_prefix_by_pid", {}
+                )
+                for cached in tuple(cached_prefix.values()):
+                    if not peer.send(cached):
+                        return False, None
 
             # Check again after all potentially fallible prefix work and
             # immediately before making the peer visible to fan-out.

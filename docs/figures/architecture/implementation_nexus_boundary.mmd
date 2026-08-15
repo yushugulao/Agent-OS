@@ -1,0 +1,37 @@
+flowchart TB
+  subgraph early["Early Design"]
+    direction LR
+    e1["Build Snapshot"] --> e2["Host Search / Read"] --> e3["MESSAGE N1"] --> e4["Guest Worker"]
+  end
+
+  subgraph current["Current Design"]
+    direction TB
+    subgraph selectPath["Selection Path"]
+      direction LR
+      c1["Versioned Manifest"] --> c2["Guest Catalog"] --> c3["Live Query"] --> c4["Candidate Set"]
+    end
+    subgraph watchPath["Watch Control"]
+      direction LR
+      w1["Control Stub"] --> w2["Typed Watch"] --> w3["Window Invalidate"]
+    end
+    subgraph execPath["Execution Path"]
+      direction LR
+      x1["Task Channel"] --> x2["Guest Artifact"] --> x3["Context Active Path"]
+    end
+    watchPath -. "Refresh" .-> selectPath
+    selectPath --> execPath
+  end
+
+  e4 -. "Boundary Shift" .-> c1
+
+  classDef earlyStep fill:#F4F6F7,stroke:#8996A3,color:#263746,stroke-width:1.5px;
+  classDef risk fill:#FDEDEC,stroke:#C65B5B,color:#6E2020,stroke-width:2px;
+  classDef currentStep fill:#EAF2F8,stroke:#5E8FAF,color:#17324D,stroke-width:1.8px;
+  class e1,e4 earlyStep;
+  class e2,e3 risk;
+  class c1,c2,c3,c4,w1,w2,w3,x1,x2,x3 currentStep;
+  style early fill:#FBFCFD,stroke:#AAB7C4,stroke-width:1.5px
+  style current fill:#F7FBFE,stroke:#7FA8C2,stroke-width:1.5px
+  style selectPath fill:#FFFFFF,stroke:#B8C8D4,stroke-width:1px,stroke-dasharray:4 3
+  style watchPath fill:#FFFFFF,stroke:#B8C8D4,stroke-width:1px,stroke-dasharray:4 3
+  style execPath fill:#FFFFFF,stroke:#B8C8D4,stroke-width:1px,stroke-dasharray:4 3

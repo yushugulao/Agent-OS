@@ -1,0 +1,22 @@
+flowchart TB
+  subgraph early["Early Design"]
+    direction LR
+    e1["FIFO"] --> e2["Physical Scan"] --> e3["Rollback Truncate"]
+  end
+
+  subgraph current["Current Design"]
+    direction LR
+    c1["Hash-Bound Record"] --> c2["Visible Head"] --> c3["Successor Index"] --> c4["Stable Read"]
+    c2 --> c5["New Branch"]
+  end
+
+  e3 -. "Redesign" .-> c1
+
+  classDef earlyStep fill:#F4F6F7,stroke:#8996A3,color:#263746,stroke-width:1.5px;
+  classDef risk fill:#FDEDEC,stroke:#C65B5B,color:#6E2020,stroke-width:2px;
+  classDef currentStep fill:#EAF2F8,stroke:#5E8FAF,color:#17324D,stroke-width:1.8px;
+  class e1,e2 earlyStep;
+  class e3 risk;
+  class c1,c2,c3,c4,c5 currentStep;
+  style early fill:#FBFCFD,stroke:#AAB7C4,stroke-width:1.5px
+  style current fill:#F7FBFE,stroke:#7FA8C2,stroke-width:1.5px

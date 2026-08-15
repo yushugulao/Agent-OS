@@ -6107,6 +6107,131 @@ class NexusProfileTests(unittest.TestCase):
         self.assertEqual(malformed_tool.exception.code, "BAD_TOOL_EVENT")
         self.assertNotIn("observer-secret", str(nexus.telemetry))
 
+    def test_late_observer_replays_kernel_identity_prefix_once_in_order(self) -> None:
+        harness = SessionHarness("nexus")
+        harness.session.start()
+
+        def validated_snapshot(**updates: object) -> dict[str, object]:
+            payload: dict[str, object] = {
+                "event": "kernel_snapshot",
+                "source": "kernel_snapshot",
+                "fresh": False,
+                "tick": 100,
+                "pid": 8,
+                "agent_id": 3,
+                "actor_control_id": 0x200,
+                "role": "research",
+                "workflow_lifecycle_id": 3,
+                "workflow_lifecycle_generation": 2,
+                "loop_state": 2,
+                "capability_mask": 0x3F,
+                "context_seq": 9,
+                "wait_sleep_delta": 5,
+                "wait_wakeup_delta": 4,
+                "sched_dispatch": 8,
+                "sched_dispatch_count": 9,
+                "sched_budget": 13,
+                "sched_budget_used": 14,
+                "sched_vruntime": 21,
+            }
+            payload.update(updates)
+            harness.guest("TELEMETRY", payload)
+            return dict(harness.telemetry[-1])
+
+        research = validated_snapshot()
+        system = validated_snapshot(
+            tick=101,
+            pid=9,
+            agent_id=2,
+            actor_control_id=0x300,
+            role="system",
+        )
+        live = validated_snapshot(tick=102, sched_dispatch_count=10)
+
+        endpoints = daemon.LocalEndpoints.__new__(daemon.LocalEndpoints)
+        endpoints.stopping = threading.Event()
+        endpoints._lock = threading.RLock()
+        endpoints._controller = None
+        endpoints._observers = set()
+        endpoints._kernel_identity_prefix_by_pid = {}
+        endpoints.controller_initial = None
+        attached = {
+            "type": "telemetry",
+            "source": "host",
+            "event": "observer_attached",
+        }
+        endpoints.observer_initial = lambda: attached
+
+        endpoints.broadcast(research)
+        endpoints.broadcast(system)
+
+        replay_blocked = threading.Event()
+        release_replay = threading.Event()
+
+        class AdmissionPeer:
+            role = "observer"
+
+            def __init__(self) -> None:
+                self.closed = threading.Event()
+                self.sent: list[dict[str, object]] = []
+
+            def send(self, value) -> bool:
+                item = dict(value)
+                self.sent.append(item)
+                if item == system:
+                    replay_blocked.set()
+                    self.assert_released()
+                return True
+
+            def assert_released(self) -> None:
+                if not release_replay.wait(1):
+                    raise AssertionError("late observer replay did not resume")
+
+            def close(self) -> None:
+                if not self.closed.is_set():
+                    self.closed.set()
+                    endpoints._remove(self)
+
+        peer = AdmissionPeer()
+        admitted: list[tuple[bool, str | None]] = []
+        admit_thread = threading.Thread(
+            target=lambda: admitted.append(endpoints._admit_peer(peer))
+        )
+        admit_thread.start()
+        self.assertTrue(replay_blocked.wait(1))
+
+        live_started = threading.Event()
+        live_done = threading.Event()
+
+        def broadcast_live() -> None:
+            live_started.set()
+            endpoints.broadcast(live)
+            live_done.set()
+
+        live_thread = threading.Thread(target=broadcast_live)
+        live_thread.start()
+        self.assertTrue(live_started.wait(1))
+        self.assertFalse(live_done.wait(0.02))
+        release_replay.set()
+        admit_thread.join(1)
+        live_thread.join(1)
+
+        self.assertFalse(admit_thread.is_alive())
+        self.assertFalse(live_thread.is_alive())
+        self.assertEqual(admitted, [(True, None)])
+        self.assertEqual(
+            peer.sent,
+            [
+                {"type": "welcome", "role": "observer"},
+                attached,
+                research,
+                system,
+                live,
+            ],
+        )
+        self.assertEqual(endpoints._kernel_identity_prefix_by_pid[8], live)
+        self.assertEqual(endpoints._kernel_identity_prefix_by_pid[9], system)
+
     def test_turn_completion_waits_boundedly_for_late_kernel_identity(self) -> None:
         harness = SessionHarness(
             "nexus", ReplyProvider(relay.ModelReply("final", content="verified"))

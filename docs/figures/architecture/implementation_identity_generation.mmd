@@ -1,0 +1,21 @@
+flowchart TB
+  subgraph early["Early Design"]
+    direction LR
+    e1["Scope ID"] --> e2["Slot Reuse"] --> e3["ABA Risk"]
+  end
+
+  subgraph current["Current Design"]
+    direction LR
+    c1["Lifecycle Key"] --> c2["Generation Check"] --> c3["Stale Reject"]
+  end
+
+  e3 -. "Redesign" .-> c1
+
+  classDef earlyStep fill:#F4F6F7,stroke:#8996A3,color:#263746,stroke-width:1.5px;
+  classDef risk fill:#FDEDEC,stroke:#C65B5B,color:#6E2020,stroke-width:2px;
+  classDef currentStep fill:#EAF2F8,stroke:#5E8FAF,color:#17324D,stroke-width:1.8px;
+  class e1,e2 earlyStep;
+  class e3 risk;
+  class c1,c2,c3 currentStep;
+  style early fill:#FBFCFD,stroke:#AAB7C4,stroke-width:1.5px
+  style current fill:#F7FBFE,stroke:#7FA8C2,stroke-width:1.5px

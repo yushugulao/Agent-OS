@@ -15,6 +15,7 @@
 | **赛题名称** | 面向 AI Agent 的操作系统内核（Agent-OS） |
 | **作品名称** | 面向 AI 智能体的操作系统内核 |
 | **队伍名称** | happy-legend |
+| **指导老师** | 余盛季、郭力维 |
 | **代码仓库** | [project3136859-388870](https://gitlab.eduxiji.net/T2026106149911107/project3136859-388870) |
 
 ### 1.2 摘要
@@ -27,7 +28,7 @@
 
 ### 1.3 系统能力概览
 
-实现时，我们没有把身份、上下文和资源状态全部留给应用层，而是沿 uCore 的进程、地址空间、系统调用、VFS、等待队列和调度路径加入 Agent 所需的机制。下面列出各段工作流真正经过的内核路径；对应章节同时给出源码入口和可复现的 Guest 测试方法。
+我们沿 uCore 的进程、地址空间、系统调用、VFS、等待队列和调度路径加入 Agent 身份、上下文与资源管理机制。下面列出各段工作流经过的内核路径；对应章节同时给出源码入口和可复现的 Guest 测试方法。
 
 | **工作流阶段** | **内核机制** | **运行时可观察行为** | **详细说明** |
 | --- | --- | --- | --- |
@@ -96,9 +97,28 @@
 
 ### 2.1 背景与意义
 
-传统操作系统主要管理进程、地址空间、文件和系统调用。Agent 程序还要在多轮交互中保存 Context，管理每个执行者的身份和工具权限，记录输入来源与文件处理阶段，并协调多个 Agent 之间的任务。如果这些工作全部留给应用层，各进程会各自保存一份状态，工作流重启后也很难判断哪些旧对象需要回收。
+AI Agent 正从“生成一段内容”走向“读取工作区、调用工具并持续改变系统状态”。[OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/) 将提示注入、敏感信息泄露、不当输出处理、过度代理和无界资源消耗列为重要风险；[NIST AI 600-1](https://doi.org/10.6028/NIST.AI.600-1) 也把部署前测试、内容来源、事件披露、人工复核和跟踪记录纳入生成式 AI 风险管理。对操作系统项目而言，当模型能够触发真实副作用时，仅判断输出文本是否合理，已经不足以回答“谁以什么权限、依据什么上下文、调用了哪个工具、消耗了多少资源”。
 
-uCore 已经提供了进程、虚拟内存、VFS、IPC、调度器、时钟中断和 VirtIO。我们把 AgentOS 接到这些现有路径上：内核可以认出同一工作流中的成员，在工具或文件操作生效前检查权限，并把文件变化、工具结果和协作消息送入同一个 Agent 循环。原有 uCore 程序仍使用原来的接口，Agent 程序则通过新增 ABI 调用 AgentOS。
+<p align="center">
+  <a href="docs/figures/background/owasp_llm_top10_2025_highlighted.png">
+    <img src="docs/figures/background/owasp_llm_top10_2025_highlighted.png" alt="OWASP Top 10 for LLM Applications 2025 中与 AgentOS 系统边界直接相关的风险类别" width="900">
+  </a>
+</p>
+
+> 红框标出与工具副作用、权限、Context 和资源治理直接相关的类别。原图：[OWASP Top 10 for LLM Applications 2025](https://genai.owasp.org/llm-top-10/)（[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)）。
+
+一个可执行 Agent 通常沿“接收目标与输入 → 读取 Context → 规划下一步 → 调用工具产生副作用 → 记录结果并继续或结束”的闭环运行。单个请求还会扩展为多个进程或 Agent 的委托关系。于是，**identity（执行者是谁）**、**capability（允许做什么）**、**structured tool（以何种参数产生副作用）**、**Context 与 provenance（决策依据来自哪里）**、**terminal state（任务是否完成或取消）**以及**工作流资源账本**，都会跨越一次模型调用的边界。若这些状态只由各应用进程自行维护，重启、并发、迟到响应和对象复用都可能造成状态分歧。
+
+业界已有方案从编排、互操作、隔离和状态管理等角度解决这些问题：
+
+| **方案** | **主要特性** | **从系统职责看仍有的局限** |
+| --- | --- | --- |
+| Agent 编排框架 | 提供状态图、记忆、重试与人工审批，便于快速组织模型和工具 | 策略通常随应用进程运行，跨进程身份、系统调用副作用和退出后的统一回收仍需额外实现 |
+| 工具互操作协议 | 统一工具描述、参数和消息传输，降低模型与外部服务的接入成本 | 协议规定“如何通信”，不天然提供本机内核中的权限裁决、任务生命周期和资源结算 |
+| 容器、沙箱与 ACL/cgroup | 隔离进程和文件，限制 CPU、内存等资源 | 粒度多为进程、容器或路径，难以直接表达每次工具调用的 schema、前置任务、来源链和工作流 generation |
+| 数据库、向量库与工作流引擎 | 持久化记忆、检索结果和任务状态，支持故障恢复 | 会在应用层形成另一套对象状态；其版本绑定、迟到结果失效和内核对象清理仍需协调 |
+
+AgentOS-uCore 将**副作用检查、身份与委托生命周期、Context/provenance 记录以及工作流级资源管理**接入 uCore 的进程、VFS、IPC、等待队列和调度路径。即使上层规划受到错误或恶意输入影响，工具调用仍要经过权限与参数检查，任务和资源也能被追踪、取消、结算与回收。
 
 ### 2.2 核心挑战
 
@@ -232,13 +252,15 @@ Workflow EEVDF 把同一工作流中的进程合成一个外层调度对象。�
 
 `agentlive_ucore` 运行一个常驻 Agent 循环。Guest 保存轮次、关联编号、Tool Registry、Context 和审批状态。Host 中继负责转发串口帧、建立 TLS 连接，并与模型 Provider 交换 JSON。固定 Replay 与真实 Provider 使用同一套串口协议，便于用固定输入检查多轮工具调用。
 
-`agentnexus_ucore` 是一个通用、类似 coding CLI 的多智能体 Harness。它以任意非空用户输入建立本轮 root Task，模型可以直接回答，也可以按需调用 `search_files`、`read_file` 和 `inspect_system`。前两个工具只读访问启动会话时指定的 Host 工作区，第三个工具查看当前 Guest 的 `status`、`processes` 或 `context`；这些能力不绑定某一种业务题目。
+`agentnexus_ucore` 是一个通用、类似 coding CLI 的多智能体 Harness。它以任意非空用户输入建立本轮 root Task，模型可以直接回答，也可以按需调用 `search_files`、`read_file` 和 `inspect_system`。前两个工具只读访问启动会话时指定的 Host 工作区，第三个工具查看当前 Guest 的 `status`、`processes` 或 `context`。
 
 Coordinator 通过真正的内核 Task Channel 把 child Task 委派给 Research 或 System。Task descriptor 只绑定目标身份、任务编号和 capsule handle；目标 Agent claim 后从 Guest artifact 取得输入，完成并提交结果 artifact，Coordinator 再从唯一的 terminal CQE 结算任务。Coordinator 随后把本代 Execution Contract 收敛到 `RECLAIMED`，才恢复 observer/Host 事件投影、读取结果 artifact 并建立下一代 Contract。`MESSAGE` 保留为一般进程通信，但不传递 child Task 的 payload 或状态。
 
-工作区文件先由 Host 在会话指定的 root 边界内生成带 generation、object id 和 revision 的分页 manifest。Guest 用 1 个 control inode 和当前页面最多 32 个 data-stub inode 建立 Metadata Catalog 窗口，并用 4 组最多 8 项的 Live Query 选择和复核候选；manifest generation 变化通过 control stub 的 Typed Watch `UPDATE` 使旧窗口失效。Host 只在 Guest 回传的候选对象中执行正文匹配，或返回指定 object/revision 的分段字节。真实搜索或读取正文回到 Guest，成为 Research 的输入与结果 artifact，再进入 TOOL Context 和后续模型消息。Metadata Catalog 是有界目录窗口，不是全文索引；全文匹配仍由 Host 在 Guest 已选定的候选中执行。首版 Harness 保持只读，不提供文件编辑或 Shell 执行，也不把 Research 和 System 描述成独立模型。AgentOS 内核改进问题只是在线演示中采用的一类任务。核心应用代码位于 [`user/src/agentlive_ucore.c`](user/src/agentlive_ucore.c)、[`user/src/agentnexus_ucore.c`](user/src/agentnexus_ucore.c) 和 [`user/lib/agent_nexus.c`](user/lib/agent_nexus.c)，Host 接入主要位于 [`host_tools/agentos_relayd.py`](host_tools/agentos_relayd.py)、[`host_tools/agentos_workspace.py`](host_tools/agentos_workspace.py) 和 [`host_tools/agentos_nexus_task_ledger.py`](host_tools/agentos_nexus_task_ledger.py)。
+工作区文件先由 Host 在会话指定的 root 内生成带 generation、object id 和 revision 的分页 manifest。Guest 用 1 个 control inode 和当前页面最多 32 个 data-stub inode 建立 Metadata Catalog 窗口，并用 4 组最多 8 项的 Live Query 选择和复核候选；manifest generation 变化通过 control stub 的 Typed Watch `UPDATE` 使旧窗口失效。Host 在 Guest 回传的候选对象中执行正文匹配，或返回指定 object/revision 的分段字节。搜索和读取结果回到 Guest 后，成为 Research 的输入与结果 artifact，再进入 TOOL Context 和后续模型消息。Metadata Catalog 是有界目录窗口，全文匹配由 Host 在 Guest 选定的候选中执行。首版 Harness 保持只读，不提供文件编辑或 Shell 执行。
 
-Nexus 的跨轮上下文由 Guest Relay Agent 的 AgentOS Context active path 决定，而不是由 Host 另建一份对话记忆。每轮 USER、已经结算的 TOOL 和成功 FINAL 都以短节点进入 Context；第 7 页的 4 KiB 用户缓存只在对应 USER/FINAL 节点仍位于 active path 时补充有界的完整正文。Relay 通过 Context 的 direct active query 重建下一轮消息；失败或取消会回滚本轮路径，`/reset` 同时清空 Relay Context 与用户缓存。Host 不私建、补写或替换 Provider 请求中的跨轮正文和 Guest 工具结果；在线 Provider 与固定 Replay 都直接使用 Guest 重建的消息和真实 TOOL artifact 投影。这条路径直接复用 AgentOS 已有的 Context、Task Channel、Metadata Catalog、Live Query 和 Typed Watch，没有引入并列的外部任务或记忆子系统。
+核心应用代码位于 [`user/src/agentlive_ucore.c`](user/src/agentlive_ucore.c)、[`user/src/agentnexus_ucore.c`](user/src/agentnexus_ucore.c) 和 [`user/lib/agent_nexus.c`](user/lib/agent_nexus.c)，Host 接入主要位于 [`host_tools/agentos_relayd.py`](host_tools/agentos_relayd.py)、[`host_tools/agentos_workspace.py`](host_tools/agentos_workspace.py) 和 [`host_tools/agentos_nexus_task_ledger.py`](host_tools/agentos_nexus_task_ledger.py)。
+
+Nexus 由 Guest Relay Agent 的 AgentOS Context active path 管理跨轮上下文。每轮 USER、已经结算的 TOOL 和成功 FINAL 都以短节点进入 Context；第 7 页的 4 KiB 用户缓存只在对应 USER/FINAL 节点仍位于 active path 时补充有界的完整正文。Relay 通过 Context 的 direct active query 重建下一轮消息；失败或取消会回滚本轮路径，`/reset` 同时清空 Relay Context 与用户缓存。在线 Provider 与固定 Replay 都使用 Guest 重建的消息和 TOOL artifact 投影，并直接复用 AgentOS 已有的 Context、Task Channel、Metadata Catalog、Live Query 和 Typed Watch。
 
 ## 四、测试结果
 
@@ -294,7 +316,7 @@ AGENT_TEST_CASE=agentpublish_ucore \
 | scalar V3 | 32 | 2,051.0 微秒 | 1,833.0 至 2,226.0 微秒 |
 | SQ/CQ | 32 | 1,620.5 微秒 | 1,472.0 至 1,755.5 微秒 |
 
-在这组短小、同构且同步的 `ECHO` 任务中，Batch 把 16 个操作合并为一次提交，中位耗时最低，说明减少 syscall 往返对这类负载最有效。`SQ/CQ` 的价值并不是压低短调用的最低延迟，而是用长期队列承载 backpressure、cancel 和唯一 terminal CQE；Scalar V3 则保留每次调用独立校验 Execution Contract 的语义。各组延迟分布见[性能测试](docs/performance.md#6-agent-task-传输)。
+在这组短小、同构且同步的 `ECHO` 任务中，Batch 把 16 个操作合并为一次提交，中位耗时最低，说明减少 syscall 往返对这类负载最有效。`SQ/CQ` 以长期队列承载 backpressure、cancel 和唯一 terminal CQE；Scalar V3 保留每次调用独立校验 Execution Contract 的语义。各组延迟分布见[性能测试](docs/performance.md#6-agent-task-传输)。
 
 ### 4.4 Workflow EEVDF
 
