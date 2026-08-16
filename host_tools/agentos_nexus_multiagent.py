@@ -17,9 +17,14 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import threading
 import time
 from typing import Callable, Final, Mapping, Sequence
+
+_HOST_TOOLS_DIR = Path(__file__).resolve().parent
+if str(_HOST_TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(_HOST_TOOLS_DIR))
 
 try:
     import agentos_nexus_dev as development

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import time
@@ -114,6 +115,26 @@ class _OversizedFinalProvider:
 
 
 class MultiAgentHarnessTests(unittest.TestCase):
+    def test_isolated_cli_bootstraps_sibling_modules(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-B",
+                str(_HERE / "agentos_nexus_multiagent.py"),
+                "--help",
+            ],
+            cwd=_HERE.parent,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--workspace", result.stdout)
+        self.assertIn("--native-boot-timeout", result.stdout)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="nexus-multi-test-")
         self.root = Path(self.temporary.name)
