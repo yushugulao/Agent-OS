@@ -19,6 +19,7 @@ SOURCE_PATHS = {
     "query": "os/agent_metadata_query.c",
     "directory": "os/agent_metadata_directory.c",
     "objects": "os/agent_metadata_objects.c",
+    "core": "os/agent_core.c",
     "events": "os/agent_live_query_events.c",
     "events_h": "os/agent_live_query_events.h",
     "ipc": "os/agent_ipc.c",
@@ -82,6 +83,7 @@ def validate_sources(sources: dict[str, str]) -> None:
     query = sources["query"]
     directory = sources["directory"]
     objects = sources["objects"]
+    core = sources["core"]
     events = sources["events"]
     events_h = sources["events_h"]
     ipc = sources["ipc"]
@@ -139,6 +141,99 @@ def validate_sources(sources: dict[str, str]) -> None:
     require(meta_set, "agent_metadata_catalog_clear_slot_volatile", "delete bypasses volatile clear")
     admission = function(objects, "agent_metadata_admission_status")
     require(admission, "returnAGENT_STATUS_OK", "Agent admission still depends on catalog recovery")
+
+    # Batch registration amortizes ingress coordination while preserving ordered
+    # per-item commits, statuses, and fatal-prefix semantics.
+    for header in (agent_h, user_h):
+        require(header, "AGENT_FILE_META_BATCH_MAX16", "metadata batch capacity is absent from UAPI")
+        require(header, "AGENT_FILE_META_BATCH_F_NONE0", "metadata batch flags are absent from UAPI")
+        require(header, "agent_file_meta_set_batch", "metadata batch API is absent from UAPI")
+    require(
+        user_syscall,
+        "syscall(SYS_agent_file_meta_set_batch,items,statuses,count,flags)",
+        "metadata batch wrapper does not forward all four arguments",
+    )
+    scalar_set = function(objects, "sys_agent_file_meta_set")
+    batch_set = function(objects, "sys_agent_file_meta_set_batch")
+    batch_execute = function(objects, "agent_file_meta_set_batch_execute")
+    require(
+        objects,
+        "staticstructagent_file_metaagent_file_meta_batch_scratch[AGENT_FILE_META_BATCH_MAX]",
+        "metadata batch stages records on the kernel stack",
+    )
+    require(
+        scalar_set,
+        "agent_file_meta_set_execute(p,metaaddr,0,scope_id,0,0)",
+        "scalar metadata set no longer shares the per-item mutation core",
+    )
+    require(
+        batch_execute,
+        "agent_file_meta_set_execute(p,0,&agent_file_meta_batch_scratch[i],scope_id,1,&stop_batch)",
+        "metadata batch bypasses the scalar per-item mutation core",
+    )
+    require_order(
+        batch_set,
+        (
+            "flags!=0||count<0||count>AGENT_FILE_META_BATCH_MAX",
+            "if(count==0)return0",
+            "itemsaddr>=MAXVA||statusesaddr>=MAXVA",
+            "sizeof(structagent_file_meta)>MAXVA-itemsaddr",
+            "sizeof(int)>MAXVA-statusesaddr",
+            "workflow_lifecycle_operation_enter(lifecycle)",
+            "agent_file_meta_set_batch_execute",
+            "workflow_lifecycle_operation_leave(lifecycle)",
+        ),
+        "metadata batch validation and lifecycle gate are not ordered",
+    )
+    if batch_set.count("workflow_lifecycle_operation_enter(lifecycle)") != 1 or batch_set.count(
+        "workflow_lifecycle_operation_leave(lifecycle)"
+    ) != 1:
+        raise ContractError("metadata batch enters its lifecycle more than once")
+    require_order(
+        batch_execute,
+        (
+            "agent_file_meta_write_scope(p,&scope_id)",
+            "itemsaddr<statuses_end&&statusesaddr<items_end",
+            "agent_metadata_txn_lock(1)",
+            "proc_vm_snapshot_begin(p)",
+            "user_range_check(p->pagetable,itemsaddr",
+            "user_range_check(p->pagetable,statusesaddr",
+            "copyin(p->pagetable,(char*)&agent_file_meta_batch_scratch[i],itemaddr",
+            "copyin(p->pagetable,(char*)&preserved,statusaddr",
+            "copyout(p->pagetable,statusaddr,(char*)&preserved",
+            "proc_vm_snapshot_end(p)",
+            "agent_file_meta_set_execute",
+            "if(item_status==-1)break",
+            "copyout(p->pagetable,statusesaddr",
+            "processed++",
+            "if(stop_batch||item_status==AGENT_STATUS_INDETERMINATE)break",
+            "agent_metadata_txn_work_charge(1)",
+            "agent_metadata_txn_unlock()",
+        ),
+        "metadata batch no longer publishes one ordered determined prefix",
+    )
+    require(
+        batch_execute,
+        "if(copyout(p->pagetable,statusesaddr+(uint64)i*sizeof(item_status),(char*)&item_status,sizeof(item_status))<0){processed=AGENT_STATUS_INDETERMINATE;break;}",
+        "an impossible post-preflight status failure can hide a committed item",
+    )
+    if batch_execute.count("agent_metadata_txn_lock(1)") != 1:
+        raise ContractError("metadata batch does not share one metadata transaction")
+    require(
+        batch_execute,
+        "agent_metadata_txn_unlock();returnprocessed;",
+        "metadata batch success leaks the metadata transaction",
+    )
+    require_order(
+        batch_execute,
+        (
+            "out_snapshot_error:",
+            "proc_vm_snapshot_end(p)",
+            "out_txn_error:",
+            "agent_metadata_txn_unlock()",
+        ),
+        "metadata batch preflight errors leak the metadata transaction",
+    )
 
     # One in-memory transaction drains deltas and captures the same lifecycle cut.
     current_fence = function(objects, "agent_metadata_quiescence_fence_snapshot_current")
@@ -208,6 +303,21 @@ def validate_sources(sources: dict[str, str]) -> None:
         require(header, "AGENT_FILE_LIVE_WATCH_F_RESYNC_REQUIRED", "typed watch has no sticky resync state")
     require(user_syscall, "agent_live_watch", "typed watch user wrapper is missing")
     require(user_syscall, "agent_live_unwatch", "typed unwatch user wrapper is missing")
+    execute_op = function(core, "agent_execute_op")
+    require(
+        execute_op,
+        "if(op->arg0>AGENT_EVENT_MAX||op->arg0==AGENT_EVENT_FILE_QUERY)",
+        "generic Agent tool watches do not reject FILE_QUERY",
+    )
+    require_order(
+        execute_op,
+        (
+            "caseAGENT_TOOL_AGENT_WATCH:",
+            "op->arg0==AGENT_EVENT_FILE_QUERY",
+            "agent_ipc_watch_set(p,op->arg0,op->payload)",
+        ),
+        "generic Agent tool watches can allocate an unremovable FILE_QUERY slot",
+    )
     install = function(events, "agent_live_query_watch_install_typed")
     require(install, "agent_metadata_txn_owned(0)", "watch install is not serialized with mutation")
     require(install, "agent_live_query_predicate_compile", "watch install stores no complete predicate")
@@ -229,11 +339,70 @@ def validate_sources(sources: dict[str, str]) -> None:
     require(publish_transition, "agent_live_query_proc_resync_mark_locked", "queue overflow is not sticky")
     require_order(
         publish_transition,
+        (
+            "agent_live_query_domain_valid",
+            "agent_live_query_file_watches_present()",
+            "for(structproc*target=pool",
+        ),
+        "zero-watch fast path does not preserve validation before skipping the process scan",
+    )
+    require_order(
+        publish_transition,
         ("typed_changes=agent_live_query_typed_target_changes", "intr_restore(enabled)", "agent_ipc_deliver_live_event"),
         "event delivery holds the live-index IRQ snapshot",
     )
     if publish_transition.count("intr_restore(enabled)") != 4:
         raise ContractError("live-query transition has an unreviewed IRQ boundary")
+
+    # The fast-path count must be exact: installs increment once, removals and
+    # process reuse can return it to zero, and every read is IRQ protected.
+    watch_refresh = function(events, "agent_live_query_file_watch_refresh_locked")
+    watch_clear = function(events, "agent_live_query_file_watch_clear_locked")
+    watches_present = function(events, "agent_live_query_file_watches_present")
+    live_proc_reset = function(events, "agent_live_query_proc_reset")
+    events_init = function(events, "agent_live_query_events_init")
+    has_file_watch = function(events, "agent_live_query_has_file_watch")
+    require_order(
+        events_init,
+        (
+            "memset(agent_live_query_file_watch_present,0",
+            "agent_live_query_file_watch_processes=0",
+        ),
+        "file-watch fast-path state is not initialized empty",
+    )
+    require(has_file_watch, "AGENT_EVENT_FILE_STATUS", "legacy file-status watches are absent from the fast-path count")
+    require(has_file_watch, "AGENT_EVENT_FILE_QUERY", "typed file-query watches are absent from the fast-path count")
+    for token in (
+        "agent_live_query_file_watch_present[slot]=1",
+        "agent_live_query_file_watch_processes++",
+        "agent_live_query_file_watch_present[slot]=0",
+        "agent_live_query_file_watch_processes--",
+    ):
+        require(watch_refresh, token, f"file-watch count refresh omits {token}")
+    require(watch_clear, "agent_live_query_file_watch_processes--", "process reset cannot clear the file-watch count")
+    require_order(
+        watches_present,
+        ("intr_save()", "agent_live_query_file_watch_processes!=0", "intr_restore(enabled)"),
+        "zero-watch count is read without IRQ synchronization",
+    )
+    typed_remove = function(events, "agent_live_query_watch_remove_typed")
+    require(install, "agent_live_query_file_watch_refresh_locked(p)", "typed watch install does not publish its fast-path count")
+    require(typed_remove, "agent_live_query_file_watch_refresh_locked(p)", "typed unwatch does not clear its fast-path count")
+    require(live_proc_reset, "agent_live_query_file_watch_clear_locked(p)", "process reuse leaks the fast-path watch count")
+    generic_watch = function(ipc, "agent_ipc_watch_set")
+    generic_unwatch = function(ipc, "agent_ipc_watch_clear")
+    require(generic_watch, "agent_live_query_file_watch_changed(p)", "legacy file watch install bypasses the fast-path count")
+    require(generic_unwatch, "agent_live_query_file_watch_changed(p)", "legacy file unwatch bypasses the fast-path count")
+    require_order(
+        generic_unwatch,
+        (
+            "if(!cold->watch_valid[i])continue",
+            "if(cold->watch_event_type[i]==AGENT_EVENT_FILE_QUERY)continue",
+            "if(!clear_all)",
+            "cold->watch_valid[i]=0",
+        ),
+        "generic clear-all can detach a typed watch without its watch-id protocol",
+    )
     fence_drain = function(events, "agent_live_query_fence_drain")
     require(fence_drain, "agent_live_query_domain_generation_locked", "fence ignores overflow resync state")
     require(fence_drain, "agent_live_query_proc_resync_pending_domain", "fence ignores undelivered resync markers")

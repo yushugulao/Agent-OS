@@ -51,11 +51,14 @@ _Static_assert(LABDEMO_CORPUS_SIZE > DEMO_BENCH_TARGET &&
 	       "labdemo corpus must fit the two-digit fixture namespace");
 #define DEMO_BENCH_FID_BASE 100
 #define DEMO_BENCH_OK_BODY \
-	"project=lab-gene-x;workflow=nightly-regression;run=RUN-042;stage=other;status=ok"
+	"project=" DEMO_PROJECT ";workflow=" DEMO_WORKFLOW ";run=" \
+	DEMO_BENCH_RUN ";stage=other;kind=artifact;status=ok;summary=ready;reason=none"
 #define DEMO_BENCH_FAILED_BODY \
-	"project=lab-gene-x;workflow=nightly-regression;run=RUN-042;stage=align;status=failed;reason=memory_limit"
+	"project=" DEMO_PROJECT ";workflow=" DEMO_WORKFLOW ";run=" \
+	DEMO_BENCH_RUN ";stage=align;kind=artifact;status=failed;summary=memory_limit;reason=memory_limit"
 #define DEMO_BENCH_RECOVERED_BODY \
-	"project=lab-gene-x;workflow=nightly-regression;run=RUN-042;stage=align;status=recovered;reason=memory_limit"
+	"project=" DEMO_PROJECT ";workflow=" DEMO_WORKFLOW ";run=" \
+	DEMO_BENCH_RUN ";stage=align;kind=artifact;status=recovered;summary=memory_limit recovered;reason=memory_limit"
 
 #ifndef LABDEMO_RUN_NONCE
 #define LABDEMO_RUN_NONCE 1ULL
@@ -69,8 +72,43 @@ _Static_assert(LABDEMO_CORPUS_SIZE > DEMO_BENCH_TARGET &&
 #define LABDEMO_NATIVE_FIRST 0
 #endif
 
+#ifndef LABDEMO_EXPECTED_DISCOVERY_USES
+#define LABDEMO_EXPECTED_DISCOVERY_USES 4
+#endif
+
+_Static_assert(LABDEMO_EXPECTED_DISCOVERY_USES == 1 ||
+	       LABDEMO_EXPECTED_DISCOVERY_USES == 2 ||
+	       LABDEMO_EXPECTED_DISCOVERY_USES == 4 ||
+	       LABDEMO_EXPECTED_DISCOVERY_USES == 8,
+	       "labdemo discovery reuse count must be 1, 2, 4, or 8");
+
+enum labdemo_catalog_state {
+	LABDEMO_CATALOG_COLD = 0,
+	LABDEMO_CATALOG_BUILDING,
+	LABDEMO_CATALOG_READY,
+	LABDEMO_CATALOG_DIRTY,
+};
+
+struct labdemo_catalog_session {
+	enum labdemo_catalog_state state;
+	uint expected_discovery_queries;
+	uint discovery_query_count;
+	uint validation_query_count;
+	uint query_count;
+	uint build_count;
+	uint batch_calls;
+	uint registered_items;
+	uint reuse_hits;
+	uint64 cold_build_us;
+	uint64 aggregate_query_us;
+	uint64 warm_query_us;
+};
+
 static struct labdemo_workload_metrics compat_metrics;
 static struct labdemo_workload_metrics native_metrics;
+static struct labdemo_catalog_session native_catalog_session;
+static struct agent_file_meta native_meta_batch[AGENT_FILE_META_BATCH_MAX];
+static int native_meta_status[AGENT_FILE_META_BATCH_MAX];
 static volatile uint64 demo_cow_probe_word;
 
 struct labdemo_lane_measurement_state {
@@ -560,20 +598,6 @@ static void write_demo_file(const char *name, const char *body)
 	check(close(fd) == 0, "demo file close");
 }
 
-static int demo_contains(const char *text, const char *needle)
-{
-	size_t text_len = strlen(text);
-	size_t needle_len = strlen(needle);
-
-	if (needle_len == 0 || text_len < needle_len)
-		return 0;
-	for (size_t i = 0; i + needle_len <= text_len; i++) {
-		if (strncmp(text + i, needle, needle_len) == 0)
-			return 1;
-	}
-	return 0;
-}
-
 static void print_workload_lane(const char *mode,
 				const struct labdemo_workload_metrics *metrics)
 {
@@ -612,9 +636,8 @@ static void print_workload_lane(const char *mode,
 static void run_compat_workload(struct labdemo_workload_metrics *metrics)
 {
 	static char name[6];
-	static char buffer[160];
+	static char buffer[192];
 	struct labdemo_lane_measurement_state *state = &compat_measurement;
-	int found = 0;
 
 	memset(metrics, 0, sizeof(*metrics));
 	demo_quiescence_fence("compat", "E2E_START", 1, &state->e2e_start);
@@ -629,25 +652,28 @@ static void run_compat_workload(struct labdemo_workload_metrics *metrics)
 	demo_quiescence_fence("compat", "CORE_START", 2, &state->core_start);
 	metrics->started_us = demo_now_us();
 	DEMO_DIAG_BEGIN();
-	for (int i = 0; i < LABDEMO_CORPUS_SIZE; i++) {
-		int fd;
-		ssize_t bytes;
+	for (int use = 0; use < LABDEMO_EXPECTED_DISCOVERY_USES; use++) {
+		int found = 0;
 
-		demo_corpus_name(name, 'c', i);
-		fd = open(name, O_RDONLY);
-		check(fd >= 0, "compat corpus open");
-		memset(buffer, 0, sizeof(buffer));
-		bytes = read(fd, buffer, sizeof(buffer) - 1);
-		check(bytes > 0, "compat corpus read");
-		metrics->bytes_read += (uint64)bytes;
-		metrics->records_examined++;
-		check(close(fd) == 0, "compat corpus close");
-		if (demo_contains(buffer, "stage=align;status=failed") &&
-		    demo_contains(buffer, "reason=memory_limit"))
-			found++;
+		for (int i = 0; i < LABDEMO_CORPUS_SIZE; i++) {
+			int fd;
+			ssize_t bytes;
+
+			demo_corpus_name(name, 'c', i);
+			fd = open(name, O_RDONLY);
+			check(fd >= 0, "compat corpus open");
+			memset(buffer, 0, sizeof(buffer));
+			bytes = read(fd, buffer, sizeof(buffer) - 1);
+			check(bytes > 0, "compat corpus read");
+			metrics->bytes_read += (uint64)bytes;
+			metrics->records_examined++;
+			check(close(fd) == 0, "compat corpus close");
+			if (strcmp(buffer, DEMO_BENCH_FAILED_BODY) == 0)
+				found++;
+		}
+		check(found == 1, "compat unique failed stage");
 	}
 	DEMO_DIAG_END("compat", "corpus_scan");
-	check(found == 1, "compat unique failed stage");
 	metrics->discovered_us = demo_now_us();
 	demo_corpus_name(name, 'c', DEMO_BENCH_TARGET);
 	DEMO_DIAG_BEGIN();
@@ -679,7 +705,7 @@ static void run_compat_workload(struct labdemo_workload_metrics *metrics)
 		check(close(fd) == 0, "compat final close");
 	}
 	DEMO_DIAG_END("compat", "verification_read_close");
-	check(demo_contains(buffer, "stage=align;status=recovered"),
+	check(strcmp(buffer, DEMO_BENCH_RECOVERED_BODY) == 0,
 	      "compat recovered outcome");
 	metrics->result_items = 1;
 	metrics->outcome_hash = demo_outcome_hash("align", "recovered");
@@ -707,12 +733,10 @@ static void run_compat_workload(struct labdemo_workload_metrics *metrics)
 			      &state->e2e_end.performance);
 }
 
-static void seed_native_workload(struct agent_file_meta *target)
+static void seed_native_files(void)
 {
-	static struct agent_file_meta meta;
 	static char name[6];
 
-	memset(target, 0, sizeof(*target));
 	DEMO_DIAG_BEGIN();
 	for (int i = 0; i < LABDEMO_CORPUS_SIZE; i++) {
 		demo_corpus_name(name, 'n', i);
@@ -720,26 +744,192 @@ static void seed_native_workload(struct agent_file_meta *target)
 				DEMO_BENCH_FAILED_BODY : DEMO_BENCH_OK_BODY);
 	}
 	DEMO_DIAG_END("native", "seed_file_write_close");
-	DEMO_DIAG_BEGIN();
+}
+
+static int cleanup_native_files(void)
+{
+	static char name[6];
+	int failed = 0;
+
 	for (int i = 0; i < LABDEMO_CORPUS_SIZE; i++) {
 		demo_corpus_name(name, 'n', i);
-		memset(&meta, 0, sizeof(meta));
-		meta.fid = DEMO_BENCH_FID_BASE + i;
-		strcpy(meta.physical_name, name);
-		strcpy(meta.logical_path, name);
-		strcpy(meta.project, DEMO_PROJECT);
-		strcpy(meta.workflow, DEMO_WORKFLOW);
-		strcpy(meta.run_id, DEMO_BENCH_RUN);
-		strcpy(meta.stage, i == DEMO_BENCH_TARGET ? "align" : "other");
-		strcpy(meta.kind, "artifact");
-		strcpy(meta.status, i == DEMO_BENCH_TARGET ? "failed" : "ok");
-		strcpy(meta.summary, i == DEMO_BENCH_TARGET ?
-				"memory_limit" : "ready");
-		check(agent_file_meta_set(&meta) == 0, "native corpus metadata");
-		if (i == DEMO_BENCH_TARGET)
-			memcpy(target, &meta, sizeof(*target));
+		if (unlink(name) < 0)
+			failed = 1;
 	}
-	DEMO_DIAG_END("native", "seed_meta_set");
+	return failed ? -1 : 0;
+}
+
+static void fill_native_meta(struct agent_file_meta *meta, int index)
+{
+	static char name[6];
+
+	demo_corpus_name(name, 'n', index);
+	memset(meta, 0, sizeof(*meta));
+	meta->fid = DEMO_BENCH_FID_BASE + index;
+	strcpy(meta->physical_name, name);
+	strcpy(meta->logical_path, name);
+	strcpy(meta->project, DEMO_PROJECT);
+	strcpy(meta->workflow, DEMO_WORKFLOW);
+	strcpy(meta->run_id, DEMO_BENCH_RUN);
+	strcpy(meta->stage, index == DEMO_BENCH_TARGET ? "align" : "other");
+	strcpy(meta->kind, "artifact");
+	strcpy(meta->status, index == DEMO_BENCH_TARGET ? "failed" : "ok");
+	strcpy(meta->summary, index == DEMO_BENCH_TARGET ?
+			"memory_limit" : "ready");
+}
+
+static int build_native_catalog(struct agent_file_meta *target,
+				struct labdemo_catalog_session *session)
+{
+	uint64 started_us = demo_now_us();
+
+	check(session->state == LABDEMO_CATALOG_COLD,
+	      "native catalog cold start");
+	session->state = LABDEMO_CATALOG_BUILDING;
+	DEMO_DIAG_BEGIN();
+	for (int offset = 0; offset < LABDEMO_CORPUS_SIZE;
+	     offset += AGENT_FILE_META_BATCH_MAX) {
+		int count = LABDEMO_CORPUS_SIZE - offset;
+		int completed = 0;
+
+		if (count > AGENT_FILE_META_BATCH_MAX)
+			count = AGENT_FILE_META_BATCH_MAX;
+		for (int i = 0; i < count; i++) {
+			int index = offset + i;
+
+			fill_native_meta(&native_meta_batch[i], index);
+			native_meta_status[i] = -1;
+			if (index == DEMO_BENCH_TARGET)
+				memcpy(target, &native_meta_batch[i], sizeof(*target));
+		}
+		while (completed < count) {
+			int processed = agent_file_meta_set_batch(
+				&native_meta_batch[completed],
+				&native_meta_status[completed], count - completed, 0);
+
+			session->batch_calls++;
+			if (processed <= 0 || processed > count - completed) {
+				session->state = LABDEMO_CATALOG_DIRTY;
+				session->cold_build_us =
+					demo_now_us() - started_us;
+				return -1;
+			}
+			for (int i = 0; i < processed; i++) {
+				if (native_meta_status[completed + i] !=
+				    AGENT_STATUS_OK) {
+					session->state = LABDEMO_CATALOG_DIRTY;
+					session->cold_build_us =
+						demo_now_us() - started_us;
+					return -1;
+				}
+			}
+			completed += processed;
+			session->registered_items += processed;
+		}
+	}
+	DEMO_DIAG_END("native", "seed_meta_batch");
+	session->cold_build_us = demo_now_us() - started_us;
+	session->build_count = 1;
+	session->state = LABDEMO_CATALOG_READY;
+	return 0;
+}
+
+static void native_scan_failed(struct labdemo_workload_metrics *metrics,
+			       struct labdemo_catalog_session *session)
+{
+	static char name[6];
+	static char buffer[192];
+	uint64 started_us = demo_now_us();
+	int found = 0;
+
+	check(session->state == LABDEMO_CATALOG_COLD,
+	      "native traversal cold state");
+	DEMO_DIAG_BEGIN();
+	for (int i = 0; i < LABDEMO_CORPUS_SIZE; i++) {
+		int fd;
+		ssize_t bytes;
+
+		demo_corpus_name(name, 'n', i);
+		fd = open(name, O_RDONLY);
+		check(fd >= 0, "native traversal open");
+		memset(buffer, 0, sizeof(buffer));
+		bytes = read(fd, buffer, sizeof(buffer) - 1);
+		check(bytes > 0, "native traversal read");
+		metrics->bytes_read += (uint64)bytes;
+		metrics->records_examined++;
+		check(close(fd) == 0, "native traversal close");
+		if (strcmp(buffer, DEMO_BENCH_FAILED_BODY) == 0)
+			found++;
+	}
+	DEMO_DIAG_END("native", "cold_traversal_query");
+	check(found == 1, "native traversal unique failed stage");
+	session->query_count++;
+	session->aggregate_query_us += demo_now_us() - started_us;
+}
+
+static void native_index_query(struct agent_file_query *query,
+			       struct agent_file_query_result *result,
+			       const char *status,
+			       struct labdemo_workload_metrics *metrics,
+			       struct labdemo_catalog_session *session)
+{
+	static char target_name[6];
+	const char *expected_summary = strcmp(status, "failed") == 0 ?
+		"memory_limit" : "memory_limit recovered";
+	uint64 started_us;
+	uint64 duration_us;
+
+	check(session->state == LABDEMO_CATALOG_READY,
+	      "native catalog ready query");
+	strcpy(query->status, status);
+	memset(result, 0, sizeof(*result));
+	started_us = demo_now_us();
+	check(agent_file_query(query, result) == 1, "native indexed query");
+	duration_us = demo_now_us() - started_us;
+	session->aggregate_query_us += duration_us;
+	if (session->query_count != 0) {
+		session->reuse_hits++;
+		session->warm_query_us += duration_us;
+	}
+	session->query_count++;
+	metrics->records_examined += result->scanned_records;
+	demo_corpus_name(target_name, 'n', DEMO_BENCH_TARGET);
+	check(result->total_hits == 1 && result->returned == 1 &&
+	      result->used_index == 1 &&
+	      strcmp(result->hits[0].physical_name, target_name) == 0 &&
+	      strcmp(result->hits[0].logical_path, target_name) == 0 &&
+	      strcmp(result->hits[0].stage, "align") == 0 &&
+	      strcmp(result->hits[0].kind, "artifact") == 0 &&
+	      strcmp(result->hits[0].status, status) == 0 &&
+	      strcmp(result->hits[0].summary, expected_summary) == 0,
+	      "native indexed result");
+}
+
+static const char *catalog_state_name(enum labdemo_catalog_state state)
+{
+	if (state == LABDEMO_CATALOG_READY)
+		return "ready";
+	if (state == LABDEMO_CATALOG_BUILDING)
+		return "building";
+	if (state == LABDEMO_CATALOG_DIRTY)
+		return "dirty";
+	return "cold";
+}
+
+static void print_catalog_session(const struct labdemo_catalog_session *session,
+				  enum labdemo_catalog_state query_state,
+				  int selected_index)
+{
+	printf("agentos:demo schema=2 nonce=%llu kind=catalog mode=native expected_discovery_queries=%u selected_path=%s query_state=%s discovery_query_count=%u validation_query_count=%u total_query_count=%u build_count=%u batch_calls=%u registered_items=%u reuse_hits=%u cold_build_us=%llu aggregate_query_us=%llu warm_query_us=%llu\n",
+	       (uint64)LABDEMO_RUN_NONCE,
+	       session->expected_discovery_queries,
+	       selected_index ? "indexed" : "traversal",
+	       catalog_state_name(query_state), session->discovery_query_count,
+	       session->validation_query_count, session->query_count,
+	       session->build_count, session->batch_calls,
+	       session->registered_items, session->reuse_hits,
+	       session->cold_build_us, session->aggregate_query_us,
+	       session->warm_query_us);
 }
 
 static void run_native_workload(struct labdemo_workload_metrics *metrics)
@@ -748,29 +938,48 @@ static void run_native_workload(struct labdemo_workload_metrics *metrics)
 	static struct agent_file_query_result result;
 	static struct agent_file_meta target;
 	struct labdemo_lane_measurement_state *state = &native_measurement;
+	struct labdemo_catalog_session *session = &native_catalog_session;
+	enum labdemo_catalog_state query_state;
 	static char name[6];
+	int selected_index = LABDEMO_EXPECTED_DISCOVERY_USES >= 2;
 
 	memset(metrics, 0, sizeof(*metrics));
+	memset(session, 0, sizeof(*session));
+	memset(&target, 0, sizeof(target));
+	session->state = LABDEMO_CATALOG_COLD;
+	session->expected_discovery_queries =
+		LABDEMO_EXPECTED_DISCOVERY_USES;
 	demo_quiescence_fence("native", "E2E_START", 1, &state->e2e_start);
 	metrics->end_to_end_started_us = demo_now_us();
-	seed_native_workload(&target);
+	seed_native_files();
+	if (selected_index && build_native_catalog(&target, session) < 0) {
+		check(cleanup_native_files() == 0,
+		      "native failed batch cleanup");
+		check(0, "native corpus metadata batch");
+	}
 	memset(&query, 0, sizeof(query));
 	query.flags = AGENT_FILE_QUERY_USE_INDEX;
 	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
 	strcpy(query.project, DEMO_PROJECT);
+	strcpy(query.workflow, DEMO_WORKFLOW);
 	strcpy(query.run_id, DEMO_BENCH_RUN);
+	strcpy(query.stage, "align");
+	strcpy(query.kind, "artifact");
 	strcpy(query.status, "failed");
+	strcpy(query.summary_contains, "memory_limit");
 	demo_quiescence_fence("native", "CORE_START", 2, &state->core_start);
 	metrics->started_us = demo_now_us();
-	DEMO_DIAG_BEGIN();
-	check(agent_file_query(&query, &result) == 1,
-	      "native failed-stage query");
-	DEMO_DIAG_END("native", "failed_index_query");
-	metrics->records_examined += result.scanned_records;
-	check(result.returned == 1 && result.used_index == 1 &&
-	      strcmp(result.hits[0].stage, "align") == 0 &&
-	      strcmp(result.hits[0].status, "failed") == 0,
-	      "native failed-stage result");
+	for (uint i = 0; i < session->expected_discovery_queries; i++) {
+		if (selected_index) {
+			DEMO_DIAG_BEGIN();
+			native_index_query(&query, &result, "failed", metrics,
+					   session);
+			DEMO_DIAG_END("native", "failed_index_query");
+		} else {
+			native_scan_failed(metrics, session);
+		}
+		session->discovery_query_count++;
+	}
 	metrics->discovered_us = demo_now_us();
 	demo_corpus_name(name, 'n', DEMO_BENCH_TARGET);
 	DEMO_DIAG_BEGIN();
@@ -782,33 +991,60 @@ static void run_native_workload(struct labdemo_workload_metrics *metrics)
 			    strlen(DEMO_BENCH_RECOVERED_BODY)) ==
 			      (ssize_t)strlen(DEMO_BENCH_RECOVERED_BODY),
 		      "native recovery write");
-		target.update_mask = AGENT_FILE_META_UPDATE_STATUS |
-				     AGENT_FILE_META_UPDATE_SUMMARY;
-		strcpy(target.status, "recovered");
-		strcpy(target.summary, "memory_limit recovered");
-		check(agent_file_meta_set(&target) == 0,
-		      "native recovery metadata stage");
+		if (selected_index) {
+			session->state = LABDEMO_CATALOG_DIRTY;
+			target.update_mask = AGENT_FILE_META_UPDATE_STATUS |
+					     AGENT_FILE_META_UPDATE_SUMMARY;
+			strcpy(target.status, "recovered");
+			strcpy(target.summary, "memory_limit recovered");
+			check(agent_file_meta_set(&target) == 0,
+			      "native recovery metadata stage");
+			session->state = LABDEMO_CATALOG_READY;
+		}
 		check(demo_quiescence_fsync(fd) == 0,
 		      "native recovery primary ack");
 		check(close(fd) == 0, "native recovery close");
 	}
 	DEMO_DIAG_END("native", "grouped_recovery_primary_ack");
 	metrics->committed_us = demo_now_us();
-	strcpy(query.status, "recovered");
-	memset(&result, 0, sizeof(result));
-	DEMO_DIAG_BEGIN();
-	check(agent_file_query(&query, &result) == 1,
-	      "native recovered-stage query");
-	DEMO_DIAG_END("native", "recovered_index_query");
-	metrics->records_examined += result.scanned_records;
-	check(result.returned == 1 && result.used_index == 1 &&
-	      strcmp(result.hits[0].stage, "align") == 0 &&
-	      strcmp(result.hits[0].status, "recovered") == 0,
-	      "native recovered-stage result");
+	if (selected_index) {
+		DEMO_DIAG_BEGIN();
+		native_index_query(&query, &result, "recovered", metrics,
+				   session);
+		DEMO_DIAG_END("native", "recovered_index_query");
+		session->validation_query_count = 1;
+	} else {
+		static char buffer[192];
+		uint64 started_us = demo_now_us();
+		int fd = open(name, O_RDONLY);
+		ssize_t bytes;
+
+		check(fd >= 0, "native traversal final open");
+		memset(buffer, 0, sizeof(buffer));
+		bytes = read(fd, buffer, sizeof(buffer) - 1);
+		check(bytes > 0, "native traversal final read");
+		metrics->bytes_read += (uint64)bytes;
+		metrics->records_examined++;
+		check(close(fd) == 0, "native traversal final close");
+		check(strcmp(buffer, DEMO_BENCH_RECOVERED_BODY) == 0,
+		      "native traversal recovered outcome");
+		session->validation_query_count = 1;
+		session->query_count++;
+		session->aggregate_query_us += demo_now_us() - started_us;
+	}
 	metrics->result_items = 1;
-	metrics->outcome_hash = demo_outcome_hash(result.hits[0].stage,
-					    result.hits[0].status);
+	metrics->outcome_hash = demo_outcome_hash("align", "recovered");
 	metrics->finished_us = demo_now_us();
+	check(session->discovery_query_count ==
+		      session->expected_discovery_queries &&
+	      session->validation_query_count == 1 &&
+	      session->query_count == session->expected_discovery_queries + 1,
+	      "native expected query count");
+	check(!selected_index ||
+	      (session->build_count == 1 &&
+	       session->registered_items == LABDEMO_CORPUS_SIZE &&
+	       session->reuse_hits + 1 == session->query_count),
+	      "native catalog lifecycle reuse");
 	take_performance_snapshot(&state->core_ack);
 	metrics->workload_syscalls = performance_delta(
 		state->core_start.performance.snapshot.observer_workload_syscalls,
@@ -816,15 +1052,17 @@ static void run_native_workload(struct labdemo_workload_metrics *metrics)
 	check(metrics->workload_syscalls != 0, "native workload syscall receipt");
 	demo_quiescence_fence("native", "ACK_SETTLED", 3,
 			      &state->ack_settled);
+	query_state = session->state;
 	DEMO_DIAG_BEGIN();
-	for (int i = 0; i < LABDEMO_CORPUS_SIZE; i++) {
-		demo_corpus_name(name, 'n', i);
-		check(unlink(name) == 0, "native corpus cleanup");
-	}
+	if (selected_index)
+		session->state = LABDEMO_CATALOG_DIRTY;
+	check(cleanup_native_files() == 0, "native corpus cleanup");
+	session->state = LABDEMO_CATALOG_COLD;
 	DEMO_DIAG_END("native", "cleanup_unlink");
 	demo_quiescence_fence("native", "E2E_END", 4, &state->e2e_end);
 	metrics->end_to_end_finished_us = demo_now_us();
 	print_workload_lane("native", metrics);
+	print_catalog_session(session, query_state, selected_index);
 	print_mechanism_delta("native", "core", &state->core_start.performance,
 			      &state->core_ack);
 	print_mechanism_delta("native", "end_to_end",
@@ -981,7 +1219,7 @@ static void run_sentinel(void)
 		      "sentinel intrinsic heartbeat");
 	}
 	check(matched, "sentinel failed file event");
-	check(agent_heartbeat_stop() == 0, "sentinel heartbeat stop");
+	check(agent_heartbeat_configure(0) == 0, "sentinel heartbeat stop");
 	check(agent_live_unwatch(&watch) == AGENT_STATUS_OK,
 	      "unwatch failed query");
 	printf("labdemo_ucore: sentinel event payload=%s\n", event.payload);
@@ -1613,6 +1851,8 @@ static void run_orchestrator(void)
 	static struct labdemo_progress_receipt investigator_receipt;
 	static struct labdemo_progress_receipt recovery_receipt;
 	static struct labdemo_progress_receipt incoming_receipt;
+	static struct agent_op provenance_op;
+	static struct agent_result provenance_result;
 	int sentinel_pid;
 	int ready_pipe[2];
 	int recovery_start[2];
@@ -1648,7 +1888,7 @@ static void run_orchestrator(void)
 	       (uint64)LABDEMO_RUN_NONCE, LABDEMO_SAMPLE_ID,
 	       LABDEMO_NATIVE_FIRST ? "native_then_compat" :
 				      "compat_then_native");
-	check(agent_file_meta_init() == 0, "meta init");
+	check(agent_metadata_init() == 0, "metadata init");
 	if (LABDEMO_NATIVE_FIRST) {
 		run_native_workload(&native_metrics);
 		run_compat_workload(&compat_metrics);
@@ -1814,6 +2054,10 @@ static void run_orchestrator(void)
 		ok++;
 	}
 	check(ok == 3, "three agents");
+	make_op(&provenance_op, AGENT_TOOL_DEPENDENCY_QUERY, 42042, 0,
+		"label=align");
+	run_one(&provenance_op, &provenance_result, AGENT_STATUS_OK,
+		"orchestrator provenance context");
 	check_global_audit(sentinel_pid);
 	check_unified_timeline(sentinel_pid);
 	check_provenance_graph(sentinel_pid);

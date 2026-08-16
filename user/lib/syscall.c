@@ -425,6 +425,34 @@ int agent_worker_create(const char *image, uint64 capabilities)
 		locked, syscall(SYS_agent_worker_create, image, capabilities));
 }
 
+int agent_runtime_control(const struct agent_runtime_config *config,
+			  struct agent_runtime_config_result *result)
+{
+	int locked = -1;
+
+	if (config != 0 && config->operation == AGENT_RUNTIME_CONTROL_SPAWN) {
+		locked = __stdio_process_spawn_prepare();
+		if (locked < 0)
+			return -1;
+	}
+	int status = syscall(SYS_agent_runtime_control, config, result);
+	return locked >= 0 ? process_spawn_finish(locked, status) : status;
+}
+
+int agent_context_artifact(
+	const struct agent_context_artifact_control *control,
+	struct agent_context_artifact_result *result)
+{
+	return syscall(SYS_agent_context_artifact, control, result);
+}
+
+int agent_context_prefetch(
+	const struct agent_context_prefetch_control *control,
+	struct agent_context_prefetch_result *result)
+{
+	return syscall(SYS_agent_context_prefetch, control, result);
+}
+
 int agent_info(struct agent_info *info)
 {
 	return syscall(SYS_agent_info, info);
@@ -835,7 +863,9 @@ int agent_wait_cancel(int pid, const char *reason)
 
 int agent_heartbeat(int interval_ticks)
 {
-	return syscall(SYS_agent_heartbeat, interval_ticks);
+	if (interval_ticks < 0)
+		return AGENT_STATUS_BAD_PARAM;
+	return agent_heartbeat_configure((uint64)interval_ticks);
 }
 
 int sys_agent_heartbeat_set(uint64 interval_ticks)
@@ -848,14 +878,22 @@ int sys_agent_heartbeat_stop(void)
 	return syscall(SYS_agent_heartbeat_stop);
 }
 
+int agent_heartbeat_configure(uint64 interval_ticks)
+{
+	if (interval_ticks > AGENT_HEARTBEAT_MAX_TICKS)
+		return AGENT_STATUS_BAD_PARAM;
+	return interval_ticks == 0 ? sys_agent_heartbeat_stop() :
+		sys_agent_heartbeat_set(interval_ticks);
+}
+
 int agent_heartbeat_set(uint64 interval_ticks)
 {
-	return sys_agent_heartbeat_set(interval_ticks);
+	return agent_heartbeat_configure(interval_ticks);
 }
 
 int agent_heartbeat_stop(void)
 {
-	return sys_agent_heartbeat_stop();
+	return agent_heartbeat_configure(0);
 }
 
 #ifdef WAIT_ATOMIC_TEST_PROFILE
@@ -887,7 +925,7 @@ int agent_wake(int pid, struct agent_event *event)
 	return syscall(SYS_agent_wake, pid, event);
 }
 
-int agent_file_meta_init(void)
+int agent_metadata_init(void)
 {
 	int status = AGENT_STATUS_RETRY;
 
@@ -903,9 +941,21 @@ int agent_file_meta_init(void)
 	return status;
 }
 
+int agent_file_meta_init(void)
+{
+	return agent_metadata_init();
+}
+
 int agent_file_meta_set(struct agent_file_meta *meta)
 {
 	return syscall(SYS_agent_file_meta_set, meta);
+}
+
+int agent_file_meta_set_batch(struct agent_file_meta *items, int *statuses,
+			      int count, uint64 flags)
+{
+	return syscall(SYS_agent_file_meta_set_batch, items, statuses, count,
+		       flags);
 }
 
 int agent_file_query(struct agent_file_query *query,

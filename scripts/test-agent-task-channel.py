@@ -113,8 +113,8 @@ def validate_delegated_task(sources: dict[str, str]) -> None:
         "struct agent_task_delegate_descriptor",
         "int ack_terminal_status;",
         "unsigned int terminal_generation;",
-        "sizeof(struct agent_task_delegate_descriptor) == 56",
-        "sizeof(struct agent_task_delegate_claim_result) == 128",
+        "sizeof(struct agent_task_delegate_descriptor) == 128",
+        "sizeof(struct agent_task_delegate_claim_result) == 200",
         "sizeof(struct agent_task_delegate_complete_result) == 64",
     ):
         require(abi, token, f"delegated Task ABI missing: {token}")
@@ -143,21 +143,16 @@ def validate_delegated_task(sources: dict[str, str]) -> None:
             "proc_teardown_live(owner)",
             "AGENT_CAP_ORCHESTRATE",
             "agent_task_delegate_find_proc_locked(",
+            "target == owner",
             "agent_task_delegate_lifecycle_matches(target, lifecycle)",
             "AGENT_CAP_TASK_ACCEPT",
+            "descriptor->required_capabilities",
+            "descriptor->allowed_tools",
+            "agent_task_delegate_would_cycle_locked(",
             "agent_ipc_task_route_allows_locked(owner, target)",
-            "agent_task_delegate_roles_compatible_locked(owner, target, ignore)",
         ),
         "delegate target must bind live identities, lifecycle, capability, and route",
     )
-    roles = function_body(bridge, "agent_task_delegate_roles_compatible_locked")
-    for token in (
-        "owner == target",
-        "slot == ignore",
-        "owner, slot->descriptor.target_pid",
-        "target, slot->owner_pid",
-    ):
-        require(roles, token, f"delegation role-cycle guard missing: {token}")
     for effect in (
         "AGENT_SIDE_EFFECT_FILE",
         "AGENT_SIDE_EFFECT_METADATA",
@@ -204,15 +199,22 @@ def validate_delegated_task(sources: dict[str, str]) -> None:
         ),
         "delegate submit must publish only a real pending Contract task",
     )
-    validate = function_body(bridge, "agent_task_bridge_validate")
+    cycle = function_body(bridge, "agent_task_delegate_would_cycle_locked")
     require_order(
-        validate,
+        cycle,
         (
-            "agent_task_bridge_op(sqe, input, &op)",
-            "agent_task_delegate_owner_busy_locked(p)",
-            "agent_execution_contract_preflight(",
+            "reachable[target_index / 64U]",
+            "slot->state == AGENT_TASK_DELEGATE_SLOT_FREE",
+            "workflow_lifecycle_key_equal(slot->lifecycle, lifecycle)",
+            "agent_task_delegate_find_proc_locked(",
+            "edge_target_index == owner_index",
         ),
-        "an admitted detached lease must backpressure every later owner submit",
+        "delegation must reject any same-lifecycle cycle without serializing siblings",
+    )
+    forbid(
+        bridge,
+        "agent_task_delegate_owner_busy_locked",
+        "one parent must be able to keep independent child tasks in flight",
     )
 
     claim_prepare = function_body(bridge, "agent_task_delegate_claim_prepare")
@@ -613,14 +615,19 @@ def validate_task_channel(sources: dict[str, str]) -> None:
         "Task UTF-8 imports must reserve one byte in the 64-byte payload",
     )
     require(
-        header,
-        "#define AGENT_TASK_RESOURCE_SNAPSHOT_SIZE \\\n\t(AGENT_TASK_RESOURCE_UTF8_MAX + 1U)",
-        "kernel snapshots must include the trailing NUL byte",
+        abi,
+        "#define AGENT_TASK_RESOURCE_SNAPSHOT_SIZE 128U",
+        "kernel snapshots must cover both UTF-8 imports and Task capsules",
+    )
+    require(
+        bridge,
+        "_Static_assert(AGENT_TASK_RESOURCE_SNAPSHOT_SIZE >= AGENT_OP_PAYLOAD_SIZE,",
+        "kernel snapshots must cover one complete tool payload",
     )
     for layout in (
-        "sizeof(struct agent_task_resource_slot) == 192",
-        "sizeof(struct agent_task_resource_import) == 152",
-        "sizeof(struct agent_task_resource_view) == 160",
+        "sizeof(struct agent_task_resource_slot) == 256",
+        "sizeof(struct agent_task_resource_import) == 216",
+        "sizeof(struct agent_task_resource_view) == 224",
     ):
         require(channel, layout, f"Task snapshot private layout changed: {layout}")
 
@@ -1895,14 +1902,17 @@ def validate_task_channel(sources: dict[str, str]) -> None:
         (
             "imported->resource_type != AGENT_ARTIFACT_UTF8",
             "imported->length == 0",
-            "imported->length > AGENT_TASK_RESOURCE_UTF8_MAX",
+            "imported->length > AGENT_TASK_RESOURCE_SNAPSHOT_SIZE",
+            "imported->resource_type == AGENT_ARTIFACT_UTF8",
+            "length > AGENT_TASK_RESOURCE_UTF8_MAX",
             "imported->snapshot[length] != 0",
             "imported->snapshot[i] == 0",
             "agent_task_utf8_valid(imported->snapshot, length)",
+            "length != sizeof(struct agent_task_delegate_descriptor)",
             "agent_sha256(imported->snapshot, length, digest)",
             "memcmp(digest, imported->content_digest, sizeof(digest)) == 0",
         ),
-        "core must revalidate the immutable UTF-8 snapshot and exact digest",
+        "core must revalidate bounded UTF-8 or exact Task descriptors and digest",
     )
     resource_view = function_body(channel, "agent_task_resource_view_locked")
     require_order(
@@ -2393,8 +2403,10 @@ def validate_task_channel(sources: dict[str, str]) -> None:
             "context_hash = context.record_hash",
             "provenance_labels = agent_provenance_current_labels(p)",
             "open_file_io_lease_acquire(",
+            "uint read_length = length +",
+            "control->resource_type == AGENT_ARTIFACT_UTF8 ? 1U : 0U",
             "got = readi_lease(file->ip, &cred, &lease, 0,",
-            "length + 1U",
+            "read_length",
             "got == FS_LOOKUP_BUSY ? AGENT_TASK_CHANNEL_RETRY",
             "(uint)got != length",
             "p->context_path_latest != context_sequence",
@@ -2447,7 +2459,8 @@ def validate_task_channel(sources: dict[str, str]) -> None:
         (
             "agent_task_bridge_handle_null(input->handle)",
             "agent_task_bridge_resource_input(sqe, input)",
-            "memmove(op->payload, input->snapshot, (uint)input->length)",
+            "uint length = input->length > sizeof(op->payload)",
+            "memmove(op->payload, input->snapshot, length)",
             "input->handle.type == AGENT_ARTIFACT_UTF8",
             "op->payload[input->length] = 0",
         ),
@@ -3309,8 +3322,8 @@ class TaskChannelTests(unittest.TestCase):
         mutations = (
             (
                 "os/agent_task_bridge.c",
-                "if (owner == 0 || target == 0 || owner == target)",
-                "if (owner == 0 || target == 0)",
+                "target == owner",
+                "target == 0",
             ),
             (
                 "os/agent_task_bridge.c",
@@ -3933,10 +3946,9 @@ class TaskChannelTests(unittest.TestCase):
             ),
             (
                 "os/agent_task_bridge.c",
-                "got = readi_lease(file->ip, &cred, &lease, 0,\n"
-                "\t\t\t  (uint64)imported->snapshot, 0, length + 1U);",
-                "got = readi_lease(file->ip, &cred, &lease, 0,\n"
-                "\t\t\t  (uint64)imported->snapshot, 0, length);",
+                "uint read_length = length +\n"
+                "\t\t(control->resource_type == AGENT_ARTIFACT_UTF8 ? 1U : 0U);",
+                "uint read_length = length;",
             ),
             (
                 "os/agent_task_bridge.c",
@@ -4085,7 +4097,7 @@ class TaskChannelTests(unittest.TestCase):
                 "imported->producer_control_id = control->source_handle;",
             ),
             (
-                "memmove(op->payload, input->snapshot, (uint)input->length);",
+                "memmove(op->payload, input->snapshot, length);",
                 "memset(op->payload, 0, sizeof(op->payload));",
             ),
             (

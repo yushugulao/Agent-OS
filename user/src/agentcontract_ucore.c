@@ -263,7 +263,7 @@ static void node_security(struct agent_execution_contract_node *node,
 	case AGENT_TOOL_READ_MESSAGE:
 		node->output_add_labels |= AGENT_PROVENANCE_CROSS_AGENT_DATA;
 		break;
-	case AGENT_TOOL_RERUN_STAGE:
+	case AGENT_TOOL_ACTION_COMMIT:
 		node->required_capabilities = AGENT_CAP_ACTION_WRITE;
 		node->accepted_input_labels = AGENT_PROVENANCE_KERNEL_FACT |
 			AGENT_PROVENANCE_TRUSTED_USER_CONTROL |
@@ -395,7 +395,7 @@ static void build_nodes(uint64 now)
 		node_init(i, AGENT_TOOL_ECHO, 0, 0);
 	node_init(0, AGENT_TOOL_SEND_MESSAGE, 0, 0);
 	node_init(1, AGENT_TOOL_QUERY_FILE, 1ULL << 0, 0);
-	node_init(2, AGENT_TOOL_RERUN_STAGE, 1ULL << 1, 0);
+	node_init(2, AGENT_TOOL_ACTION_COMMIT, 1ULL << 1, 0);
 	node_init(3, AGENT_TOOL_ECHO, 0, 0);
 	node_init(5, AGENT_TOOL_ECHO, 0, 0);
 	nodes[5].required_capabilities |= AGENT_CAP_LLM_RELAY;
@@ -670,8 +670,8 @@ static void exercise_contract(struct agent_execution_contract_key key)
 	      "legal dependency preserves untrusted file provenance");
 	sequence1 = response.sequence;
 
-	param_string(0, "stage", "must-not-commit");
-	v3_request_init(&request, &key, 2, 1, AGENT_TOOL_RERUN_STAGE,
+	param_string(0, "selector", "must-not-commit");
+	v3_request_init(&request, &key, 2, 1, AGENT_TOOL_ACTION_COMMIT,
 			0, 0, "must-not-commit", 1, 1, sequence1);
 	v3_call(&request, &response, "tainted privileged planned call");
 	check(response.status == AGENT_STATUS_DENIED &&
@@ -999,7 +999,7 @@ static __attribute__((noinline)) void check_enforced_legacy_bypass(void)
 	memset(&response, 0, sizeof(response));
 	request.version = AGENT_CALL_VERSION_V2;
 	request.size = sizeof(request);
-	request.tool_id = AGENT_TOOL_FILE_META_INIT;
+	request.tool_id = AGENT_TOOL_METADATA_INIT;
 	request.request_id = ++next_request;
 	check(tool_call(&request, &response) == 0 &&
 	      response.status == AGENT_STATUS_DENIED &&
@@ -1020,7 +1020,7 @@ static __attribute__((noinline)) void run_agent_test(void)
 	      "query complete workflow lifecycle key");
 	check(agent_info(&run_info) == 0, "query agent tick");
 	legacy_echo();
-	check(agent_file_meta_init() == AGENT_STATUS_OK,
+	check(agent_metadata_init() == AGENT_STATUS_OK,
 	      "legacy direct side effect remains compatible before enforce");
 	check(agent_watch(AGENT_EVENT_MESSAGE, "planned-message") == 0,
 	      "install planned IPC target before contract enforce");

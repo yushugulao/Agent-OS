@@ -1,0 +1,12 @@
+AgentOS Catalog batch and reuse campaign
+
+Status: complete
+Date: 2026-08-15
+QEMU boots: 16
+Order: balanced AB/BA (8 traversal-first, 8 indexed-first)
+Expected discovery queries per boot: 4
+Validation queries per boot: 1
+Outcome hash: 1457873431608088591
+
+The raw serial logs, measurements.csv, summary.json, and report.md are stored in
+raw/contest. File integrity is recorded in manifest.json.

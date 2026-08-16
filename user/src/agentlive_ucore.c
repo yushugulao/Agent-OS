@@ -3897,7 +3897,7 @@ static __attribute__((noinline)) void live_workflow_v2(
 		   "interactive observer publication mutex");
 	observer_tid = thread_create(live_observer_worker, 0);
 	live_check(observer_tid > 0, "interactive timeline observer thread");
-	live_check(agent_heartbeat_set(1000) == AGENT_STATUS_OK,
+	live_check(agent_heartbeat_configure(1000) == AGENT_STATUS_OK,
 		   "interactive heartbeat");
 	for (;;) {
 		live_check(live_read_all(command_fd, &command,
@@ -3979,7 +3979,7 @@ static __attribute__((noinline)) void live_workflow_v2(
 		if (final_answer[0])
 			live_print_final_answer(final_answer);
 	}
-	live_check(agent_heartbeat_stop() == AGENT_STATUS_OK,
+	live_check(agent_heartbeat_configure(0) == AGENT_STATUS_OK,
 		   "interactive heartbeat stop");
 	live_observer_stop = 1;
 	printf("agentlive_ucore: interactive_turns=%u rounds=%u query_file=%u echo=%u send_message=%u approved=%u\n",
@@ -4088,13 +4088,13 @@ static __attribute__((noinline)) void live_workflow(void)
 	close(approval_pipe[0]);
 	close(telemetry_pipe[1]);
 
-	live_check(agent_heartbeat_set(1) == AGENT_STATUS_OK,
+	live_check(agent_heartbeat_configure(1) == AGENT_STATUS_OK,
 		   "initial heartbeat");
 	memset(&event, 0, sizeof(event));
 	live_check(agent_wait(&event, 30) == AGENT_STATUS_OK &&
 		   event.type == AGENT_EVENT_TIMER, "heartbeat sleeps in kernel");
 	heartbeats++;
-	live_check(agent_heartbeat_set(1000) == AGENT_STATUS_OK,
+	live_check(agent_heartbeat_configure(1000) == AGENT_STATUS_OK,
 		   "bounded live heartbeat");
 	live_result_error(&last_result, AGENT_STATUS_OK, "start");
 	memset(final_answer, 0, sizeof(final_answer));
@@ -4135,7 +4135,7 @@ static __attribute__((noinline)) void live_workflow(void)
 						  sizeof(tool_result)) == 0,
 				   "structured tool result reinjection");
 	}
-	live_check(agent_heartbeat_stop() == AGENT_STATUS_OK,
+	live_check(agent_heartbeat_configure(0) == AGENT_STATUS_OK,
 		   "heartbeat stop");
 	close(answer_pipe[0]);
 	live_check(completed, "bounded loop final response");

@@ -40,7 +40,10 @@ class AgentLiveLoopTests(unittest.TestCase):
         require("LIVE_FRAME_REPLAY")
         require("frame->sequence != expected_sequence")
         self.assertIn("PROTOCOL_MAX_PAYLOAD_BYTES = 4096", HOST)
-        self.assertIn("PROTOCOL_MAX_WIRE_LINE_BYTES = 6144", HOST)
+        host_wire_limit = int(
+            re.search(r"PROTOCOL_MAX_WIRE_LINE_BYTES = (\d+)", HOST).group(1)
+        )
+        self.assertGreaterEqual(host_wire_limit, 6144)
 
         payload = b'{"corr_id":1}'
         digest = hashlib.sha256(payload).hexdigest()
@@ -287,7 +290,7 @@ class AgentLiveLoopTests(unittest.TestCase):
             "AGENT_TOOL_LLM_REQUEST",
             "AGENT_TOOL_LLM_RESPONSE",
             "agent_wait(event",
-            "agent_heartbeat_set(1000)",
+            "agent_heartbeat_configure(1000)",
             "agent_route_config(getpid(), relay_pid",
             "live_emit_frame(session, tx_sequence++, \"REQUEST\"",
             "approval is absent or pid differs",

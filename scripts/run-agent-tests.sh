@@ -162,7 +162,7 @@ check_case_contract() {
 		require_exact_case_marker "${log_file}" \
 			"agenttask_ucore: resource_unlinked_close_race=1 transaction_pin=1 launched_concurrently=1"
 		require_exact_case_marker "${log_file}" \
-			"agenttask_ucore: delegated_runtime agents=3 provider=artifact controller=orchestrator task_route=1 task_accept=1 artifact_write=1 descriptor_bytes=56 claim567=1 complete568=1"
+			"agenttask_ucore: delegated_runtime agents=3 provider=artifact controller=orchestrator task_route=1 task_accept=1 artifact_write=1 descriptor_bytes=128 claim567=1 complete568=1"
 		require_exact_case_marker "${log_file}" \
 			"agenttask_ucore: delegated_contracts=3 strict_reclaimed=1 reclaimed_generation_advance=1 issuer_gap_effects=pipe+file"
 		require_exact_case_marker "${log_file}" \
@@ -224,19 +224,37 @@ check_case_contract() {
 		require_exact_case_marker "${log_file}" \
 			"agentfinal_ucore: context_query_cache=1 user_managed=1 kernel_cache_hit=0"
 		;;
+	agentfs_ucore)
+		require_exact_case_marker "${log_file}" \
+			"agentfs_ucore: meta_batch prefix=OK,BAD_PARAM,OK,CONFLICT,NOT_FOUND,OK guard=1 no_rollback=1"
+		require_exact_case_marker "${log_file}" \
+			"agentfs_ucore: meta_batch same_lifecycle_reuse=1 identity=1 indexed=1"
+		require_exact_case_marker "${log_file}" \
+			"agentfs_ucore: meta_batch invalid_args=6 empty_batch=1 status_untouched=1 status_preflight=1 overlap=1"
+		;;
 	agentscan_ucore)
 		require_exact_case_marker "${log_file}" \
 			"agentscan_ucore: explicit_admission ordinary_unindexed=1"
 		require_exact_case_marker "${log_file}" \
+        "agentscan_ucore: meta_batch items=2 enter=1 update=1 leave=1 ordered=1 guard=1 generic_tool_rejected=1 generic_clear_preserved=1 typed_reinstall=1"
+		require_exact_case_marker "${log_file}" \
 			"agentscan_ucore: live_query enter=1 update=1 leave=1 indexed=1"
+		;;
+	agentmulti_ucore)
+		require_exact_case_marker "${log_file}" \
+			"agentmulti_ucore: runtime_subset=1 generic_role_config=1"
+		require_exact_case_marker "${log_file}" \
+			"agentmulti_ucore: artifact_seal=1 bind=1 share=1 sha256=1"
+		require_exact_case_marker "${log_file}" \
+			"agentmulti_ucore: prefetch observations=2 predicted=1 hint=1 hit=1"
 		;;
 	agenttoolabi_ucore)
 		require_exact_case_marker "${log_file}" \
 			"agenttoolabi_ucore: tool_list_contract=1"
 		require_exact_case_marker "${log_file}" \
-			"agenttoolabi_ucore: optional_schema=1 heartbeat_zero_stop=1"
+			"agenttoolabi_ucore: optional_schema=1 heartbeat_unified=1"
 		require_exact_case_marker "${log_file}" \
-			"agenttoolabi_ucore: schema_generated=1 validated=26"
+			"agenttoolabi_ucore: schema_generated=1 validated=28"
 		require_exact_case_marker "${log_file}" \
 			"agenttoolabi_ucore: v1_compatible=1"
 		require_exact_case_marker "${log_file}" \
@@ -259,6 +277,10 @@ check_case_contract() {
 			"agentsecurity_ucore: route_slot_reclaimed=1"
 		require_exact_case_marker "${log_file}" \
 			"agentsecurity_ucore: specialist_result_artifact_capability=1"
+		require_exact_case_marker "${log_file}" \
+			"agentsecurity_ucore: meta_batch agent_denied=1 status_untouched=1"
+		require_exact_case_marker "${log_file}" \
+			"agentsecurity_ucore: meta_batch plain_denied=1 status_untouched=1"
 		;;
 	labdemo_ucore)
 		require_exact_case_marker "${log_file}" \

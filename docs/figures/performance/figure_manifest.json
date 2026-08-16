@@ -1,70 +1,129 @@
 {
-  "schema": "agentos-doc-figures-v1",
-  "campaign": "20260811",
+  "schema": "agentos-doc-figures-v2",
+  "campaigns": {
+    "current": "20260815_catalog_batch",
+    "supporting": "20260811"
+  },
+  "contest_schema_version": 2,
+  "qemu_boots": 16,
   "font": "Microsoft YaHei",
   "formats": [
     "png",
     "pdf",
     "svg"
   ],
-  "inputs": {
-    "agenteval_concurrency.csv": "16dff4400393832ce3c97931d126485291a45ac85ae9f656a4889b96d2b3b8bd",
-    "agenteval_concurrency_samples.csv": "95cd478d383d30128f563d7a34009740c85f5a8aeb42b57047ac37e81ddbd7e8",
-    "agenteval_diagnostics.csv": "404067239b727d357b41d99315e0ded03212ccb83fab3ee02a2735665e23adbe",
-    "agenteval_pairs.csv": "844cbcbed72cbd7a2a401f7686d87d0a620edb243b70e366112d5168df738921",
-    "agenteval_samples.csv": "d873477714231b96b9686bea735e25e8cbe39f71271e0814449e691cd21cb506",
-    "contest_io_normalized.csv": "6b9ef164985507f8187c648914a9411bd0f850f0a06afc8b2cc191fbc2a5472d",
-    "contest_paired.csv": "3fafa718df3f9d2cf84311163ef71d7176d30271aa1b77d0eff12e065595065e",
-    "contest_paths.csv": "7bd46d542edf765618786a86a61e50746f75bfc58f54b3b8a13b87ed70aacfbf",
-    "eevdf_amplification.csv": "8a52c222935c2cabb231127b35c779ebcc1b031476677123ed7584c523261790",
-    "eevdf_cohorts.csv": "0744fb8c61ad5008e0470c0eabb30ca692bc5ad5b8dae1277dfb63aae65e4d01",
-    "eevdf_jain.csv": "bc10aaa95b42a918afaddf4702b53a939945c15ba3218cf46d692db8ba7688c5",
-    "eevdf_samples.csv": "a1ca8887f561e61b492f0de275e2ec5e1d3e4ca0e628c0464b7ca654ec287691",
-    "eevdf_wake_histogram.csv": "6533b07ccb3d74df31f8eeac5017002101fb21a625b931751dbbdabfcd4bbf4f",
-    "eevdf_wakeups.csv": "6201bf071af0dc6d6a037cb2e9a54371ce119a75b093a1f70b80ac97fff4efe5",
-    "task_fingerprints.csv": "2b19d895a2b5e347d5e08cd84700036ddea97f67eb87f3e699e87b09d2a92708",
-    "task_operations.csv": "b9276254d5e8dc7c55d32f55b291f460248618b2c6e227852bd27ecb6bd04c19",
-    "task_perf.csv": "1d8ca5a1cbd5ba4f932eb08755d969294c2873c184d50690b212ef7089e1f628",
-    "task_perf_normalized.csv": "663c9044ee7eeed86b2b6246950cbddf712d860ebc33138aa0e9ef6b0d1b24cc",
-    "task_sequences.csv": "9270aedd18cb8bd62d0b7075e63d8ca70eda6c20b7249ae8ba3a85c431d50189"
-  },
+  "inputs": [
+    {
+      "campaign": "supporting",
+      "path": "tables/agenteval_pairs.csv",
+      "roles": [
+        "agenteval_pairs"
+      ],
+      "bytes": 237871,
+      "sha256": "844cbcbed72cbd7a2a401f7686d87d0a620edb243b70e366112d5168df738921"
+    },
+    {
+      "campaign": "supporting",
+      "path": "tables/agenteval_samples.csv",
+      "roles": [
+        "agenteval_samples"
+      ],
+      "bytes": 397659,
+      "sha256": "d873477714231b96b9686bea735e25e8cbe39f71271e0814449e691cd21cb506"
+    },
+    {
+      "campaign": "supporting",
+      "path": "tables/eevdf_samples.csv",
+      "roles": [
+        "eevdf_samples"
+      ],
+      "bytes": 38200,
+      "sha256": "a1ca8887f561e61b492f0de275e2ec5e1d3e4ca0e628c0464b7ca654ec287691"
+    },
+    {
+      "campaign": "supporting",
+      "path": "tables/eevdf_wakeups.csv",
+      "roles": [
+        "eevdf_wakeups"
+      ],
+      "bytes": 90380,
+      "sha256": "6201bf071af0dc6d6a037cb2e9a54371ce119a75b093a1f70b80ac97fff4efe5"
+    },
+    {
+      "campaign": "supporting",
+      "path": "tables/task_perf_normalized.csv",
+      "roles": [
+        "task_perf_normalized"
+      ],
+      "bytes": 204533,
+      "sha256": "663c9044ee7eeed86b2b6246950cbddf712d860ebc33138aa0e9ef6b0d1b24cc"
+    },
+    {
+      "campaign": "supporting",
+      "path": "tables/task_sequences.csv",
+      "roles": [
+        "task_sequences"
+      ],
+      "bytes": 18774,
+      "sha256": "9270aedd18cb8bd62d0b7075e63d8ca70eda6c20b7249ae8ba3a85c431d50189"
+    },
+    {
+      "campaign": "current",
+      "path": "raw/contest/measurements.csv",
+      "roles": [
+        "contest_io_normalized",
+        "contest_measurements"
+      ],
+      "bytes": 4391,
+      "sha256": "973e8b1dc9da335ace0da41ddba351b6226e5106eb77745ce1bf6dae9460e829"
+    },
+    {
+      "campaign": "current",
+      "path": "raw/contest/summary.json",
+      "roles": [
+        "contest_summary"
+      ],
+      "bytes": 28735,
+      "sha256": "46a46e63f40fe1e11e53c59fa95cbcdc521654b7669369d159f8086391a892b3"
+    }
+  ],
   "figures": {
     "01_paired_core_performance": {
       "metrics": {
         "sources": [
-          "contest_paired.csv"
+          "current:raw/contest/measurements.csv"
         ],
         "paired_boots": 16,
         "indexed_faster_pairs": 16,
-        "median_indexed_minus_traversal_ms": -23.441499999999998,
-        "median_speedup": 3.1175,
+        "median_indexed_minus_traversal_ms": -105.6675,
+        "median_pairwise_core_speedup": 7.742999999999999,
         "order_counts": {
-          "indexed_then_traversal": 8,
-          "traversal_then_indexed": 8
+          "traversal_then_indexed": 8,
+          "indexed_then_traversal": 8
         }
       },
       "outputs": {
         "png": {
           "path": "01_paired_core_performance.png",
-          "bytes": 367887,
-          "sha256": "aa256baa5515c225fd51428c766866875ef30dff877778f61d49a8b680f5923d"
+          "bytes": 386053,
+          "sha256": "d1823445081aa92e58cbb1eaec0d534ed9735793ab4bc17927c4d960063f86ea"
         },
         "pdf": {
           "path": "01_paired_core_performance.pdf",
-          "bytes": 45351,
-          "sha256": "ac8bea6203f45423ded08f088cc6550c62dd976528ee8899630272b0e4ff59f3"
+          "bytes": 47481,
+          "sha256": "036a5aa97d128ff725fad61aead27f749285c3a8cca698c401cce2f3f0e8e019"
         },
         "svg": {
           "path": "01_paired_core_performance.svg",
-          "bytes": 66255,
-          "sha256": "01127bff2428f821e0e0417f0b651822d7a9ffcc662f36f179b81c369f1cbcff"
+          "bytes": 71424,
+          "sha256": "979fc703a728f39f5b21712fa96a0668168a3cb6264d58f80d9dc347253aa932"
         }
       }
     },
     "02_catalog_speedup_landscape": {
       "metrics": {
         "sources": [
-          "agenteval_pairs.csv"
+          "supporting:tables/agenteval_pairs.csv"
         ],
         "measured_cells": 12,
         "pairs_per_cell": [
@@ -105,14 +164,14 @@
         "svg": {
           "path": "02_catalog_speedup_landscape.svg",
           "bytes": 36026,
-          "sha256": "29c28556ec6e4479595cc310d9dbe7b86ca1ed74cdec8fb145573d33f773032a"
+          "sha256": "0c1e16eaf53c426bb4ec08e6b28807df610ea7f85ff299eaa19272fda5ef7505"
         }
       }
     },
     "03_scan_state_groups": {
       "metrics": {
         "sources": [
-          "agenteval_samples.csv"
+          "supporting:tables/agenteval_samples.csv"
         ],
         "catalog_sizes": [
           24,
@@ -139,25 +198,25 @@
       "outputs": {
         "png": {
           "path": "03_scan_state_groups.png",
-          "bytes": 94510,
-          "sha256": "3484e9c87f96ee470c41b6bc509238a37784791a3ab053b55a5c071f89019060"
+          "bytes": 93416,
+          "sha256": "83c66ef89ded6e77b32a1fb5ae1d45a7d2eb38b5d28980263a85e3b1e74adf25"
         },
         "pdf": {
           "path": "03_scan_state_groups.pdf",
-          "bytes": 32895,
-          "sha256": "7a6e636398c71cb3f29c64dcb3e915af865763d31a8b32b212a9b7a0da37a59e"
+          "bytes": 32892,
+          "sha256": "d09c125f30049f9ca5f560230aebe92a85e3c6d05491c5a6357ae11fae178ac0"
         },
         "svg": {
           "path": "03_scan_state_groups.svg",
-          "bytes": 16675,
-          "sha256": "31d909beb4ad90116742c5c25e0689667d1308e7d0d9bd9c969baa30311c4a43"
+          "bytes": 16677,
+          "sha256": "833bd2aac3a2a41f6b6f61679ecfc0ed468335df2e9efee3a05fec386ea896d4"
         }
       }
     },
     "04_task_latency_distributions": {
       "metrics": {
         "sources": [
-          "task_sequences.csv"
+          "supporting:tables/task_sequences.csv"
         ],
         "samples_per_path": {
           "batch": 32,
@@ -187,15 +246,15 @@
         "svg": {
           "path": "04_task_latency_distributions.svg",
           "bytes": 68062,
-          "sha256": "8a03afad74aaf466ffb3e47d1a6426dc06471e0c919e220df016523ddda1f9a5"
+          "sha256": "0740eb54a14e6962e5750a6135736e95d7af9481ceee57147aebf8b493ff29d6"
         }
       }
     },
     "05_eevdf_latency_fairness": {
       "metrics": {
         "sources": [
-          "eevdf_wakeups.csv",
-          "eevdf_samples.csv"
+          "supporting:tables/eevdf_wakeups.csv",
+          "supporting:tables/eevdf_samples.csv"
         ],
         "exact_wakeup_probes": 504,
         "right_censored": 0,
@@ -248,15 +307,15 @@
         "svg": {
           "path": "05_eevdf_latency_fairness.svg",
           "bytes": 31345,
-          "sha256": "56a70c2d4d9e41561995e34737797cb144d4eede83530a264398ccdf2790c7fe"
+          "sha256": "96e3ee08e4906e7bb8338ed594b4099e7197c70d4e37313d487824693de74e9a"
         }
       }
     },
     "06_normalized_io_heatmaps": {
       "metrics": {
         "sources": [
-          "contest_io_normalized.csv",
-          "task_perf_normalized.csv"
+          "current:raw/contest/measurements.csv",
+          "supporting:tables/task_perf_normalized.csv"
         ],
         "contest_metrics": [
           "bytes_read",
@@ -289,54 +348,72 @@
       "outputs": {
         "png": {
           "path": "06_normalized_io_heatmaps.png",
-          "bytes": 347939,
-          "sha256": "d89ce2f6cbe3e4a14989aed506805a7f3b3625078da5b7b9bf48386a1f7519db"
+          "bytes": 348290,
+          "sha256": "aefb284b7376a9d558dc0c75ac1d996dc90946d3c1621a283438edeb57e60672"
         },
         "pdf": {
           "path": "06_normalized_io_heatmaps.pdf",
-          "bytes": 60016,
-          "sha256": "b290f52c6a0d41368dce70138448ae4cc1553a17341ed8523efb53851f43195b"
+          "bytes": 60027,
+          "sha256": "e4233182281ee4cf91b53a82ebac4f6395b30dfecdfd8b2be211e5b7b6bad6fa"
         },
         "svg": {
           "path": "06_normalized_io_heatmaps.svg",
-          "bytes": 43290,
-          "sha256": "2ae365f4d4fd4adf97b4b8fbc2e4e1f0d197e1189ec49c77dd5cd78a0e527a3c"
+          "bytes": 43299,
+          "sha256": "1efc160436fef148c6672ce098af209a4a7105f87adfb8a66c0abbe130bed754"
         }
       }
     },
     "07_core_end_to_end_scope": {
       "metrics": {
         "sources": [
-          "contest_paired.csv"
+          "current:raw/contest/measurements.csv"
         ],
         "paired_boots": 16,
-        "median_core_delta_ms": -23.4415,
-        "median_end_to_end_delta_ms": 13.451999999999998,
-        "median_core_speedup": 3.1175,
-        "median_core_speedup_by_order": {
-          "indexed_then_traversal": 1.4535,
-          "traversal_then_indexed": 5.4805
+        "median_core_delta_ms": -105.66749999999999,
+        "median_end_to_end_delta_ms": -89.78149999999994,
+        "median_pairwise_core_speedup": 7.742999999999999,
+        "median_pairwise_core_speedup_by_order": {
+          "indexed_then_traversal": 6.1765,
+          "traversal_then_indexed": 15.3015
         },
         "indexed_faster_core_pairs": 16,
-        "indexed_faster_end_to_end_pairs": 3
+        "indexed_faster_end_to_end_pairs": 16
       },
       "outputs": {
         "png": {
           "path": "07_core_end_to_end_scope.png",
-          "bytes": 419686,
-          "sha256": "e1e9b532889308f16e0ac3b6387afb50de91afaebddff0cead8f479685b3a397"
+          "bytes": 458902,
+          "sha256": "18cd9439bba82d67e629bf408c4b56827f8644df44040f83cea6d68fd94e7937"
         },
         "pdf": {
           "path": "07_core_end_to_end_scope.pdf",
-          "bytes": 43582,
-          "sha256": "f66ebb9a93808315a2bcf2a851c62365b81098e4445dec4b4df02a1c181d9db5"
+          "bytes": 44892,
+          "sha256": "fb1737da369e29eaf016fd147a3f34d47e9c2c2b04eba362634c53d0fd2444e2"
         },
         "svg": {
           "path": "07_core_end_to_end_scope.svg",
-          "bytes": 51082,
-          "sha256": "c96675934db3c069cce3a28fdd54ddf5360794b3e2f7bf734c9cdb2c81b16367"
+          "bytes": 53681,
+          "sha256": "69e10a74d57483724cda89c4d1d21b39253520bacd97cf7fc572854b7151918b"
         }
       }
     }
+  },
+  "adaptive_selection": "indexed",
+  "catalog_reuse": {
+    "batch_calls": 6,
+    "build_count": 1,
+    "discovery_query_count": 4,
+    "expected_discovery_queries": 4,
+    "medians": {
+      "aggregate_query_us": 3495,
+      "cold_build_us": 11171.5,
+      "warm_query_us": 515
+    },
+    "query_state": "ready",
+    "registered_items": 96,
+    "reuse_hits": 4,
+    "selected_path": "indexed",
+    "total_query_count": 5,
+    "validation_query_count": 1
   }
 }

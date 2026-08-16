@@ -95,6 +95,7 @@ int agent_ipc_deliver_live_event(struct proc *, struct proc *, int, uint64,
 				 uint64, char *, int);
 int agent_ipc_mailbox_take(struct proc *, int *, char *, int);
 int agent_ipc_heartbeat_configure(struct proc *, uint64, uint64 *);
+int agent_ipc_prefetch_hint(struct proc *, uint64);
 void agent_ipc_tick_proc(struct proc *, uint64);
 
 /* 元数据事务门锁。 */

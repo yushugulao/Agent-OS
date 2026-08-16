@@ -1315,7 +1315,7 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			query_volatile_object();
 		} else if (command.operation == 'M') {
 			check(identity == 'A', "scope-local catalog owner");
-			check(agent_file_meta_init() == 0,
+			check(agent_metadata_init() == 0,
 			      "refresh caller live metadata view");
 			query_scoped_object("scope-A", "ready");
 		} else if (command.operation == 'E') {

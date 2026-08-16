@@ -32,6 +32,7 @@ int agent_live_query_publish_transition(
 	const struct agent_file_meta *, const struct agent_file_meta *, uint64);
 
 /* IPC lifecycle hooks keep snapshot/watch overflow state generation-safe. */
+void agent_live_query_file_watch_changed(struct proc *);
 void agent_live_query_watch_installed(struct proc *);
 void agent_live_query_watch_removed(struct proc *);
 int agent_live_query_watch_install_typed(

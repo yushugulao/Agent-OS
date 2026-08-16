@@ -187,13 +187,21 @@ delegated task 的 terminal Context 仍由 owner 的 commit lane 发布，但会
 
 Guest 直接读取程序的实现位于 [`user/lib/syscall.c`](../../user/lib/syscall.c)。只有前后两次发布序号相同且为偶数时，本次读取才有效。若 commit 持续发生，接口返回 `RETRY`，调用方改用系统调用读取。
 
-Nexus Relay 用这条 active path 保持跨轮 Context。USER、已经结算的 TOOL 和成功 FINAL 进入短 Context 节点，第 7 页的 4 KiB Guest cache 只为仍位于 active path 的完整 USER/FINAL 对提供有界正文。下一轮优先直接读取映射页，必要时回退到 Context 系统调用；失败、取消和 `/reset` 通过 rollback/clear 使路径与缓存同步变化。Host ledger 可以暂存 Guest 已发布的投影用于关联检查，但不私建、补写或替换 Provider 历史，下一轮消息仍由 Guest 的 active path 重建。
+每个通用 Agent Loop 都用自己的 active path 保持 private Context。USER、已经结算的 TOOL 和成功 FINAL 进入短 Context 节点；节点或 V2 detail 同时关联已经封存的正文 Artifact。下一轮优先直接读取映射页，必要时回退到 Context 系统调用，再按 Artifact handle 分页投影所需正文。失败与取消只回滚当前 Agent 的 active path，其他 Agent 已经接纳的结果和 workflow 共享索引保持原状。
 
-### 5.3 分支与回滚
+### 5.3 Context Artifact Store
+
+Context Artifact Store 的正文位于用户态受控存储中，覆盖 USER、TOOL、FINAL、文件、搜索结果、补丁、编译诊断、运行日志、测试结果、子任务报告、private summary 和 team summary。单项正文最大 64 KiB；Harness 默认最多保存 128 项、workflow 总计 2 MiB，每个 Agent 还受独立数量、字节和读取额度约束。模型投影单次最多 12 KiB，可以按 offset 分页读取。
+
+内核通过 syscall 571 管理 Artifact seal metadata。`SEAL` 在正文文件完成写入后核对类型、长度、UTF-8、调用者身份与 SHA-256，记录 handle、producer、Task id、来源 Context sequence、workflow lifecycle 和保留时间；`BIND` 将已经封存的对象关联到 Context，`SHARE` 使已经结算且允许共享的对象进入 workflow 索引，`RELEASE` 只减少当前分支引用。Task 完成必须先封存结果，再提交 terminal 状态。父 Agent 收到成功 CQE 后复核 producer、Task id、Context sequence、lifecycle 和内容 hash，随后才能接纳该结果。
+
+private Context 达到配置的高水位时，Nexus 生成结构化摘要，记录当前目标、完成工作、工具、修改文件与 revision、build、测试、错误、待办和下一步计划。workflow 共享摘要保存任务图、Agent 配置、公共 Artifact、已合并 revision、build id、测试结果、冲突和未完成 Task。摘要保留原 sequence、Artifact handle、Task id、producer、revision 和 hash；仍在运行的 Task、未解决错误、未合并修改以及其他 Agent 正在引用的 Artifact 不会被移除。
+
+### 5.4 分支与回滚
 
 `context_rollback(sequence)` 先确认目标仍在 FIFO 窗口中，并能沿父记录重建活动路径，再从工作流生命周期取得新的分支 generation。目标记录成为新的可见头；原有记录的序号和哈希都不变，后续结果从新分支继续 commit，序号不会复用。
 
-回滚只改变 Agent 接下来看到的决策 Context。此前已经完成的文件写入、IPC 和工具副作用仍然存在，需要由应用另行执行补偿动作。`context_clear()` 会分配新分支，清空公开记录和路径索引，并把本地序号重新置零。工作流记录票号仍然递增；清空操作与普通 commit 使用相同的发布序号规则。
+回滚只改变 Agent 接下来看到的决策 Context。此前已经完成的文件写入、IPC 和工具副作用仍然存在，需要由应用另行执行补偿动作。当前分支独占且失去引用的 Artifact 按引用计数和 lifecycle 延迟回收；已经被父任务接纳、被其他 Agent 引用或已经修改共享工作区的结果继续保留。文件协作依靠 revision 检查、原子替换和补偿 Task 处理冲突。`context_clear()` 会分配新分支，清空公开记录和路径索引，并把本地序号重新置零。工作流记录票号仍然递增；清空操作与普通 commit 使用相同的发布序号规则。
 
 ## 六、Provenance 传播
 
@@ -220,10 +228,10 @@ provenance label 跟随 Context、文件读取、工具 terminal state 和 IPC �
 2. VFS 创建动态文件访问范围和生命周期键，资源控制器建立执行/存储账户。
 3. 根 Agent 取得角色、能力位和 `control_id`，内核分配 Context、sidecar 与冷状态页。
 4. 具有 `AGENT_CAP_ORCHESTRATE` 能力位的 Agent 调用 `agent_worker_create()`；内核记录目标映像的 `dev`、`inum` 和 `incarnation`，工作进程只在 `exec` 匹配后发布受限身份。
-5. 工具结果、事件、消息和 delegated task 终态按顺序 commit 到 Context，provenance label 随之传播；大段跨 Agent 结果由 Guest artifact 关联。
+5. 工具结果、事件、消息和 delegated task 终态按顺序 commit 到 Context，provenance label 随之传播；大段跨 Agent 结果由封存的 Context Artifact 关联。
 6. 回滚取得新的分支 generation，并重建活动路径。
 7. `exec` 重新计算映像绑定和能力位，`exit` 开始登记退出操作。
-8. 最后一个成员和后台工作结束后，生命周期收尾程序释放 Context 与关联对象。普通 VFS 文件访问范围被回收；artifact 继续保留，并解除与旧生命周期的绑定。
+8. 最后一个成员和后台工作结束后，生命周期收尾程序释放 Context 与关联对象。普通 VFS 文件访问范围被回收；仍有共享引用或保留期的 Artifact 继续存在，其余对象由 lifecycle 回收。
 
 公开调用原型集中在 [`user/include/agent.h`](../../user/include/agent.h)，状态码与工具基础 ABI 位于 [`include/agent_tool_abi.h`](../../include/agent_tool_abi.h)。
 

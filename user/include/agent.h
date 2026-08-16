@@ -3,14 +3,18 @@
 
 #include <stddef.h>
 #include "../../include/agent_execution_contract_abi.h"
+#include "../../include/agent_context_artifact_abi.h"
+#include "../../include/agent_context_prefetch_abi.h"
 #include "../../include/agent_file_publish_abi.h"
 #include "../../include/agent_task_channel_abi.h"
 #include "../../include/agent_lifecycle_abi.h"
+#include "../../include/agent_multiagent_abi.h"
 #include "../../include/agent_performance_abi.h"
 #include "../../include/agent_provenance_abi.h"
 #include "../../include/agent_resource_abi.h"
 #include "../../include/agent_tool_abi.h"
 #include "../../include/agent_workflow_fence_abi.h"
+#include "../../include/agent_workspace_mutation_abi.h"
 #define AGENT_TYPE_NONE  0
 #define AGENT_TYPE_AGENT 1
 
@@ -176,6 +180,8 @@
 #define AGENT_FILE_META_UPDATE_ALL        0x3ffULL
 
 #define AGENT_FILE_META_MAX       512
+#define AGENT_FILE_META_BATCH_MAX 16
+#define AGENT_FILE_META_BATCH_F_NONE 0
 #define AGENT_FILE_QUERY_MAX_HITS 8
 #define AGENT_FILE_NAME_SIZE      32
 #define AGENT_FILE_LOGICAL_SIZE   80
@@ -229,7 +235,8 @@
 #define AGENT_EVENT_DASHBOARD_EXPORT 8
 #define AGENT_EVENT_CANCELLED     9
 #define AGENT_EVENT_FILE_QUERY   10
-#define AGENT_EVENT_MAX           AGENT_EVENT_FILE_QUERY
+#define AGENT_EVENT_PREFETCH_HINT 11
+#define AGENT_EVENT_MAX           AGENT_EVENT_PREFETCH_HINT
 
 #define AGENT_FILE_LIVE_WATCH_VERSION 1U
 #define AGENT_FILE_LIVE_WATCH_F_RESYNC_REQUIRED (1U << 0)
@@ -266,6 +273,9 @@
 #define AGENT_CAP_WAIT_CANCEL   (1ULL << 11)
 #define AGENT_CAP_ROUTE_MANAGE  (1ULL << 12)
 #define AGENT_CAP_TASK_ACCEPT   (1ULL << 13)
+#define AGENT_CAP_WORKSPACE_WRITE (1ULL << 14)
+#define AGENT_CAP_PREFETCH        (1ULL << 15)
+#define AGENT_CAP_KNOWN_ALL ((1ULL << 16) - 1ULL)
 #define AGENT_CAP_RECOVER_STAGE AGENT_CAP_ACTION_WRITE
 #define AGENT_CAP_REPORT_WRITE  AGENT_CAP_ARTIFACT_WRITE
 #define AGENT_CAP_DEPENDENCY_UPDATE AGENT_CAP_META_WRITE
@@ -760,6 +770,14 @@ int agent_resource_snapshot(struct agent_resource_snapshot *snapshot);
 int agent_performance_snapshot(struct agent_performance_snapshot *snapshot);
 int agent_scope_delegate_fd(int fd);
 int agent_worker_create(const char *image, uint64 capabilities);
+int agent_runtime_control(const struct agent_runtime_config *config,
+			  struct agent_runtime_config_result *result);
+int agent_context_artifact(
+	const struct agent_context_artifact_control *control,
+	struct agent_context_artifact_result *result);
+int agent_context_prefetch(
+	const struct agent_context_prefetch_control *control,
+	struct agent_context_prefetch_result *result);
 int agent_info(struct agent_info *info);
 int agent_launch_info(struct agent_info *info);
 int agent_sched_snapshot(struct agent_sched_record *records, int max);
@@ -810,6 +828,7 @@ int agent_live_unwatch(struct agent_file_live_watch *watch);
 int agent_wait(struct agent_event *event, int timeout_ticks);
 int agent_wait_cancel(int pid, const char *reason);
 int agent_heartbeat(int interval_ticks);
+int agent_heartbeat_configure(uint64 interval_ticks);
 int sys_agent_heartbeat_set(uint64 interval_ticks);
 int sys_agent_heartbeat_stop(void);
 int agent_heartbeat_set(uint64 interval_ticks);
@@ -824,8 +843,11 @@ int wait_atomic_test_deadline_observe(
 	uint phase, struct wait_atomic_deadline_snapshot *snapshot);
 #endif
 int agent_wake(int pid, struct agent_event *event);
+int agent_metadata_init(void);
 int agent_file_meta_init(void);
 int agent_file_meta_set(struct agent_file_meta *meta);
+int agent_file_meta_set_batch(struct agent_file_meta *items, int *statuses,
+			      int count, uint64 flags);
 int agent_file_query(struct agent_file_query *query, struct agent_file_query_result *result);
 int agent_file_edit_begin(const char *path, uint64 flags, int ttl_ticks,
 			  struct agent_file_edit_state *state);

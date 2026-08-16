@@ -733,7 +733,7 @@ static void check_timeout_and_heartbeat(void)
 	      "heartbeat interval");
 	check(bench_scratch.info.last_heartbeat_tick >= old_heartbeat,
 	      "heartbeat tick");
-	check(agent_heartbeat_stop() == 0, "heartbeat stop");
+	check(agent_heartbeat_configure(0) == 0, "heartbeat stop");
 	printf("agentbench_ucore: timeout_heartbeat=1\n");
 }
 
@@ -780,7 +780,7 @@ static void run_agent_bench(void)
 	check((bench_scratch.info.capability_mask & AGENT_CAP_ORCHESTRATE) != 0,
 	      "orchestrate cap");
 	check(context_clear() == 0, "clear");
-	check(agent_file_meta_init() == 0, "meta init");
+	check(agent_metadata_init() == 0, "metadata init");
 	seed_demo_metadata();
 	seed_file_bench_metadata();
 	seed_digest_file();

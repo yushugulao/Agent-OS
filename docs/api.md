@@ -10,7 +10,7 @@ AgentOS 在 uCore 上增加了一组面向 Agent（智能体）程序的系统�
 - [身份与工作流](#身份与工作流)
 - [Agent-OS 内核结构化交互接口](#agent-os-内核结构化交互接口)
 - [批量调用与 Workflow Fence](#批量调用与-workflow-fence)
-- [上下文路径管理](#上下文路径管理)
+- [上下文路径与 Artifact 管理](#上下文路径管理)
 - [面向 Agent 查询优化的文件系统接口](#面向-agent-查询优化的文件系统接口)
 - [Agent Loop、调度与运行记录](#agent-loop调度与运行记录)
 - [Task Channel](#task-channel)
@@ -59,7 +59,7 @@ V2 的检查顺序固定为：请求头和身份、工具编号和名称、仅�
 5. 任务命令的 `request_id` 必须严格递增。Workflow Fence 支持相同 `request_id` 的 Replay；普通工具请求中的 `request_id` 则按各接口规定用于关联请求或识别重放。
 6. 直接读取 Context 映射时，要用发布序号检查前后是否一致。回退和查询还要继续核对分支与 generation。
 
-工具状态定义在 [`include/agent_tool_abi.h`](../include/agent_tool_abi.h)，包括 `OK`、`BAD_REQUEST`、`UNKNOWN_TOOL`、`NO_SPACE`、`TIMEOUT`、`DENIED`、`DUPLICATE`、`CANCELLED`、`CONFLICT`、`STALE`、`RETRY`、`DURABILITY` 和 `INDETERMINATE`。Task Channel 另有一组协议状态；工具执行结果仍以 `AGENT_STATUS_*` 写入 CQE。
+工具状态定义在 [`include/agent_tool_abi.h`](../include/agent_tool_abi.h)，包括 `OK`、`BAD_REQUEST`、`UNKNOWN_TOOL`、`NO_SPACE`、`TIMEOUT`、`DENIED`、`DUPLICATE`、`CANCELLED`、`CONFLICT`、`STALE`、`RETRY`、`DURABILITY`、`INDETERMINATE`、`DEPRECATED` 和 `BROKER_REQUIRED`。Task Channel 另有一组协议状态；工具执行结果仍以 `AGENT_STATUS_*` 写入 CQE。
 
 ABI 检查程序使用 RISC-V64 探针、`_Static_assert` 和冻结清单，核对结构大小、字段偏移、枚举值以及清单中的系统调用号：
 
@@ -67,7 +67,7 @@ ABI 检查程序使用 RISC-V64 探针、`_Static_assert` 和冻结清单，核�
 make agent-uapi-check
 ```
 
-冻结清单位于 [`ci/agent-uapi-layout.json`](../ci/agent-uapi-layout.json)，探针位于 [`scripts/probes/agent-uapi-layout.c`](../scripts/probes/agent-uapi-layout.c)。当前检查覆盖 640 项结构大小、字段偏移、枚举值和系统调用号合约，其中包含结果文件发布以及 delegated task 的描述符、claim/complete、controller cancel 和协作式终态确认布局。
+冻结清单位于 [`ci/agent-uapi-layout.json`](../ci/agent-uapi-layout.json)，探针位于 [`scripts/probes/agent-uapi-layout.c`](../scripts/probes/agent-uapi-layout.c)。当前检查覆盖 710 项结构大小、字段偏移、枚举值和系统调用号合约，其中包含批量 Metadata 登记、结果文件发布、workspace mutation、通用 Agent runtime、Context Artifact、查询预测以及 delegated task 的 descriptor、claim/complete、controller cancel 和协作式终态确认布局。
 
 ## 系统调用索引
 
@@ -76,14 +76,15 @@ make agent-uapi-check
 | 分组 | 系统调用号 | 用户态接口 |
 | --- | --- | --- |
 | Identity | 500、501、517、561 | `agent_create()`、`agent_info()`、`agent_create_role()`、`agent_launch_info()` |
-| Workflow | 539、541、542、545、546 | `agent_worker_create()`、`agent_workflow_create()`、`agent_scope_delegate_fd()`、`agent_workflow_close()`、`agent_workflow_lifecycle_info()` |
+| Workflow | 539、541、542、545、546、570 | `agent_worker_create()`、`agent_workflow_create()`、`agent_scope_delegate_fd()`、`agent_workflow_close()`、`agent_workflow_lifecycle_info()`、`agent_runtime_control()` |
 | 工具 | 502、503、504、547、548 | `agent_run()`、`agent_call()`、`agent_tool_list()`、`tool_call()`、`tool_call_v3()`、`tool_list()` |
-| Context | 505 至 509、519 | `context_push/query/snapshot/detail/rollback/clear()` |
-| 文件状态与结果发布 | 514 至 516、535 至 538、566 | `agent_file_meta_*()`、`agent_file_query()`、`agent_file_edit_*()`、`agent_file_publish()` |
+| Context 与 Artifact | 505 至 509、519、571 | `context_push/query/snapshot/detail/rollback/clear()`、`agent_context_artifact()` |
+| 文件状态与结果发布 | 514 至 516、535 至 538、566、569 | `agent_file_meta_*()`、`agent_file_meta_set_batch()`、`agent_file_query()`、`agent_file_edit_*()`、`agent_file_publish()` |
 | 事件与进程通信 | 510 至 513、518、520、540、552、553 | `agent_watch()`、`agent_live_watch/unwatch()`、`agent_wait()`、`agent_wait_cancel()`、`agent_wake()`、`agent_route_config()`、心跳接口 |
 | 调度与运行记录 | 521 至 525、528 至 534、557、559、560 | 调度、跟踪、审计、时间线、来源、计费、资源和性能接口 |
 | Execution Contract | 562 | `agent_execution_contract()` |
 | Task Channel | 563 至 565、567、568 | `agent_task_channel_setup/enter/resource()`、`agent_task_delegate_claim/complete()` |
+| 查询预测 | 572 | `agent_context_prefetch()` |
 
 `tool_call_v3()` 与 V2 共用 `SYS_tool_call`，内核依据请求中的版本号选择布局。`agent_workflow_fence()` 复用 `SYS_agent_run`，调用时要求 `count == 0`，并设置 `flags == AGENT_RUN_F_FENCE`。
 
@@ -103,7 +104,7 @@ int agent_workflow_lifecycle_info(
     const struct agent_workflow_lifecycle_key *expected);
 ```
 
-`agent_workflow_create()` 创建工作流的管理 Agent、生命周期根、文件访问范围和资源账户，返回管理 Agent 的进程号。同一工作流内，拥有 `AGENT_CAP_ORCHESTRATE` 的 Agent 可以调用 `agent_worker_create()` 创建工作 Agent。申请的能力集合必须非零，只能来自 `AGENT_CAP_CONTENT_READ` 和 `AGENT_CAP_ARTIFACT_WRITE`，同时不能超出调用方已经拥有的能力。子进程执行 `exec()` 时，内核还会核对能力上限、所属工作流和可执行文件身份。
+`agent_workflow_create()` 创建工作流的管理 Agent、生命周期根、文件访问范围和资源账户，返回管理 Agent 的进程号。同一工作流内，拥有 `AGENT_CAP_ORCHESTRATE` 的 Agent 可以调用兼容入口 `agent_worker_create()`，也可以通过 syscall 570 的 `AGENT_RUNTIME_CONTROL_SPAWN` 提交通用配置。96 字节配置包含 capability、允许工具位图、提示词 Artifact、资源预算、Artifact 数量/字节/读取额度和摘要高水位。内核分别核对父 Agent 与 workflow policy 的包含关系；子进程执行 `exec()` 时继续检查所属工作流和可执行文件身份。`AGENT_RUNTIME_CONTROL_QUERY_SELF` 返回当前 Agent 实际取得的配置，名称和角色标签不参与权限判断。
 
 `agent_workflow_lifecycle_info()` 返回完整的生命周期键、Context 通道、元数据事务、资源账户身份和工作流 EEVDF 快照。调用方可以传入预期键，按“比较后读取”的方式避免误读其他 generation 的数据。
 
@@ -126,7 +127,7 @@ int tool_call(struct agent_request_v2 *req,
 int tool_list(struct agent_tool_desc_v2 *out, int max);
 ```
 
-这组接口实现工具调用协议：请求以工具名称/编号和 typed 键值参数表示，响应给出状态码、序号和结构化结果。V1 使用固定布局的请求。V2 用一组带类型信息的键值参数表示调用内容。一次 V2 请求最多包含 8 个 `agent_param_v2`，每项分别填写键名、类型和值的长度。Tool Registry 登记了 26 个名称和编号均不重复的工具，同时注明所需能力、允许的 provenance 和副作用类型；其中 `delegate_task` 标记为 `AGENT_TOOL_F_SYSCALL_ONLY`，只能通过 Task Channel 提交，不能作为普通 V2/V3 调用执行。详见[Agent-OS 内核结构化交互接口与工具调用协议](modules/tool-execution.md#tool-registry-与-typed-schema)。
+这组接口实现工具调用协议：请求以工具名称/编号和 typed 键值参数表示，响应给出状态码、序号和结构化结果。V1 使用固定布局的请求。V2 用一组带类型信息的键值参数表示调用内容。一次 V2 请求最多包含 8 个 `agent_param_v2`，每项分别填写键名、类型和值的长度。Tool Registry 登记了 33 个名称和编号均不重复的工具，同时注明所需能力、允许的 provenance 和副作用类型。20 项可通过 V2/V3 执行，`agent_wait`、`context_push`、`delegate_task` 三项只进入对应的系统调用路径，`ctx_stat`、`rerun_stage`、`write_report` 三项返回 `DEPRECATED`，工作区搜索/读取、状态观察、写入、补丁、构建和运行共 7 项返回 `BROKER_REQUIRED` 并交给受控 Host broker。详见[Agent-OS 内核结构化交互接口与工具调用协议](modules/tool-execution.md#tool-registry-与-typed-schema)。
 
 ### V3 与 Execution Contract 管理
 
@@ -187,8 +188,10 @@ int context_clear(void);
 ## 面向 Agent 查询优化的文件系统接口
 
 ```c
-int agent_file_meta_init(void);
+int agent_metadata_init(void);
 int agent_file_meta_set(struct agent_file_meta *meta);
+int agent_file_meta_set_batch(struct agent_file_meta *items,
+                              int *statuses, int count, uint64 flags);
 int agent_file_query(struct agent_file_query *query,
                      struct agent_file_query_result *result);
 
@@ -207,9 +210,33 @@ int agent_file_publish(const char *path, const void *header,
                        unsigned int payload_size);
 ```
 
-Metadata Catalog 只记录经过 `agent_file_meta_set()` 显式登记的元数据，最多保存 512 项。普通登记要求 `flags` 为零，`AGENT_FILE_META_F_DELETE` 用于删除登记；`PERSIST`、`AUTOSCAN` 和未知标志都会被拒绝。一次查询最多返回 8 项。设置 `USE_INDEX` 时，内核可以按状态、阶段或类型使用索引；设置 `SCAN` 时则逐项扫描。返回结构给出完整命中数、是否截断、实际查询方式、扫描量、候选量、查询耗时和 `fs_generation`。
+Metadata Catalog 只记录经过 `agent_file_meta_set()` 或批量接口显式登记的元数据，最多保存 512 项。普通登记要求 `flags` 为零，`AGENT_FILE_META_F_DELETE` 用于删除登记；`PERSIST`、`AUTOSCAN` 和未知标志都会被拒绝。一次查询最多返回 8 项。设置 `USE_INDEX` 时，内核可以按状态、阶段或类型使用索引；设置 `SCAN` 时则逐项扫描。返回结构给出完整命中数、是否截断、实际查询方式、扫描量、候选量、查询耗时和 `fs_generation`。
 
-文件身份由 `{dev, inum, incarnation}` 三部分组成。inode 被重新分配时，`incarnation` 随之增加，因此旧元数据、摘要、编辑租约和待处理的删除记录都不会误认新文件。Typed Watch 保存完整查询条件，文件集合发生变化时发布 `ENTER`、`UPDATE` 或 `LEAVE`。
+`agent_metadata_init()` 是 Metadata 初始化的规范入口，旧 `agent_file_meta_init()` 作为用户库兼容包装保留。Heartbeat 使用 `agent_heartbeat_configure(interval)`；`interval` 为零时停止，非零值从当前 tick 重新计时。Context 工具状态读取统一使用 `context_status`，旧 `ctx_stat` 工具编号不会执行。
+
+工作区写入描述符定义在 [`include/agent_workspace_mutation_abi.h`](../include/agent_workspace_mutation_abi.h)。`apply_patch` 与 `write_file` 分别使用独立的 operation 和工具编号，请求包含 lifecycle、object id、预期 revision、内容 artifact handle、内容长度、SHA-256 与相对路径。普通 V2/V3 调用返回 `BROKER_REQUIRED`，不会直接修改 Host 文件。Nexus 将请求送到 [`agentos_nexus_dev.py`](../host_tools/agentos_nexus_dev.py)：路径必须匹配 `user/src/nexus_*_ucore.c`，`expected_revision` 必须是当前内容的 SHA-256 或新文件使用的 `missing`，提交成功后返回新的 revision。
+
+Nexus 合约定义 `build_ucore_program(source_path,target)` 与 `run_ucore_program(build_id,stdin,expected_output,expected_exit,case_kind)`，两者分别占用 Tool Registry 的 32、33 号 brokered 条目。构建目标必须等于源文件名去掉 `.c` 后的值；成功结果带 source revision、build id、诊断摘要和镜像状态。运行接口只接受本会话的成功 build id，`case_kind` 限于 `normal`、`invalid`、`failure`，结果带实际退出状态、输出摘要、日志摘要和超时标志。全部结果先封存为 Artifact，再通过 TOOL Context 或 Task result handle 结算。
+
+### Context Artifact
+
+syscall 571 接收 128 字节 `agent_context_artifact_control`，操作包括 `SEAL`、`BIND`、`QUERY`、`SHARE` 和 `RELEASE`。Artifact 类型覆盖 USER、TOOL、FINAL、FILE、SEARCH、PATCH、BUILD_DIAG、RUN_LOG、TEST_RESULT、SUBTASK 和 TEAM_SUMMARY。单项长度不超过 64 KiB；`SEAL` 从普通文件读取已经完成的正文，核对长度、UTF-8、所有者和 SHA-256 后原子发布 metadata。查询结果包含 handle、类型、标志、长度、来源 Context sequence、Task id、workflow lifecycle、producer identity、引用数和内容 hash。
+
+用户态 Context Artifact Store 持有正文并执行 Agent/workflow 数量、总字节数、保留时间和读取额度。Context record 或 Task descriptor 只保存 handle 与已封存 metadata。父 Agent 接纳结果时必须核对 producer、Task id、来源 sequence、lifecycle 和 SHA-256；失败、取消、超时或尚未封存的结果不能进入 workflow 共享索引。
+
+### Context 查询预测
+
+syscall 572 用 256 字节 control/result 管理每 Agent 的有界查询预测器。`CONFIGURE` 设置固定转移策略、最小观察次数、置信度阈值、最大预取字节数和最大进行中请求数；`RECORD` 只接受 active path 上已经成功结算的只读查询签名；`STATUS` 返回预测目标及 hit/miss/cancel/denied 计数；`CLEAR` 在 rollback、Context 清空、退出或 lifecycle 变化时清除状态。默认上限为单次 4 KiB、同时 2 项。
+
+签名包括操作类型、tool id、`dev + inum + incarnation`、文件 revision、workspace object id、workspace revision、查询指纹、offset、length、Context/cause sequence、tick、branch generation 和 Agent/lifecycle identity。Guest VFS 目标进入低优先级异步预取队列，Host 目标产生 `PREFETCH_HINT` 事件。Hint 与缓存命中只影响性能；正式读取仍重新核对 capability、VFS 文件访问范围、workspace root、object id、revision、range 和 lifecycle。
+
+`agent_file_meta_set_batch()` 对应系统调用 569。`count` 可以取 0 至 `AGENT_FILE_META_BATCH_MAX`（16），`flags` 只能使用 `AGENT_FILE_META_BATCH_F_NONE`（0）。非空批次要求 `items` 与 `statuses` 指向互不重叠的内存区。内核在修改 Catalog 前复制全部输入，并预先确认状态数组可写以及写时复制页可以建立；参数预检查失败时不会写入状态数组，也不会提交元数据。
+
+批量调用在一个生命周期操作和一把 Metadata transaction 锁内按输入顺序处理。返回的非负整数表示已经写回状态的连续前缀长度，每个 `statuses[i]` 保存对应条目的结果。`BAD_PARAM`、`CONFLICT`、`NOT_FOUND` 等条目状态只影响当前项，后续项继续执行；内部致命错误会停止在尚未处理的条目之前，`INDETERMINATE` 写回当前项后停止。若条目已经提交、状态回写却失败，系统调用直接返回 `AGENT_STATUS_INDETERMINATE`。已经成功提交的条目不会因后续失败撤销，每个已提交项仍分别推进 generation，并分别完成 Typed Watch 与审计记录。
+
+文件身份由 `{dev, inum, incarnation}` 三部分组成。inode 被重新分配时，`incarnation` 随之增加，因此旧元数据、摘要、编辑租约和待处理的删除记录都不会误认新文件。Typed Watch 保存完整查询条件，文件集合发生变化时发布 `ENTER`、`UPDATE` 或 `LEAVE`。内核用关中断保护的精确计数记录当前是否存在文件状态或文件查询订阅；计数为零时，文件状态迁移直接跳过订阅扫描。
+
+`AGENT_EVENT_FILE_QUERY` 只能通过 `agent_live_watch()` 安装，并以 `watch_id` 交给 `agent_live_unwatch()` 移除。通用 `AGENT_TOOL_AGENT_WATCH` 收到该事件类型时返回 `BAD_PARAM` 和 `use_agent_live_watch`；通用 clear-all 也会保留 Typed Watch，避免条件存储、重新同步状态和订阅槽位失去对应关系。
 
 增量事件出现 generation 缺口后，Agent 先保留旧订阅，再用相同条件建立替代订阅。随后执行一次未被截断的查询，取得完整基线；最后在旧订阅上确认缺口并将其移除。一次查询只有 8 个返回位置，也没有分页游标。若 `truncated != 0`，这次查询不能用作完整基线，也不能确认本轮重新同步。具体步骤见 [Live Query](modules/live-query.md)。
 
@@ -264,11 +291,11 @@ int agent_task_delegate_complete(
 
 每条 Task Channel 只允许一个提交者。SQ 和 CQ 各有 16 个位置，队列表头、SQE 和 CQE 均为 128 字节。`setup` 只能由进程主线程调用，调用后建立共享映射。后续的 `enter` 和 `resource` 都绑定同一个提交者线程及其身份 generation。`enter` 提交新的 SQ 队尾、确认已经读取的 CQ 队头，并推动内核处理任务；`resource` 用于导入、释放和查询类型化句柄。
 
-`IMPORT` 接受当前进程打开的可读普通文件描述符，创建的句柄只能是 OWNED。`AGENT_ARTIFACT_UTF8` 接受准确的 1–63 字节文本；`AGENT_ARTIFACT_TASK` 只接受准确的 56 字节 `agent_task_delegate_descriptor`。调用前，当前 Agent 必须已有一条经过校验的最新 Context；导入只绑定它的 sequence，不新建记录。内核从 offset 0 读取并多探测一个字节确认 EOF，不改变共享文件 offset。UTF-8 资源需要通过 NUL 与编码检查，TASK 资源需要通过描述符版本、大小、标志和保留字段检查；通过后都以不可变快照保存在 Task Channel 私有页中，同时记录内容指纹、生产者 PID/`control_id`、Context sequence 和 provenance。导入成功后的最终 copyout 若失败，刚建立的资源会在用户态可见前回滚。
+`IMPORT` 接受当前进程打开的可读普通文件描述符，创建的句柄只能是 OWNED。`AGENT_ARTIFACT_UTF8` 接受准确的 1–63 字节文本；`AGENT_ARTIFACT_TASK` 只接受准确的 128 字节 `agent_task_delegate_descriptor`。调用前，当前 Agent 必须已有一条经过校验的最新 Context；导入只绑定它的 sequence，不新建记录。内核从 offset 0 读取并多探测一个字节确认 EOF，不改变共享文件 offset。UTF-8 资源需要通过 NUL 与编码检查，TASK 资源需要通过描述符版本、大小、标志和保留字段检查；通过后都以不可变快照保存在 Task Channel 私有页中，同时记录内容指纹、生产者 PID/`control_id`、Context sequence 和 provenance。导入成功后的最终 copyout 若失败，刚建立的资源会在用户态可见前回滚。
 
 SQE 可以把已有 OWNED 句柄改作 BORROWED 别名提交。ECHO Task Bridge 会把 UTF-8 快照复制到工具 payload；`delegate_task` 则读取 TASK 描述符，并把任务放入内核的 delegated pending 队列。BORROWED 任务完成后资源仍处于 `LIVE`，调用方随后显式 `RELEASE`；OWNED 任务完成后输入自动消费。释放后的句柄以及槽位复用前的旧 generation 都返回 `STALE`。
 
-delegated task 的 56 字节描述符只保存目标 PID、Agent/control 身份、任务类型、task/correlation/parent 标识和 capsule handle。大段输入与输出保存在 Guest artifact 中，由 capsule handle 关联，不放进描述符或 CQE。发起者必须先用 `agent_route_config()` 向目标授予独立的 `AGENT_IPC_ROUTE_TASK`，目标还必须具有 `AGENT_CAP_TASK_ACCEPT`；TASK route 与 `MESSAGE`、`LLM_DONE` 的事件 route 分开。当前实现拒绝 owner 与 target 相同的 self delegation，也拒绝让一个活动端点同时成为 owner 和 target，因而把活动委派图限制为二分无环。`delegate_task` SQE 被接受后进入真实的 Execution Contract `RUNNING` 和 Task Channel pending 状态。目标调用 `agent_task_delegate_claim()` 取得描述符以及准确的 owner/channel/request/slot 绑定，内核在返回 claim 前登记执行者并进入 effect-start；目标完成 Guest result artifact 后，只用 `agent_task_delegate_complete()` 提交业务状态。每个 owner issuer 当前同时只允许一个尚未结算的委派。
+delegated task 的 128 字节描述符保存目标 identity、parent task、目标描述 Artifact、输入 Artifact、所需 capability、允许工具集合、workspace revision、资源预算、deadline 和预期结果类型。大段输入与输出保存在 Context Artifact Store 中，不放进 descriptor 或 CQE。发起者必须先用 `agent_route_config()` 向目标授予独立的 `AGENT_IPC_ROUTE_TASK`，目标还必须具有 `AGENT_CAP_TASK_ACCEPT`；TASK route 与 `MESSAGE`、`LLM_DONE` 的事件 route 分开。内核拒绝 self delegation 和任务图中的真实环路，并允许一个 owner 并行维护多个独立子任务。`delegate_task` SQE 被接受后进入 Execution Contract `RUNNING` 和 Task Channel pending 状态。目标调用 `agent_task_delegate_claim()` 取得描述符以及准确的 owner/channel/request/slot 绑定，内核在返回 claim 前复核权限包含关系并登记执行者；目标先封存结果 Artifact，再用 `agent_task_delegate_complete()` 提交业务状态。
 
 claim 建立的 delegated effect lease 只属于这一条委派，不是整个 workflow 的通用授权。内核把它绑定到执行者 PID/Agent/`control_id`、主线程 identity generation，以及 channel generation、request id 和 slot generation；若 Contract 允许创建 helper，helper 还要匹配单独登记的 TID 与 identity generation。执行者发起直接作用时，请求的 side-effect mask 必须是该 Contract manifest 所列 mask 的子集，并在调用期间持有对应委派代次的引用。正常 complete 或最新终态 offer 的 cleanup ACK 会在活动引用归零后结束 lease；目标进程 quiescence 也会先等待相关调用退出，再撤销这项授权。
 

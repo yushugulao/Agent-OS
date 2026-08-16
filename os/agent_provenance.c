@@ -7,7 +7,7 @@
 #include "defs.h"
 #include "proc.h"
 
-#define AGENT_PROVENANCE_CAP_ALL ((1ULL << 14) - 1ULL)
+#define AGENT_PROVENANCE_CAP_ALL ((1ULL << 16) - 1ULL)
 
 struct agent_provenance_proc_state {
 	int used;
@@ -245,6 +245,14 @@ agent_provenance_authorize_tool(
 	}
 	if ((p->agent_capability_mask & manifest->required_capabilities) !=
 	    manifest->required_capabilities) {
+		agent_provenance_decide(
+			decision, AGENT_PROVENANCE_DENY_CAPABILITY_MISSING,
+			AGENT_STATUS_DENIED);
+		return decision->status;
+	}
+	if (request->tool_id > 64 ||
+	    (p->agent_tool_grant_mask &
+	     AGENT_TOOL_GRANT_BIT((uint)request->tool_id)) == 0) {
 		agent_provenance_decide(
 			decision, AGENT_PROVENANCE_DENY_CAPABILITY_MISSING,
 			AGENT_STATUS_DENIED);

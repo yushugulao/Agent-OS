@@ -159,9 +159,9 @@ class CrossSourceTests(unittest.TestCase):
             contract.TOOL_CATALOG_SHA256,
         )
 
-    def test_system_policy_and_tools_are_generic_and_read_only(self) -> None:
+    def test_system_policy_and_tools_are_generic_and_development_capable(self) -> None:
         prompt = contract.SYSTEM_PROMPT
-        self.assertEqual(contract.CONTRACT_VERSION, 4)
+        self.assertEqual(contract.CONTRACT_VERSION, 5)
         for text in (
             "Solve the user's current task directly and in the requested language",
             "come from the active AgentOS Context path",
@@ -184,12 +184,22 @@ class CrossSourceTests(unittest.TestCase):
         ):
             self.assertNotIn(legacy, prompt)
         tools = {str(tool["name"]): tool for tool in contract.TOOLS}
-        self.assertEqual(set(tools), {"search_files", "read_file", "inspect_system"})
+        self.assertEqual(
+            set(tools),
+            {
+                "search_files", "read_file", "inspect_system", "write_file",
+                "apply_patch", "build_ucore_program", "run_ucore_program",
+            },
+        )
         self.assertIn("current Host workspace", tools["search_files"]["description"])
         self.assertIn("empty query lists files", tools["search_files"]["description"])
         self.assertIn("at most 8 matches", tools["search_files"]["description"])
         self.assertIn("Read-only", tools["read_file"]["description"])
         self.assertIn("current Guest runtime", tools["inspect_system"]["description"])
+        self.assertIn("Atomically", tools["write_file"]["description"])
+        self.assertIn("revision", tools["apply_patch"]["description"])
+        self.assertIn("RISC-V", tools["build_ucore_program"]["description"])
+        self.assertIn("separate", tools["run_ucore_program"]["description"])
         self.assertEqual(
             tools["search_files"]["input_schema"],
             {
@@ -258,7 +268,7 @@ class ContractValidationTests(unittest.TestCase):
         with self.assertRaises(contract.NexusContractError):
             contract.validate_request_contract(request)
 
-    def test_exact_three_tool_request_and_context_history_are_accepted(self) -> None:
+    def test_exact_tool_request_and_context_history_are_accepted(self) -> None:
         request = _request(
             history=True,
             prior_turns=(("first question", "first answer"), ("继续", "后续回答")),
@@ -266,7 +276,10 @@ class ContractValidationTests(unittest.TestCase):
         contract.validate_request_contract(request)
         self.assertEqual(
             [tool["name"] for tool in request["tools"]],
-            ["search_files", "read_file", "inspect_system"],
+            [
+                "search_files", "read_file", "inspect_system", "write_file",
+                "apply_patch", "build_ucore_program", "run_ucore_program",
+            ],
         )
 
     def test_system_one_character_mutation_is_rejected(self) -> None:

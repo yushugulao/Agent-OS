@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "kind": "agentos-catalog-batch-campaign",
+  "date": "2026-08-15",
+  "campaign": {
+    "qemu_boots": 16,
+    "order": "balanced_AB_BA",
+    "expected_discovery_queries": 4,
+    "validation_queries": 1,
+    "corpus_records": 96,
+    "batch_capacity": 16,
+    "outcome_hash": "1457873431608088591"
+  },
+  "files": [
+    {"path": "raw/contest/measurements.csv", "bytes": 4391, "sha256": "973e8b1dc9da335ace0da41ddba351b6226e5106eb77745ce1bf6dae9460e829"},
+    {"path": "raw/contest/report.md", "bytes": 2781, "sha256": "8bb69ff11ca8e4c8bfb8ce9c3a6e6c1f22726d07e36dd42f4fd2942b34980cca"},
+    {"path": "raw/contest/sample-01-qemu.serial.txt", "bytes": 29378, "sha256": "ca2ea7911ebc62e847268a0c897facdc20ba4d23ed8f19bcc45340d9db3272ef"},
+    {"path": "raw/contest/sample-02-qemu.serial.txt", "bytes": 29373, "sha256": "fa428325995cd839fceb2f2e0d24c9e44b37b3c62079e7ad87411e21b4bc2480"},
+    {"path": "raw/contest/sample-03-qemu.serial.txt", "bytes": 29378, "sha256": "851061303f3e700ae4dcc49e7dae0c0ec5dfa314816dbb6485d71f2bdbf7b8a9"},
+    {"path": "raw/contest/sample-04-qemu.serial.txt", "bytes": 29368, "sha256": "6373ae9255a11c2c8422f1b20ef6371408d06f64e1757b073c6ef6ceecdb0c08"},
+    {"path": "raw/contest/sample-05-qemu.serial.txt", "bytes": 29377, "sha256": "85d64edca9d9d116727f5ee13a7a73218bed0448718facc2d86f3a0beda99008"},
+    {"path": "raw/contest/sample-06-qemu.serial.txt", "bytes": 29376, "sha256": "8602283fd92fb0daa5d8ef7cfda259d9965bc706e252cbd4b1fcea1477acada4"},
+    {"path": "raw/contest/sample-07-qemu.serial.txt", "bytes": 29376, "sha256": "00116767f0fd89bb703cca950e77deb6069c04711f9947fef7b84b16d2b261f4"},
+    {"path": "raw/contest/sample-08-qemu.serial.txt", "bytes": 29370, "sha256": "c09df5cee9caae1218ac6133e705325948547f33cae3619b24cea385515a7d4c"},
+    {"path": "raw/contest/sample-09-qemu.serial.txt", "bytes": 29376, "sha256": "3f7ab5e3c9cc0c8865eae924372f600289e2459869252c819a1c2578c7f81fd8"},
+    {"path": "raw/contest/sample-10-qemu.serial.txt", "bytes": 29370, "sha256": "890187fa45f63145a44a08c170619ae20744aa5f2aac26be41bcb52d2bd7ba2e"},
+    {"path": "raw/contest/sample-11-qemu.serial.txt", "bytes": 29382, "sha256": "9159e80bb947e9d5eb6e154f31725511c79b2b318c4079099c2803d4f6dda3ae"},
+    {"path": "raw/contest/sample-12-qemu.serial.txt", "bytes": 29371, "sha256": "5f213a6a0555b76c9782c655a109cdf5c211e377b8bbbd5f806759d87212d485"},
+    {"path": "raw/contest/sample-13-qemu.serial.txt", "bytes": 29382, "sha256": "269e5aefeca30d010c5407b89a609b66193a102e453c5d8d85c6d48d03116c8f"},
+    {"path": "raw/contest/sample-14-qemu.serial.txt", "bytes": 29375, "sha256": "9f24d9a5a9452cfa7aa5d20fce49431cd8a4fb1742210a01ef2d9c506827457a"},
+    {"path": "raw/contest/sample-15-qemu.serial.txt", "bytes": 29385, "sha256": "6ae3861c89e07ec2afdba90d47d631611a06ebaa0421be1600b0528607f9c0d5"},
+    {"path": "raw/contest/sample-16-qemu.serial.txt", "bytes": 29371, "sha256": "19e8be7308bb68614693a4d2e204e9bf2b83bd457ca19da669cc2aba6f1c45e7"},
+    {"path": "raw/contest/summary.json", "bytes": 28735, "sha256": "46a46e63f40fe1e11e53c59fa95cbcdc521654b7669369d159f8086391a892b3"}
+  ]
+}

@@ -13,6 +13,7 @@ import contest_demo
 
 
 NONCE = int("0123456789abcdef", 16)
+DISCOVERY_QUERIES = 4
 
 
 def write(path: Path, text: str) -> Path:
@@ -78,7 +79,9 @@ def _fence_line(
     )
 
 
-def _lane_records(mode: str, position: int, sample_id: int) -> list[str]:
+def _lane_records(
+    mode: str, position: int, sample_id: int, discovery_queries: int
+) -> list[str]:
     outcome = contest_demo._expected_outcome_hash()
     wall = 100 + position * 1000
     observer = 1000 + position * 100 + sample_id * 10
@@ -122,7 +125,7 @@ def _lane_records(mode: str, position: int, sample_id: int) -> list[str]:
         )
         core_duration, records, bytes_read = (
             400,
-            contest_demo.CORPUS_SIZE + 1,
+            contest_demo.CORPUS_SIZE * discovery_queries + 1,
             2048,
         )
         discovery_role = "orchestrator"
@@ -147,7 +150,12 @@ def _lane_records(mode: str, position: int, sample_id: int) -> list[str]:
             virtio_batched_read_requests=4,
             overwrite_prereads_skipped=4,
         )
-        core_duration, records, bytes_read = 80, 2, 0
+        if discovery_queries == 1:
+            core_duration = 390
+            records = contest_demo.CORPUS_SIZE + 1
+            bytes_read = 2048
+        else:
+            core_duration, records, bytes_read = 80, discovery_queries + 1, 0
         discovery_role = "sentinel"
     workload_syscalls = core["workload_syscalls"] - seeded["workload_syscalls"]
     settled = _add(
@@ -208,17 +216,41 @@ def _lane_records(mode: str, position: int, sample_id: int) -> list[str]:
             mode, "end_to_end", 2, observer, observer + 40, 77, 3, start, finished
         ),
     ]
+    if mode == "native":
+        selected_path = "traversal" if discovery_queries == 1 else "indexed"
+        query_state = "cold" if discovery_queries == 1 else "ready"
+        build_count = 0 if discovery_queries == 1 else 1
+        batch_calls = 0 if discovery_queries == 1 else 6
+        registered_items = 0 if discovery_queries == 1 else 96
+        reuse_hits = 0 if discovery_queries == 1 else discovery_queries
+        cold_build_us = 0 if discovery_queries == 1 else 40
+        warm_query_us = 0 if discovery_queries == 1 else 8
+        rows.append(
+            f"agentos:demo schema=2 nonce={NONCE} kind=catalog mode=native "
+            f"expected_discovery_queries={discovery_queries} "
+            f"selected_path={selected_path} query_state={query_state} "
+            f"discovery_query_count={discovery_queries} "
+            f"validation_query_count=1 total_query_count={discovery_queries + 1} "
+            f"build_count={build_count} batch_calls={batch_calls} "
+            f"registered_items={registered_items} reuse_hits={reuse_hits} "
+            f"cold_build_us={cold_build_us} aggregate_query_us=20 "
+            f"warm_query_us={warm_query_us}"
+        )
     return rows
 
 
-def showcase_log(sample_id: int = 1, order: str = "compat_then_native") -> str:
+def showcase_log(
+    sample_id: int = 1,
+    order: str = "compat_then_native",
+    discovery_queries: int = DISCOVERY_QUERIES,
+) -> str:
     outcome = contest_demo._expected_outcome_hash()
     modes = ("compat", "native") if order == "compat_then_native" else ("native", "compat")
     lines = [
         f"agentos:demo schema=2 nonce={NONCE} kind=run sample={sample_id} order={order}"
     ]
     for position, mode in enumerate(modes):
-        lines.extend(_lane_records(mode, position, sample_id))
+        lines.extend(_lane_records(mode, position, sample_id, discovery_queries))
 
     workflow_before = _counter_base(50000)
     workflow_after = _add(
@@ -310,19 +342,23 @@ def test_showcase_parser_and_product_outputs() -> None:
         root = Path(temporary)
         report = build_fixture(report_fixture(root))
         comparison = report["comparison"]
-        assert report["schema_version"] == 1
+        assert report["schema_version"] == 2
         assert report["campaign"]["qemu_boots"] == 8
-        assert comparison["workload"] == "same_kernel_same_guest_same_file_query"
+        assert (
+            comparison["workload"]
+            == "same_kernel_same_guest_same_repeated_file_query"
+        )
+        assert comparison["adaptive_selection"] == "indexed"
         assert comparison["paths"] == {
             "traversal": "directory_traversal",
-            "indexed": "indexed_control_path",
+            "indexed": "indexed_reused_path",
         }
         assert comparison["medians"]["traversal"]["core_duration_us"] == 400
         assert comparison["medians"]["indexed"]["core_duration_us"] == 80
-        assert comparison["medians"]["traversal"]["records_examined"] == 97
-        assert comparison["medians"]["indexed"]["records_examined"] == 2
+        assert comparison["medians"]["traversal"]["records_examined"] == 385
+        assert comparison["medians"]["indexed"]["records_examined"] == 5
         assert comparison["ratios"]["traversal_over_indexed_core_duration"] == 5.0
-        assert comparison["ratios"]["traversal_over_indexed_records_examined"] == 48.5
+        assert comparison["ratios"]["traversal_over_indexed_records_examined"] == 77.0
         assert comparison["order_balance"] == {
             "traversal_then_indexed": 4,
             "indexed_then_traversal": 4,
@@ -332,7 +368,27 @@ def test_showcase_parser_and_product_outputs() -> None:
             "indexed_faster_samples": 8,
             "indexed_faster_majority": True,
             "median_indexed_minus_traversal_core_us": -320,
+            "indexed_end_to_end_faster_samples": 8,
+            "indexed_end_to_end_faster_majority": True,
+            "median_indexed_minus_traversal_end_to_end_us": -320,
             "indexed_reduced_records_in_all_samples": True,
+        }
+        assert report["catalog_reuse"] == {
+            "expected_discovery_queries": 4,
+            "selected_path": "indexed",
+            "query_state": "ready",
+            "discovery_query_count": 4,
+            "validation_query_count": 1,
+            "total_query_count": 5,
+            "build_count": 1,
+            "batch_calls": 6,
+            "registered_items": 96,
+            "reuse_hits": 4,
+            "medians": {
+                "cold_build_us": 40,
+                "aggregate_query_us": 20,
+                "warm_query_us": 8,
+            },
         }
         assert report["outcome"]["equal"] is True
 
@@ -350,12 +406,15 @@ def test_showcase_parser_and_product_outputs() -> None:
         assert len(rows) == 8
         assert rows[0]["traversal_core_duration_us"] == "400"
         assert rows[0]["indexed_core_duration_us"] == "80"
-        assert rows[0]["traversal_records_examined"] == "97"
-        assert rows[0]["indexed_records_examined"] == "2"
+        assert rows[0]["traversal_records_examined"] == "385"
+        assert rows[0]["indexed_records_examined"] == "5"
         assert rows[0]["indexed_minus_traversal_core_us"] == "-320"
+        assert rows[0]["indexed_minus_traversal_end_to_end_us"] == "-320"
         markdown = (output / "report.md").read_text("utf-8")
         assert "directory traversal" in markdown
-        assert "indexed control path" in markdown
+        assert "indexed/reused path" in markdown
+        assert "Indexed/reused core (us)" in markdown
+        assert "traversal_then_indexed_reused" in markdown
         assert "400" in markdown and "80" in markdown
         assert "`8/8` paired boots" in markdown
         assert "-320 us" in markdown
@@ -411,8 +470,10 @@ def test_schema2_records_fail_closed() -> None:
             "core_duration_us=400", "core_duration_us=401", 1
         ),
         "workload syscall snapshot mismatch": lambda text: text.replace(
-            f"workload_syscalls=12 records_examined={contest_demo.CORPUS_SIZE + 1}",
-            f"workload_syscalls=13 records_examined={contest_demo.CORPUS_SIZE + 1}",
+            "workload_syscalls=12 records_examined="
+            f"{contest_demo.CORPUS_SIZE * DISCOVERY_QUERIES + 1}",
+            "workload_syscalls=13 records_examined="
+            f"{contest_demo.CORPUS_SIZE * DISCOVERY_QUERIES + 1}",
             1,
         ),
         "actor mismatch": lambda text: text.replace(
@@ -420,6 +481,11 @@ def test_schema2_records_fail_closed() -> None:
         ),
         "oracle mismatch": lambda text: text.replace(
             f"native_hash={contest_demo._expected_outcome_hash()}", "native_hash=1", 1
+        ),
+        "catalog reuse mismatch": lambda text: text.replace(
+            f"reuse_hits={DISCOVERY_QUERIES} cold_build_us=40",
+            "reuse_hits=0 cold_build_us=40",
+            1,
         ),
         "unknown record": lambda text: text
         + f"agentos:demo schema=2 nonce={NONCE} kind=claim passed=1\n",
@@ -579,6 +645,42 @@ def test_paired_performance_regression_is_rejected() -> None:
         raise AssertionError("indexed-path performance regression was accepted")
 
 
+def test_single_use_campaign_selects_traversal_without_catalog() -> None:
+    samples = []
+    for sample_id, order in (
+        (1, "compat_then_native"),
+        (2, "native_then_compat"),
+        (3, "compat_then_native"),
+        (4, "native_then_compat"),
+    ):
+        sample = contest_demo.verify_showcase(
+            Path("unused"),
+            NONCE,
+            sample_id,
+            order,
+            guest_bytes=showcase_log(sample_id, order, 1).encode("utf-8"),
+        )
+        samples.append(sample)
+    report = contest_demo.campaign_aggregates(samples)
+    assert report["comparison"]["adaptive_selection"] == "traversal"
+    assert report["comparison"]["paths"]["indexed"] == (
+        "adaptive_directory_traversal"
+    )
+    assert report["comparison"]["paired_regression"][
+        "indexed_reduced_records_in_all_samples"
+    ] is False
+    assert report["catalog_reuse"]["build_count"] == 0
+    assert report["catalog_reuse"]["batch_calls"] == 0
+    assert report["catalog_reuse"]["registered_items"] == 0
+    assert report["catalog_reuse"]["reuse_hits"] == 0
+    report["campaign"] = {"qemu_boots": 4}
+    markdown = contest_demo.render_markdown(report)
+    assert "kept the Catalog cold" in markdown
+    assert "Adaptive traversal core (us)" in markdown
+    assert "traversal_then_adaptive_traversal" in markdown
+    assert "indexed" not in markdown.lower()
+
+
 def main() -> int:
     test_showcase_parser_and_product_outputs()
     test_schema2_records_fail_closed()
@@ -587,6 +689,7 @@ def main() -> int:
     test_shared_guest_failure_classifier_is_stage_aware()
     test_campaign_rejects_mixed_guest_nonces()
     test_paired_performance_regression_is_rejected()
+    test_single_use_campaign_selects_traversal_without_catalog()
     print("test_contest_demo: passed")
     return 0
 

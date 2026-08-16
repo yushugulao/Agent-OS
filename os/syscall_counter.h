@@ -129,6 +129,7 @@ enum syscall_class {
 	X(agent_wake, FAST, ALWAYS) \
 	X(agent_file_meta_init, BLOCK_IO_FS_EPOCH, ALWAYS) \
 	X(agent_file_meta_set, BLOCK_IO_FS_EPOCH, ALWAYS) \
+	X(agent_file_meta_set_batch, BLOCK_IO_FS_EPOCH, ALWAYS) \
 	X(agent_file_query, BLOCK_IO, ALWAYS) \
 	X(agent_file_edit_begin, BLOCK_IO_FS_EPOCH, ALWAYS) \
 	X(agent_file_edit_commit, FAST, ALWAYS) \
@@ -136,6 +137,9 @@ enum syscall_class {
 	X(agent_file_edit_state, BLOCK_IO_FS_EPOCH, ALWAYS) \
 	X(agent_file_publish, BLOCK_IO_FS_EPOCH, ALWAYS) \
 	X(agent_worker_create, BLOCK_IO_FS_EPOCH, ALWAYS) \
+	X(agent_runtime_control, BLOCK_IO_FS_EPOCH, ALWAYS) \
+	X(agent_context_artifact, BLOCK_IO_FS_EPOCH, ALWAYS) \
+	X(agent_context_prefetch, BLOCK_IO, ALWAYS) \
 	X(agent_route_config, FAST, ALWAYS)
 
 /* 独立 ABI 入口复用完整身份查询的计数槽，不扩张 struct proc。 */

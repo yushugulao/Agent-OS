@@ -11,6 +11,7 @@ MAKE_TOOL="${MAKE_TOOL:-make}"
 CASE_TIMEOUT="${CONTEST_DEMO_CASE_TIMEOUT:-150s}"
 OUTPUT_DIR="${CONTEST_DEMO_OUTPUT:-results/contest-demo}"
 CAMPAIGN_SAMPLES="${CONTEST_DEMO_SAMPLES:-4}"
+QUERY_USES="${CONTEST_DEMO_QUERY_USES:-4}"
 
 case "${CAMPAIGN_SAMPLES}" in
 	''|*[!0-9]*)
@@ -22,6 +23,14 @@ if (( CAMPAIGN_SAMPLES < 4 || CAMPAIGN_SAMPLES > 16 || CAMPAIGN_SAMPLES % 2 != 0
 	echo "[contest-demo] use an even sample count from 4 to 16" >&2
 	exit 2
 fi
+case "${QUERY_USES}" in
+	1|2|4|8)
+		;;
+	*)
+		echo "[contest-demo] query uses must be one of 1, 2, 4, or 8" >&2
+		exit 2
+		;;
+esac
 if [[ -L "${OUTPUT_DIR}" ]]; then
 	echo "[contest-demo] output directory must not be a symlink" >&2
 	exit 2
@@ -44,7 +53,7 @@ guest_nonce="$("${PYTHON_BIN}" -I -S -c \
 started_seconds="$("${PYTHON_BIN}" -I -S -c \
 	'import time; print(time.monotonic())')"
 
-echo "[contest-demo] 1/3 building ${CAMPAIGN_SAMPLES} AB/BA query samples"
+echo "[contest-demo] 1/3 building ${CAMPAIGN_SAMPLES} AB/BA query samples (K=${QUERY_USES})"
 "${MAKE_TOOL}" --no-print-directory -s -rR -f Makefile clean
 rm -f nfs/fs.img nfs/fs-copy.img os/initproc.S build/os/initproc.o
 for ((sample = 1; sample <= CAMPAIGN_SAMPLES; sample++)); do
@@ -53,7 +62,7 @@ for ((sample = 1; sample <= CAMPAIGN_SAMPLES; sample++)); do
 	else
 		native_first=1
 	fi
-	user_extra_cflags="-Werror -DLABDEMO_RUN_NONCE=0x${guest_nonce}ULL -DLABDEMO_SAMPLE_ID=${sample} -DLABDEMO_NATIVE_FIRST=${native_first}"
+	user_extra_cflags="-Werror -DLABDEMO_RUN_NONCE=0x${guest_nonce}ULL -DLABDEMO_SAMPLE_ID=${sample} -DLABDEMO_NATIVE_FIRST=${native_first} -DLABDEMO_EXPECTED_DISCOVERY_USES=${QUERY_USES}"
 	rm -f nfs/fs.img
 	"${MAKE_TOOL}" --no-print-directory -s -rR -f Makefile nfs/fs.img \
 		TOOLPREFIX="${TOOLPREFIX}" PYTHON_BIN="${PYTHON_BIN}" \

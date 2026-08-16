@@ -153,9 +153,9 @@ _Static_assert(AGENT_TOOL_DELEGATE_TASK == 26,
 _Static_assert(AGENT_TASK_DELEGATE_CLAIM_SYSCALL == 567U &&
 	       AGENT_TASK_DELEGATE_COMPLETE_SYSCALL == 568U,
 	       "delegated Task syscall numbers");
-_Static_assert(sizeof(struct agent_task_delegate_descriptor) == 56,
+_Static_assert(sizeof(struct agent_task_delegate_descriptor) == 128,
 	       "delegated Task descriptor ABI size");
-_Static_assert(sizeof(struct agent_task_delegate_claim_result) == 128,
+_Static_assert(sizeof(struct agent_task_delegate_claim_result) == 200,
 	       "delegated Task claim result ABI size");
 _Static_assert(sizeof(struct agent_task_delegate_complete) == 96,
 	       "delegated Task completion request ABI size");
@@ -1719,7 +1719,7 @@ static struct agent_task_resource_handle task_delegate_import_descriptor_fd(
 	      result.handle.flags == AGENT_TASK_HANDLE_F_OWNED &&
 	      result.handle.generation != 0 &&
 	      result.length == sizeof(*descriptor),
-	      "import exact 56-byte delegated TASK descriptor");
+	      "import exact 128-byte delegated TASK descriptor");
 	return result.handle;
 }
 
@@ -1904,7 +1904,7 @@ static void task_delegate_descriptor_init(
 	descriptor->correlation_id = correlation_id;
 	descriptor->parent_task_id = task_id + 1000ULL;
 	descriptor->capsule_handle = task_id + 2000ULL;
-	descriptor->flags = AGENT_TASK_DELEGATE_F_NONE;
+	descriptor->allowed_tools = AGENT_TOOL_GRANT_BIT(AGENT_TOOL_ECHO);
 }
 
 static void task_delegate_claim_one(
@@ -1947,7 +1947,6 @@ static void task_delegate_claim_one(
 	      claim->descriptor.task_id == task_id &&
 	      claim->descriptor.correlation_id == correlation_id &&
 	      claim->descriptor.capsule_handle != 0 &&
-	      claim->descriptor.flags == AGENT_TASK_DELEGATE_F_NONE &&
 	      claim->owner_pid == getppid() && claim->owner_agent_id != 0 &&
 	      claim->owner_control_id != 0 && claim->channel_generation != 0 &&
 	      claim->request_id != 0 && claim->slot_generation != 0;
@@ -2845,7 +2844,7 @@ int main(void)
 	run_child(CHILD_TASK_DELEGATE);
 	printf("agenttask_ucore: delegated_runtime agents=3 provider=artifact "
 	       "controller=orchestrator task_route=1 task_accept=1 "
-	       "artifact_write=1 descriptor_bytes=56 claim567=1 complete568=1\n");
+	       "artifact_write=1 descriptor_bytes=128 claim567=1 complete568=1\n");
 	printf("agenttask_ucore: delegated_contracts=3 strict_reclaimed=1 "
 	       "reclaimed_generation_advance=1 issuer_gap_effects=pipe+file\n");
 	printf("agenttask_ucore: delegated_lease preclaim_publish_denied=1 "

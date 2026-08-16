@@ -68,6 +68,7 @@ def validate(syscall: str, ipc: str) -> None:
         "case SYS_close:",
         "case SYS_agent_workflow_close:",
         "AGENT_SIDE_EFFECT_PROCESS | AGENT_SIDE_EFFECT_PERMISSION",
+        "case SYS_agent_file_meta_set_batch:",
     )
     for token in required:
         if token not in effects:
@@ -84,6 +85,17 @@ def validate(syscall: str, ipc: str) -> None:
             raise ContractError(f"close conservative effect union lost {token}")
     if "transaction->file" in close_effects:
         raise ContractError("close classifier reused a speculative descriptor pin")
+
+    batch_start = effects.index("case SYS_agent_file_meta_set_batch:")
+    batch_end = effects.index("case SYS_agent_file_publish:", batch_start)
+    batch_effects = effects[batch_start:batch_end]
+    if (
+        "return AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA;"
+        not in batch_effects
+    ):
+        raise ContractError("metadata batch lost FILE | METADATA side effects")
+    if "AGENT_SIDE_EFFECT_ARTIFACT" in batch_effects:
+        raise ContractError("metadata batch gained an unrelated ARTIFACT effect")
 
     publish_match = re.search(
         r"case SYS_agent_file_publish:(.*?)(?:case SYS_|default:)",
@@ -228,6 +240,17 @@ class DirectSyscallProvenanceTests(unittest.TestCase):
             "return AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA |\n"
             "\t\t       AGENT_SIDE_EFFECT_ARTIFACT;",
             "return AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA;",
+        )
+
+    def test_rejects_metadata_batch_effect_underclassification(self) -> None:
+        self.assert_syscall_mutation_rejected(
+            "\tcase SYS_agent_file_meta_init:\n"
+            "\tcase SYS_agent_file_meta_set:\n"
+            "\tcase SYS_agent_file_meta_set_batch:\n"
+            "\tcase SYS_agent_file_edit_begin:\n",
+            "\tcase SYS_agent_file_meta_init:\n"
+            "\tcase SYS_agent_file_meta_set:\n"
+            "\tcase SYS_agent_file_edit_begin:\n",
         )
 
     def test_rejects_ingress_merge_after_dispatch(self) -> None:

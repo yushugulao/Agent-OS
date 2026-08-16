@@ -8,6 +8,7 @@
 #define TEST_NOINLINE __attribute__((noinline))
 #define LOW_AUDIT_CHURN_COUNT 200
 #define WORKFLOW_EVIDENCE_RECORD_CAP 64
+#define SECURITY_BATCH_STATUS_GUARD 0x10293847
 
 static void check(int ok, const char *msg)
 {
@@ -35,7 +36,43 @@ static struct agent_op security_anchor_op;
 static struct agent_result security_anchor_result;
 static struct agent_file_query security_file_query;
 static struct agent_file_query_result security_file_result;
+static struct agent_file_meta
+	security_denied_batch_items[AGENT_FILE_META_BATCH_MAX];
+static int security_denied_batch_statuses[AGENT_FILE_META_BATCH_MAX + 1];
 static uint64 security_orchestrator_span;
+
+static void check_role(int role, const char *name);
+
+static void check_meta_batch_denied(int expected, const char *msg)
+{
+	memset(security_denied_batch_items, 0,
+	       sizeof(security_denied_batch_items));
+	strcpy(security_denied_batch_items[0].stage, "align");
+	strcpy(security_denied_batch_items[0].status, "failed");
+	security_denied_batch_statuses[0] = SECURITY_BATCH_STATUS_GUARD;
+	check(agent_file_meta_set_batch(
+		security_denied_batch_items, security_denied_batch_statuses, 1,
+		AGENT_FILE_META_BATCH_F_NONE) == expected,
+	      msg);
+	check(security_denied_batch_statuses[0] ==
+		      SECURITY_BATCH_STATUS_GUARD,
+	      "denied metadata batch leaves status untouched");
+}
+
+static TEST_NOINLINE void run_meta_batch_denied_sentinel(void)
+{
+	check_role(AGENT_ROLE_SENTINEL, "batch-denied-sentinel");
+	check_meta_batch_denied(AGENT_STATUS_DENIED,
+				"sentinel metadata batch denied");
+	printf("agentsecurity_ucore: meta_batch agent_denied=1 status_untouched=1\n");
+	exit(0);
+}
+
+static TEST_NOINLINE void check_plain_meta_batch_denied(void)
+{
+	check_meta_batch_denied(-1, "plain metadata batch denied");
+	printf("agentsecurity_ucore: meta_batch plain_denied=1 status_untouched=1\n");
+}
 
 static void make_op(struct agent_op *op, int tool, uint64 id, uint64 arg0,
 		    const char *payload)
@@ -85,7 +122,8 @@ static uint64 expected_caps(int role)
 		       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE |
 		       AGENT_CAP_META_WRITE | AGENT_CAP_ORCHESTRATE |
 		       AGENT_CAP_LLM_RELAY | AGENT_CAP_WAIT_CANCEL |
-		       AGENT_CAP_ROUTE_MANAGE | AGENT_CAP_TASK_ACCEPT;
+		       AGENT_CAP_ROUTE_MANAGE | AGENT_CAP_TASK_ACCEPT |
+		       AGENT_CAP_WORKSPACE_WRITE;
 	return 0;
 }
 
@@ -497,12 +535,12 @@ static TEST_NOINLINE void run_sentinel(int audit_gate_fd)
 		AGENT_ROLE_RECOVERY,
 		"align");
 	run_one(&security_sentinel_op, &security_sentinel_result,
-		AGENT_STATUS_DENIED, "sentinel spoof rerun");
+		AGENT_STATUS_DEPRECATED, "rerun_stage deprecated");
 	make_op(&security_sentinel_op, AGENT_TOOL_WRITE_REPORT, 8103,
 		AGENT_ROLE_RECOVERY,
 		"fake report");
 	run_one(&security_sentinel_op, &security_sentinel_result,
-		AGENT_STATUS_BAD_PARAM, "sentinel malformed report rejected");
+		AGENT_STATUS_DEPRECATED, "write_report deprecated");
 	make_op(&security_sentinel_op, AGENT_TOOL_READ_FILE_DIGEST, 8104, 0,
 		"r42align");
 	run_one(&security_sentinel_op, &security_sentinel_result,
@@ -568,12 +606,12 @@ static TEST_NOINLINE void run_recovery(void)
 	make_op(&op, AGENT_TOOL_ARTIFACT_UPDATE, 9104, AGENT_ROLE_SENTINEL,
 		"label=report;run_id=RUN-NOPE;namespace=lab-gene-x");
 	run_one(&op, &res, AGENT_STATUS_NOT_FOUND, "missing artifact target");
-	make_op(&op, AGENT_TOOL_RERUN_STAGE, 9105, AGENT_ROLE_SENTINEL,
+	make_op(&op, AGENT_TOOL_ACTION_COMMIT, 9105, AGENT_ROLE_SENTINEL,
 		"stage=align;run_id=RUN-998;project=lab-gene-x");
-	run_one(&op, &res, AGENT_STATUS_OK, "legacy rerun alias");
-	make_op(&op, AGENT_TOOL_WRITE_REPORT, 9106, AGENT_ROLE_SENTINEL,
+	run_one(&op, &res, AGENT_STATUS_OK, "canonical action commit");
+	make_op(&op, AGENT_TOOL_ARTIFACT_UPDATE, 9106, AGENT_ROLE_SENTINEL,
 		"stage=report;run_id=RUN-999;project=lab-gene-x");
-	run_one(&op, &res, AGENT_STATUS_OK, "legacy report alias");
+	run_one(&op, &res, AGENT_STATUS_OK, "canonical artifact update");
 	printf("agentsecurity_ucore: recovery action_ok=1 duplicate=1\n");
 	exit(0);
 }
@@ -1178,7 +1216,7 @@ static void run_orchestrator(void)
 	check_route_slot_reclamation();
 	check_controller_handoff();
 	check_preinit_index_query();
-	check(agent_file_meta_init() == 0, "meta init");
+	check(agent_metadata_init() == 0, "metadata init");
 	check_legacy_tool_mismatch();
 	check_legacy_param_validation();
 	set_align_failed("RUN-042", 3, "r42aerr");
@@ -1305,7 +1343,7 @@ static void run_orchestrator(void)
 	check_align_status("RUN-999", "failed");
 	check_align_status("RUN-998", "failed");
 	check_report_status("RUN-042", "failed");
-	check_report_status("RUN-999", "failed");
+	check_report_status("RUN-999", "ok");
 	pid = agent_create_role(AGENT_ROLE_RECOVERY);
 	check(pid >= 0, "create recovery");
 	if (pid == 0)
@@ -1317,6 +1355,13 @@ static void run_orchestrator(void)
 	check_align_status("RUN-042", "failed");
 	check_report_status("RUN-999", "ok");
 	check_report_status("RUN-042", "failed");
+	pid = agent_create_role(AGENT_ROLE_SENTINEL);
+	check(pid >= 0, "create metadata batch denial probe");
+	if (pid == 0)
+		run_meta_batch_denied_sentinel();
+	check(waitpid(pid, &status) == pid,
+	      "wait metadata batch denial probe");
+	check(status == 0, "metadata batch denial probe status");
 	printf("agentsecurity_ucore: wait_cancel_capability_split=1\n");
 	printf("agentsecurity_ucore: scoped_action=1\n");
 	printf("agentsecurity_ucore: scoped_artifact=1\n");
@@ -1356,7 +1401,7 @@ static void check_plain_process_denied(void)
 	      "plain provenance denied");
 	check(agent_ledger_snapshot(0) == -1, "plain ledger denied");
 	check(agent_sched_config(0) == -1, "plain sched config denied");
-	check(agent_file_meta_init() == -1, "plain meta init denied");
+	check(agent_metadata_init() == -1, "plain metadata init denied");
 	check(agent_file_meta_set(&meta) == -1, "plain meta set denied");
 	fd = open(".agentmeta", O_RDONLY);
 	check(fd == -1, "retired agentmeta bank is absent");
@@ -1426,6 +1471,7 @@ int main(int argc, char **argv)
 	printf("agentsecurity_ucore: bootstrap_orchestrator_create=1\n");
 	check(waitpid(pid, &status) == pid, "wait orchestrator");
 	check(status == 0, "orchestrator status");
+	check_plain_meta_batch_denied();
 	check_reaped_agent_slot_cleared();
 	if (exec("agentsecurity_ucore", exec_probe_argv) < 0)
 		check(0, "bootstrap exec probe");

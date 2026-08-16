@@ -10,6 +10,8 @@
 #define PRELOAD_PARTIAL_FILE "fspartial"
 #define META_SET_RETRY_LIMIT (8U * AGENT_FILE_META_MAX)
 #define VERSION_RESIDENCY_FILES 120
+#define META_BATCH_CASE_COUNT 6
+#define META_BATCH_STATUS_GUARD 0x13579bdf
 
 static struct agent_file_meta fs_meta;
 static struct agent_file_query fs_query;
@@ -18,6 +20,9 @@ static struct agent_file_hit stale_before;
 static struct agent_file_hit stale_after;
 static struct agent_op fs_op;
 static struct agent_result fs_res;
+static struct agent_file_meta fs_batch_items[AGENT_FILE_META_BATCH_MAX];
+static int fs_batch_statuses[AGENT_FILE_META_BATCH_MAX + 1];
+static struct agent_file_hit fs_batch_hits[3];
 
 struct digest_counters {
 	uint64 hits;
@@ -94,6 +99,154 @@ static void make_file(const char *name)
 	check(write(fd, body, strlen(body)) == (ssize_t)strlen(body),
 	      "write file");
 	check(close(fd) == 0, "close file");
+}
+
+static void fill_batch_meta(struct agent_file_meta *meta, int fid,
+			    const char *physical, const char *status)
+{
+	memset(meta, 0, sizeof(*meta));
+	meta->fid = fid;
+	strcpy(meta->physical_name, physical);
+	strcpy(meta->logical_path, physical);
+	strcpy(meta->project, "meta-batch");
+	strcpy(meta->workflow, "ordered-prefix");
+	strcpy(meta->run_id, "RUN-BATCH");
+	strcpy(meta->stage, "register");
+	strcpy(meta->kind, "artifact");
+	strcpy(meta->status, status);
+	strcpy(meta->summary, "batched metadata member");
+}
+
+static void query_batch_member(const char *physical, const char *status,
+			       struct agent_file_hit *hit)
+{
+	memset(&fs_query, 0, sizeof(fs_query));
+	fs_query.flags = AGENT_FILE_QUERY_USE_INDEX;
+	fs_query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(fs_query.physical_name, physical);
+	strcpy(fs_query.status, status);
+	memset(&fs_result, 0, sizeof(fs_result));
+	check(agent_file_query(&fs_query, &fs_result) == 1,
+	      "batch member query");
+	check(fs_result.used_index == 1 && fs_result.returned == 1,
+	      "batch member uses index");
+	check(fs_result.hits[0].dev != 0 && fs_result.hits[0].inum != 0 &&
+	      fs_result.hits[0].incarnation != 0,
+	      "batch member inode identity");
+	if (hit != 0)
+		*hit = fs_result.hits[0];
+}
+
+static void check_file_meta_batch_prefix(void)
+{
+	static const int expected[META_BATCH_CASE_COUNT] = {
+		AGENT_STATUS_OK,
+		AGENT_STATUS_BAD_PARAM,
+		AGENT_STATUS_OK,
+		AGENT_STATUS_CONFLICT,
+		AGENT_STATUS_NOT_FOUND,
+		AGENT_STATUS_OK,
+	};
+	static const char *const names[3] = {
+		"bmeta0", "bmeta2", "bmeta5",
+	};
+	static const char *const statuses[3] = {
+		"batch0", "batch2", "batch5",
+	};
+	static const int item_indexes[3] = { 0, 2, 5 };
+	int processed;
+
+	for (int i = 0; i < 3; i++)
+		make_file(names[i]);
+	memset(fs_batch_items, 0, sizeof(fs_batch_items));
+	fill_batch_meta(&fs_batch_items[0], 480, names[0], statuses[0]);
+	fill_batch_meta(&fs_batch_items[1], 0, "bmeta-bad", "invalid");
+	fs_batch_items[1].flags = AGENT_FILE_META_F_PERSIST;
+	fill_batch_meta(&fs_batch_items[2], 481, names[1], statuses[1]);
+	fill_batch_meta(&fs_batch_items[3], 480, names[1], "conflict");
+	strcpy(fs_batch_items[4].physical_name, "bmeta-missing");
+	fs_batch_items[4].flags = AGENT_FILE_META_F_DELETE;
+	fill_batch_meta(&fs_batch_items[5], 482, names[2], statuses[2]);
+	for (int i = 0; i <= AGENT_FILE_META_BATCH_MAX; i++)
+		fs_batch_statuses[i] = META_BATCH_STATUS_GUARD;
+
+	processed = agent_file_meta_set_batch(
+		fs_batch_items, fs_batch_statuses, META_BATCH_CASE_COUNT,
+		AGENT_FILE_META_BATCH_F_NONE);
+	check(processed == META_BATCH_CASE_COUNT, "batch processed prefix");
+	for (int i = 0; i < META_BATCH_CASE_COUNT; i++)
+		check(fs_batch_statuses[i] == expected[i],
+		      "batch ordered item status");
+	check(fs_batch_statuses[META_BATCH_CASE_COUNT] ==
+		      META_BATCH_STATUS_GUARD,
+	      "batch status guard untouched");
+	for (int i = 0; i < 3; i++)
+		query_batch_member(names[i], statuses[i], &fs_batch_hits[i]);
+	for (int i = 0; i < 3; i++)
+		check(fs_batch_hits[i].fid ==
+		      fs_batch_items[item_indexes[i]].fid,
+		      "batch member keeps requested fid");
+	printf("agentfs_ucore: meta_batch prefix=OK,BAD_PARAM,OK,CONFLICT,NOT_FOUND,OK guard=1 no_rollback=1\n");
+
+	check(agent_metadata_init() == AGENT_STATUS_OK,
+	      "same lifecycle metadata init");
+	for (int i = 0; i < 3; i++) {
+		struct agent_file_hit after;
+
+		memset(&after, 0, sizeof(after));
+		query_batch_member(names[i], statuses[i], &after);
+		check(after.fid == fs_batch_hits[i].fid &&
+		      after.dev == fs_batch_hits[i].dev &&
+		      after.inum == fs_batch_hits[i].inum &&
+		      after.incarnation == fs_batch_hits[i].incarnation,
+		      "meta init preserves batch identity");
+	}
+	printf("agentfs_ucore: meta_batch same_lifecycle_reuse=1 identity=1 indexed=1\n");
+
+	fs_batch_statuses[0] = META_BATCH_STATUS_GUARD;
+	check(agent_file_meta_set_batch(0, fs_batch_statuses, 1,
+					AGENT_FILE_META_BATCH_F_NONE) == -1,
+	      "batch null items rejected");
+	check(fs_batch_statuses[0] == META_BATCH_STATUS_GUARD,
+	      "batch null items leave status untouched");
+	make_file("bpreflight");
+	fill_batch_meta(&fs_batch_items[6], 483, "bpreflight", "preflight");
+	check(agent_file_meta_set_batch(&fs_batch_items[6], 0, 1,
+					AGENT_FILE_META_BATCH_F_NONE) == -1,
+	      "batch null statuses rejected");
+	memset(&fs_query, 0, sizeof(fs_query));
+	fs_query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(fs_query.physical_name, "bpreflight");
+	memset(&fs_result, 0, sizeof(fs_result));
+	check(agent_file_query(&fs_query, &fs_result) == 0,
+	      "status preflight prevents metadata commit");
+	check(unlink("bpreflight") == 0, "unlink status preflight file");
+	check(agent_file_meta_set_batch(fs_batch_items, fs_batch_statuses, -1,
+					AGENT_FILE_META_BATCH_F_NONE) == -1,
+	      "batch negative count rejected");
+	check(agent_file_meta_set_batch(
+		fs_batch_items, fs_batch_statuses,
+		AGENT_FILE_META_BATCH_MAX + 1,
+		AGENT_FILE_META_BATCH_F_NONE) == -1,
+	      "batch over-capacity rejected");
+	check(agent_file_meta_set_batch(fs_batch_items, fs_batch_statuses, 1,
+					1) == -1,
+	      "batch flags rejected");
+	check(agent_file_meta_set_batch(
+		fs_batch_items, (int *)&fs_batch_items[1].flags, 2,
+		AGENT_FILE_META_BATCH_F_NONE) == -1,
+	      "batch overlapping buffers rejected");
+	check(fs_batch_items[1].flags == AGENT_FILE_META_F_PERSIST,
+	      "batch overlap rejection preserves input");
+	check(agent_file_meta_set_batch(0, 0, 0,
+					AGENT_FILE_META_BATCH_F_NONE) == 0,
+	      "empty batch succeeds without buffers");
+	check(fs_batch_statuses[0] == META_BATCH_STATUS_GUARD,
+	      "invalid batches leave status untouched");
+	printf("agentfs_ucore: meta_batch invalid_args=6 empty_batch=1 status_untouched=1 status_preflight=1 overlap=1\n");
+
+	for (int i = 0; i < 3; i++)
+		check(unlink(names[i]) == 0, "unlink batch member");
 }
 
 static void version_residency_name(char *name, int index)
@@ -983,8 +1136,9 @@ static __attribute__((noinline)) void run_agent(void)
 	struct digest_counters digest_before;
 	struct digest_counters digest_after;
 
-	check(agent_file_meta_init() == AGENT_STATUS_OK,
+	check(agent_metadata_init() == AGENT_STATUS_OK,
 	      "initialize live metadata catalog");
+	check_file_meta_batch_prefix();
 	/* 在第一次显式 metadata 写入前创建两个普通文件探针。 */
 	make_file(PRELOAD_QUERY_FILE);
 	make_file(PRELOAD_PARTIAL_FILE);

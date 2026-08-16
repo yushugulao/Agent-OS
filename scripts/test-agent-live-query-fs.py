@@ -65,6 +65,85 @@ class AgentLiveQueryMutationTests(unittest.TestCase):
     def test_set_uses_volatile_commit(self) -> None:
         self.rejected("objects", "agent_metadata_catalog_edit_commit_volatile", "agent_metadata_catalog_edit_commit")
 
+    def test_batch_and_scalar_share_per_item_core(self) -> None:
+        self.rejected_in_function(
+            "objects",
+            "agent_file_meta_set_batch_execute",
+            "agent_file_meta_set_execute",
+            "agent_file_meta_set_batch_private",
+        )
+
+    def test_batch_records_are_staged_off_stack(self) -> None:
+        self.rejected(
+            "objects",
+            "staticstructagent_file_metaagent_file_meta_batch_scratch[AGENT_FILE_META_BATCH_MAX]",
+            "",
+        )
+
+    def test_batch_has_one_outer_metadata_transaction(self) -> None:
+        self.rejected_in_function(
+            "objects",
+            "agent_file_meta_set_batch_execute",
+            "agent_metadata_txn_unlock();returnprocessed;",
+            "",
+        )
+
+    def test_batch_prefix_advances_after_status_copyout(self) -> None:
+        self.rejected_in_function(
+            "objects",
+            "agent_file_meta_set_batch_execute",
+            "if(copyout(p->pagetable,statusesaddr+(uint64)i*sizeof(item_status),(char*)&item_status,sizeof(item_status))<0){processed=AGENT_STATUS_INDETERMINATE;break;}processed++;",
+            "processed++;if(copyout(p->pagetable,statusesaddr+(uint64)i*sizeof(item_status),(char*)&item_status,sizeof(item_status))<0){processed=AGENT_STATUS_INDETERMINATE;break;}",
+        )
+
+    def test_batch_rejects_overlapping_input_and_status_ranges(self) -> None:
+        self.rejected_in_function(
+            "objects",
+            "agent_file_meta_set_batch_execute",
+            "if(itemsaddr<statuses_end&&statusesaddr<items_end)return-1;",
+            "",
+        )
+
+    def test_batch_snapshot_protects_staging(self) -> None:
+        self.rejected_in_function(
+            "objects",
+            "agent_file_meta_set_batch_execute",
+            "if(proc_vm_snapshot_begin(p)<0)gotoout_txn_error;",
+            "",
+        )
+
+    def test_batch_materializes_status_cow_before_commit(self) -> None:
+        self.rejected_in_function(
+            "objects",
+            "agent_file_meta_set_batch_execute",
+            "copyout(p->pagetable,statusaddr,(char*)&preserved,sizeof(preserved))",
+            "agent_status_slot_not_materialized()",
+        )
+
+    def test_batch_post_preflight_delivery_failure_is_indeterminate(self) -> None:
+        self.rejected_in_function(
+            "objects",
+            "agent_file_meta_set_batch_execute",
+            "processed=AGENT_STATUS_INDETERMINATE;",
+            "processed=0;",
+        )
+
+    def test_batch_stops_at_fatal_item_status(self) -> None:
+        self.rejected_in_function(
+            "objects",
+            "agent_file_meta_set_batch_execute",
+            "if(stop_batch||item_status==AGENT_STATUS_INDETERMINATE)break;",
+            "",
+        )
+
+    def test_batch_uses_one_lifecycle_operation(self) -> None:
+        self.rejected_in_function(
+            "objects",
+            "sys_agent_file_meta_set_batch",
+            "workflow_lifecycle_operation_leave(lifecycle);",
+            "",
+        )
+
     def test_admission_is_not_recovery_gated(self) -> None:
         self.rejected(
             "objects",
@@ -147,6 +226,62 @@ class AgentLiveQueryMutationTests(unittest.TestCase):
         self.rejected_in_function(
             "events", "agent_live_query_typed_target_changes",
             "elseif(before_matches)", "elseif(0)",
+        )
+
+    def test_zero_watch_fast_path_precedes_process_scan(self) -> None:
+        self.rejected_in_function(
+            "events",
+            "agent_live_query_publish_transition",
+            "if(!agent_live_query_file_watches_present())return0;",
+            "",
+        )
+
+    def test_zero_watch_count_starts_empty(self) -> None:
+        self.rejected_in_function(
+            "events",
+            "agent_live_query_events_init",
+            "agent_live_query_file_watch_processes=0;",
+            "agent_live_query_file_watch_processes=1;",
+        )
+
+    def test_typed_unwatch_updates_zero_watch_count(self) -> None:
+        self.rejected_in_function(
+            "events",
+            "agent_live_query_watch_remove_typed",
+            "agent_live_query_file_watch_refresh_locked(p);",
+            "",
+        )
+
+    def test_process_reset_clears_zero_watch_count(self) -> None:
+        self.rejected_in_function(
+            "events",
+            "agent_live_query_proc_reset",
+            "agent_live_query_file_watch_clear_locked(p);",
+            "",
+        )
+
+    def test_generic_unwatch_updates_zero_watch_count(self) -> None:
+        self.rejected_in_function(
+            "ipc",
+            "agent_ipc_watch_clear",
+            "agent_live_query_file_watch_changed(p);",
+            "",
+        )
+
+    def test_generic_clear_all_preserves_typed_watch_slots(self) -> None:
+        self.rejected_in_function(
+            "ipc",
+            "agent_ipc_watch_clear",
+            "if(cold->watch_event_type[i]==AGENT_EVENT_FILE_QUERY)continue;",
+            "",
+        )
+
+    def test_generic_tool_watch_rejects_typed_file_query(self) -> None:
+        self.rejected_in_function(
+            "core",
+            "agent_execute_op",
+            "if(op->arg0>AGENT_EVENT_MAX||op->arg0==AGENT_EVENT_FILE_QUERY)",
+            "if(op->arg0>AGENT_EVENT_MAX)",
         )
 
     def test_overflow_sets_sticky_resync(self) -> None:

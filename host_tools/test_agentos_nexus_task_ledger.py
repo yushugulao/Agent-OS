@@ -62,6 +62,51 @@ class NexusTaskLedgerTests(unittest.TestCase):
                 )
         return value
 
+    def test_development_final_requires_current_build_and_three_guest_cases(self) -> None:
+        value = self.make()
+        self.root_prelude(value)
+        value._record_development_result(
+            "write_file",
+            SHA_A,
+            f"workspace_write\nrevision={SHA_A}\n",
+        )
+        self.rejected(lambda: value.freeze_provider_final(CORR1))
+        value._record_development_result(
+            "build_ucore_program",
+            SHA_A,
+            f"ucore_build\nstatus=failed\nsource_revision={SHA_A}\n",
+        )
+        self.rejected(lambda: value.freeze_provider_final(CORR1))
+        value._record_development_result(
+            "build_ucore_program",
+            SHA_A,
+            (
+                "ucore_build\nstatus=passed\n"
+                f"source_revision={SHA_A}\nbuild_id={SHA_B}\n"
+            ),
+        )
+        for case_kind in ("normal", "invalid"):
+            value._record_development_result(
+                "run_ucore_program",
+                SHA_A,
+                (
+                    "ucore_run\nstatus=passed\n"
+                    f"source_revision={SHA_A}\nbuild_id={SHA_B}\n"
+                    f"case_kind={case_kind}\n"
+                ),
+            )
+        self.rejected(lambda: value.freeze_provider_final(CORR1))
+        value._record_development_result(
+            "run_ucore_program",
+            SHA_A,
+            (
+                "ucore_run\nstatus=passed\n"
+                f"source_revision={SHA_A}\nbuild_id={SHA_B}\n"
+                "case_kind=failure\n"
+            ),
+        )
+        value.freeze_provider_final(CORR1)
+
     def event(
         self,
         *,
@@ -983,6 +1028,71 @@ class NexusTaskLedgerTests(unittest.TestCase):
         self.rejected(
             lambda: value.record_workspace_request(CORR1, **request)
         )
+
+    def test_new_workspace_correlation_starts_fresh_then_reuses_manifest(self) -> None:
+        generation = "d" * 64
+        objects = "e" * 64
+        manifest_arguments = hashlib.sha256(
+            b'{"cursor":0,"limit":8}'
+        ).hexdigest()
+        read_arguments = hashlib.sha256(
+            TOOL_SPEC["read_file"][0].encode("utf-8")
+        ).hexdigest()
+        value = self.make()
+        self.root_prelude(value)
+        self.child_success(value)
+        value.record_model_request(CORR2)
+        self.deliver(value, CORR2, "read_file")
+
+        first_manifest = dict(
+            task_id=1001,
+            tool="read_file",
+            operation="manifest",
+            attempt=1,
+            workspace_generation="",
+            arguments_sha256=manifest_arguments,
+            objects_sha256=objects,
+            manifest_cursor=0,
+        )
+        self.rejected(
+            lambda: value.record_workspace_request(
+                CORR2,
+                **{**first_manifest, "workspace_generation": generation},
+            )
+        )
+        value.record_workspace_request(CORR2, **first_manifest)
+        value.record_workspace_result(
+            CORR2,
+            task_id=1001,
+            tool="read_file",
+            operation="manifest",
+            attempt=1,
+            workspace_generation=generation,
+            arguments_sha256=manifest_arguments,
+            result_objects_sha256=objects,
+            status="ok",
+            content_bytes=128,
+            content_sha256=SHA_C,
+            manifest_cursor=0,
+            manifest_next_cursor=1,
+            manifest_eof=True,
+        )
+        value.record_workspace_request(
+            CORR2,
+            task_id=1001,
+            tool="read_file",
+            operation="read",
+            attempt=2,
+            workspace_generation=generation,
+            arguments_sha256=read_arguments,
+            objects_sha256=objects,
+            manifest_cursor=0,
+        )
+        attempts = value._tools[CORR2].workspace_attempts
+        self.assertEqual(attempts[0].request_generation, "")
+        self.assertEqual(attempts[0].result_generation, generation)
+        self.assertEqual(attempts[1].request_generation, generation)
+        self.assertEqual(attempts[1].request_objects_sha256, objects)
 
     def test_workspace_attempt_bound_covers_full_repository_paging(self) -> None:
         max_objects = 10000

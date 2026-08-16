@@ -17,9 +17,10 @@
 
 /* UTF-8 imports reserve one byte for a kernel-written trailing NUL. */
 #define AGENT_TASK_RESOURCE_UTF8_MAX      63U
+#define AGENT_TASK_RESOURCE_SNAPSHOT_SIZE 128U
 
 #define AGENT_TASK_DELEGATE_VERSION 1U
-#define AGENT_TASK_DELEGATE_DESCRIPTOR_VERSION 1U
+#define AGENT_TASK_DELEGATE_DESCRIPTOR_VERSION 2U
 
 #define AGENT_TASK_DELEGATE_F_NONE 0U
 
@@ -143,7 +144,8 @@ struct agent_task_ring_header {
  * strictly increasing for every SQ command in a channel lifetime. CANCEL is a
  * target-only command: it has its own request_id, names the target request in
  * link_request_id, and never creates a second CQE; the target has exactly one
- * terminal CQE. Consumption is unambiguous from sq_head and
+ * terminal CQE when the task reaches a deliverable terminal state. Consumption
+ * is unambiguous from sq_head and
  * last_accepted_request_id. A synchronous policy denial returns DENIED from
  * enter() with that cancel id already accepted and leaves the target running.
  * deadline_tick is nonzero exactly when HARD_DEADLINE is set; only SUBMIT
@@ -286,10 +288,8 @@ struct agent_task_channel_resource_result {
 };
 
 /*
- * A delegated task carries only immutable routing and application object ids.
- * Large input and output bytes remain in application artifacts named by the
- * capsule. Keeping this descriptor below the frozen 63-byte resource limit
- * preserves the V1 SQE/CQE and resource page layouts.
+ * The descriptor carries immutable routing, authority, workspace, budget, and
+ * Artifact bindings. Large bodies remain in sealed application Artifacts.
  */
 struct agent_task_delegate_descriptor {
 	unsigned short version;
@@ -300,10 +300,18 @@ struct agent_task_delegate_descriptor {
 	unsigned long long target_control_id;
 	unsigned long long task_id;
 	unsigned long long correlation_id;
-	unsigned int parent_task_id;
+	unsigned long long parent_task_id;
+	/* The objective Artifact may contain the task capsule used by V1 clients. */
 	unsigned int capsule_handle;
-	unsigned int flags;
-	unsigned int reserved;
+	unsigned int input_artifact_handle;
+	unsigned int result_artifact_handle;
+	unsigned int expected_result_type;
+	unsigned long long required_capabilities;
+	unsigned long long allowed_tools;
+	unsigned char workspace_revision_sha256[32];
+	unsigned int resource_budget;
+	unsigned int read_budget;
+	unsigned long long deadline_tick;
 };
 
 struct agent_task_delegate_claim {
@@ -408,14 +416,14 @@ _Static_assert(sizeof(struct agent_task_channel_resource) == 72,
 	       "Task Channel resource ABI layout");
 _Static_assert(sizeof(struct agent_task_channel_resource_result) == 80,
 	       "Task Channel resource result ABI layout");
-_Static_assert(sizeof(struct agent_task_delegate_descriptor) == 56,
+_Static_assert(sizeof(struct agent_task_delegate_descriptor) == 128,
 	       "delegated task descriptor ABI layout");
 _Static_assert(__builtin_offsetof(struct agent_task_delegate_descriptor,
 				 target_control_id) == 16,
 	       "delegated task target binding ABI offset");
 _Static_assert(sizeof(struct agent_task_delegate_claim) == 64,
 	       "delegated task claim ABI layout");
-_Static_assert(sizeof(struct agent_task_delegate_claim_result) == 128,
+_Static_assert(sizeof(struct agent_task_delegate_claim_result) == 200,
 	       "delegated task claim result ABI layout");
 _Static_assert(sizeof(struct agent_task_delegate_complete) == 96,
 	       "delegated task completion ABI layout");

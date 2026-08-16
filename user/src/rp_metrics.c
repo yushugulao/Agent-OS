@@ -131,7 +131,7 @@ int main(void)
 	if (!rp_file_contains("rp_runop", "dataset_answer:datasets:2")) return 1;
 	if (!rp_file_contains("rp_runop", "package_intake:packages:1")) return 1;
 	if (!rp_file_contains("rp_runop", "agentos_advanced_surface=kernel_bound")) return 1;
-	if (!rp_file_contains("rp_runop", "agentos_advanced_surface_detail=tool:echo,tool:read_context")) return 1;
+	if (!rp_file_contains("rp_runop", "agentos_advanced_surface_detail=tool:echo,tool:context_status")) return 1;
 	if (!rp_file_contains("rp_runop", "startup_health=quickstart:ready")) return 1;
 	if (!rp_file_contains("rp_runop", "configuration_health=settings:ready")) return 1;
 	if (!rp_file_contains("rp_runop", "platform_doctor=ready;checks=10")) return 1;

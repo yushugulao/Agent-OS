@@ -1778,7 +1778,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "runner_planned=0");
 	ok = ok && require_file_token("rp_agentcmp", "agentos_kernel=mainflow_bound;context_snapshot=1;metadata_index=1;batch_tool=1;event_queue=1;recovery_tool=1;audit_ledger=1;capability_check=1;workbench_verify=1;package_trace=1;real_task_context=1;edit_lease=1;advanced_surface_kernel=1;status=ready");
 	ok = ok && require_file_token("rp_runop", "agentos_advanced_surface=kernel_bound");
-	ok = ok && require_file_token("rp_runop", "agentos_advanced_surface_detail=tool:echo,tool:read_context");
+	ok = ok && require_file_token("rp_runop", "agentos_advanced_surface_detail=tool:echo,tool:context_status");
 	ok = ok && require_file_token("rp_agentcmp", "research_governance_checks=18");
 	ok = ok && require_file_token("rp_agentcmp", "startup_health_checks=8");
 	ok = ok && require_file_token("rp_runop", "startup_health=quickstart:ready");

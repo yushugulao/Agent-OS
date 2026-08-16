@@ -358,3 +358,7 @@
 #define SYS_agent_file_publish 566
 #define SYS_agent_task_delegate_claim 567
 #define SYS_agent_task_delegate_complete 568
+#define SYS_agent_file_meta_set_batch 569
+#define SYS_agent_runtime_control 570
+#define SYS_agent_context_artifact 571
+#define SYS_agent_context_prefetch 572

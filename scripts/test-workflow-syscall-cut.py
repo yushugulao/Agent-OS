@@ -22,6 +22,7 @@ SELF_GATED = {
     "tool_call",
     "agent_file_meta_init",
     "agent_file_meta_set",
+    "agent_file_meta_set_batch",
     "agent_file_query",
     "agent_worker_create",
     "agent_task_channel_setup",

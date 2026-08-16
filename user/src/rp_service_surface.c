@@ -426,7 +426,7 @@ static int write_agentos_surface_binding_child(void)
 	}
 	make_agentos_surface_op(&ops[0], AGENT_TOOL_ECHO, 9101,
 				"advanced-surface");
-	make_agentos_surface_op(&ops[1], AGENT_TOOL_READ_CONTEXT, 9102, "");
+	make_agentos_surface_op(&ops[1], AGENT_TOOL_CONTEXT_STATUS, 9102, "");
 	if (agent_run(ops, results, 2, 0) != 2 ||
 	    results[0].status != AGENT_STATUS_OK ||
 	    results[1].status != AGENT_STATUS_OK) {
@@ -441,7 +441,7 @@ static int write_agentos_surface_binding_child(void)
 		return 1;
 	}
 	if (!append_runop(
-		    "agentos_advanced_surface_detail=tool:echo,tool:read_context;direct_context=mirror;snapshot_records=2;status=ready")) {
+		    "agentos_advanced_surface_detail=tool:echo,tool:context_status;direct_context=mirror;snapshot_records=2;status=ready")) {
 		return 1;
 	}
 	return 0;

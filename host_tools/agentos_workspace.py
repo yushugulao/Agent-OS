@@ -1214,10 +1214,18 @@ class WorkspaceReader:
         workspace_generation: str = "",
         cursor: int = 0,
         limit: int = MAX_MANIFEST_PAGE,
+        path_prefix: str = "",
     ) -> WorkspaceOperationResult:
         try:
             generation = self._validate_generation(
                 workspace_generation, empty=cursor == 0
+            )
+            prefix = _validate_relative_path(
+                path_prefix,
+                "manifest_prefix",
+                MAX_PATH_BYTES,
+                empty=True,
+                trailing_slash=True,
             )
             if (
                 type(cursor) is not int
@@ -1240,11 +1248,15 @@ class WorkspaceReader:
                 return WorkspaceOperationResult(
                     "stale", snapshot.generation, ""
                 )
-            if cursor > len(snapshot.entries):
+            entries = tuple(
+                entry for entry in snapshot.entries
+                if not prefix or entry.path.startswith(prefix)
+            )
+            if cursor > len(entries):
                 raise _WorkspaceInputError("invalid_manifest_page")
-            visible = list(snapshot.entries[cursor : cursor + limit])
+            visible = list(entries[cursor : cursor + limit])
             projection = self._render_manifest_page(
-                cursor, visible, len(snapshot.entries)
+                cursor, visible, len(entries)
             )
             while visible and (
                 not self._manifest_projection_fits(projection)
@@ -1252,12 +1264,12 @@ class WorkspaceReader:
             ):
                 visible.pop()
                 projection = self._render_manifest_page(
-                    cursor, visible, len(snapshot.entries)
+                    cursor, visible, len(entries)
                 )
             if (
                 not self._manifest_projection_fits(projection)
                 or not self._search_arguments_fit(visible)
-                or (cursor < len(snapshot.entries) and not visible)
+                or (cursor < len(entries) and not visible)
             ):
                 raise _WorkspaceInputError("manifest_entry_too_large")
             return WorkspaceOperationResult("ok", snapshot.generation, projection)

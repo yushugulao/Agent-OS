@@ -5,14 +5,18 @@
 #include "riscv.h"
 #include "types.h"
 #include "../include/agent_execution_contract_abi.h"
+#include "../include/agent_context_artifact_abi.h"
+#include "../include/agent_context_prefetch_abi.h"
 #include "../include/agent_file_publish_abi.h"
 #include "../include/agent_task_channel_abi.h"
 #include "../include/agent_lifecycle_abi.h"
+#include "../include/agent_multiagent_abi.h"
 #include "../include/agent_performance_abi.h"
 #include "../include/agent_provenance_abi.h"
 #include "../include/agent_resource_abi.h"
 #include "../include/agent_tool_abi.h"
 #include "../include/agent_workflow_fence_abi.h"
+#include "../include/agent_workspace_mutation_abi.h"
 
 #define AGENT_TYPE_NONE  0
 #define AGENT_TYPE_AGENT 1
@@ -186,6 +190,8 @@
 #define AGENT_FILE_META_UPDATE_ALL        0x3ffULL
 
 #define AGENT_FILE_META_MAX       512
+#define AGENT_FILE_META_BATCH_MAX 16
+#define AGENT_FILE_META_BATCH_F_NONE 0
 #define AGENT_FILE_SYSTEM_LIMIT   64
 #define AGENT_FILE_SCOPE_LIMIT    112
 #define AGENT_FILE_ORDINARY_LIMIT \
@@ -247,7 +253,8 @@
 #define AGENT_EVENT_DASHBOARD_EXPORT 8
 #define AGENT_EVENT_CANCELLED     9
 #define AGENT_EVENT_FILE_QUERY   10
-#define AGENT_EVENT_MAX           AGENT_EVENT_FILE_QUERY
+#define AGENT_EVENT_PREFETCH_HINT 11
+#define AGENT_EVENT_MAX           AGENT_EVENT_PREFETCH_HINT
 
 #define AGENT_FILE_LIVE_WATCH_VERSION 1U
 #define AGENT_FILE_LIVE_WATCH_F_RESYNC_REQUIRED (1U << 0)
@@ -292,6 +299,9 @@
 #define AGENT_CAP_WAIT_CANCEL   (1ULL << 11)
 #define AGENT_CAP_ROUTE_MANAGE  (1ULL << 12)
 #define AGENT_CAP_TASK_ACCEPT   (1ULL << 13)
+#define AGENT_CAP_WORKSPACE_WRITE (1ULL << 14)
+#define AGENT_CAP_PREFETCH        (1ULL << 15)
+#define AGENT_CAP_KNOWN_ALL ((1ULL << 16) - 1ULL)
 #define AGENT_CAP_RECOVER_STAGE AGENT_CAP_ACTION_WRITE
 #define AGENT_CAP_REPORT_WRITE  AGENT_CAP_ARTIFACT_WRITE
 #define AGENT_CAP_DEPENDENCY_UPDATE AGENT_CAP_META_WRITE
@@ -848,6 +858,8 @@ int sys_agent_heartbeat_stop(void);
 int sys_agent_wake(int pid, uint64 eventaddr);
 int sys_agent_file_meta_init(void);
 int sys_agent_file_meta_set(uint64 metaaddr);
+int sys_agent_file_meta_set_batch(uint64 itemsaddr, uint64 statusesaddr,
+				  int count, uint64 flags);
 int sys_agent_file_query(uint64 queryaddr, uint64 resultaddr);
 int sys_agent_file_edit_begin(uint64 pathaddr, uint64 flags, int ttl_ticks,
 			      uint64 stateaddr);
@@ -857,6 +869,25 @@ int sys_agent_file_edit_abort(uint64 lease_id);
 int sys_agent_file_edit_state(uint64 pathaddr, uint64 stateaddr);
 int sys_agent_file_publish(uint64 requestaddr);
 int sys_agent_worker_create(uint64 pathaddr, uint64 requested_caps);
+int sys_agent_runtime_control(uint64 configaddr, uint64 resultaddr);
+int sys_agent_context_artifact(uint64 controladdr, uint64 resultaddr);
+void agent_context_artifact_init(void);
+void agent_context_artifact_proc_reset(struct proc *);
+void agent_context_artifact_rollback(struct proc *, uint64);
+void agent_context_artifact_reclaim_lifecycle(
+	struct workflow_lifecycle_key);
+int agent_context_artifact_task_result_valid(
+	struct proc *, uint64, uint64, uint,
+	struct workflow_lifecycle_key);
+int agent_context_artifact_task_input_valid(
+	struct proc *, uint64, struct workflow_lifecycle_key);
+int sys_agent_context_prefetch(uint64, uint64);
+void agent_context_prefetch_init(void);
+void agent_context_prefetch_proc_reset(struct proc *);
+void agent_context_prefetch_rollback(struct proc *);
+void agent_context_prefetch_reclaim_lifecycle(
+	struct workflow_lifecycle_key);
+void agent_context_prefetch_background_maintain(struct proc *);
 int sys_agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 			   int operation);
 #endif

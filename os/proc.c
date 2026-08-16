@@ -3406,6 +3406,7 @@ static int fork_child_validate_issuer_stack(struct proc *child,
 
 static int fork_common(int make_agent, int agent_role,
 		       struct inode *delegated_image, uint64 delegated_caps,
+		       const struct agent_runtime_config *runtime_config,
 		       enum proc_admission admission,
 		       enum vfs_spawn_scope_mode scope_mode)
 {
@@ -3528,6 +3529,27 @@ static int fork_common(int make_agent, int agent_role,
 		freeproc(np);
 		goto fail;
 	}
+	if (make_agent && runtime_config != 0) {
+		np->agent_capability_mask = runtime_config->capabilities;
+		np->agent_tool_grant_mask = runtime_config->allowed_tools;
+		np->agent_prompt_artifact_handle =
+			runtime_config->prompt_artifact_handle;
+		np->agent_sched_budget = runtime_config->resource_budget != 0 ?
+			runtime_config->resource_budget : AGENT_SCHED_DEFAULT_BUDGET;
+		np->agent_artifact_count_limit =
+			runtime_config->artifact_count_limit != 0 ?
+			runtime_config->artifact_count_limit : 32U;
+		np->agent_artifact_bytes_limit =
+			runtime_config->artifact_bytes_limit != 0 ?
+			runtime_config->artifact_bytes_limit : 256U * 1024U;
+		np->agent_artifact_read_limit =
+			runtime_config->artifact_read_limit != 0 ?
+			runtime_config->artifact_read_limit : 1024U * 1024U;
+		np->agent_summary_high_watermark =
+			runtime_config->summary_high_watermark != 0 ?
+			runtime_config->summary_high_watermark : 96U;
+		vfs_proc_limit_capabilities(np, runtime_config->capabilities);
+	}
 	// 最终发布在局部关中断边界内串行并复核生命周期门；已标记退出的子进程，
 	// 或 scope 不再 ACTIVE 的待定凭据，均不得变为可运行。
 	publish_enabled = intr_save();
@@ -3570,7 +3592,7 @@ fail:
 
 int fork()
 {
-	return fork_common(0, AGENT_ROLE_SENTINEL, 0, 0,
+	return fork_common(0, AGENT_ROLE_SENTINEL, 0, 0, 0,
 			   PROC_ADMIT_NORMAL, VFS_SPAWN_SCOPE_DROP);
 }
 
@@ -3585,7 +3607,7 @@ int agent_create_role_proc(int role)
 
 	if (status != AGENT_STATUS_OK)
 		return status;
-	return fork_common(1, role, 0, 0, PROC_ADMIT_AGENT,
+	return fork_common(1, role, 0, 0, 0, PROC_ADMIT_AGENT,
 			   VFS_SPAWN_SCOPE_INHERIT);
 }
 
@@ -3600,7 +3622,7 @@ int agent_workflow_create_proc(int role)
 	if (p == 0 || p->is_agent || !p->resource_domain_admin ||
 	    !exec_policy_process_bootstrap(p))
 		return AGENT_STATUS_DENIED;
-	return fork_common(1, role, 0, 0, PROC_ADMIT_WORKFLOW,
+	return fork_common(1, role, 0, 0, 0, PROC_ADMIT_WORKFLOW,
 			   VFS_SPAWN_SCOPE_FRESH);
 }
 
@@ -3627,10 +3649,18 @@ int agent_worker_create_proc(char *path, uint64 requested_caps)
 		iput(ip);
 		return -1;
 	}
-	pid = fork_common(0, AGENT_ROLE_SENTINEL, ip, requested_caps,
+	pid = fork_common(0, AGENT_ROLE_SENTINEL, ip, requested_caps, 0,
 			  PROC_ADMIT_WORKER, VFS_SPAWN_SCOPE_DROP);
 	iput(ip);
 	return pid;
+}
+
+int agent_runtime_create_proc(const struct agent_runtime_config *config)
+{
+	if (config == 0)
+		return -1;
+	return fork_common(1, AGENT_ROLE_ORCHESTRATOR, 0, 0, config,
+			   PROC_ADMIT_AGENT, VFS_SPAWN_SCOPE_INHERIT);
 }
 
 int push_argv_image(pagetable_t pagetable, uint64 stack_base,

@@ -1801,6 +1801,8 @@ sys_context_rollback(uint64 sequence)
 	    agent_context_write_header_locked(p) < 0)
 		panic("Agent context rollback publish");
 	agent_context_publish_end(p);
+	agent_context_artifact_rollback(p, sequence);
+	agent_context_prefetch_rollback(p);
 	result = 0;
 out:
 	agent_lifecycle_context_lane_leave(p);
@@ -1853,6 +1855,8 @@ sys_context_clear(void)
 	    agent_context_write_header_locked(p) < 0)
 		panic("Agent context clear publish");
 	agent_context_publish_end(p);
+	agent_context_artifact_proc_reset(p);
+	agent_context_prefetch_proc_reset(p);
 	result = 0;
 out:
 	agent_lifecycle_context_lane_leave(p);

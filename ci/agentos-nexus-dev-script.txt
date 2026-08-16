@@ -1,0 +1,3 @@
+/tools
+请在 `user/src/nexus_calculator_ucore.c` 开发一个简易整数计算器。程序从标准输入读取“整数 运算符 整数”，支持加、减、乘、除；对语法错误给出明确提示，对除零单独报错。先且只用一次 read_file 阅读 `user/src/ch2b_hello_world.c`，随后直接创建程序；不要继续搜索工作区。uCore 用户态输入仅使用 getchar，不使用 fgets 或 sscanf。编译失败时分析诊断并用 apply_patch 修补。你需要根据实现制定正常输入、无效输入和关键失败路径三类测试，并在同一个最新 build 上分别调用真实 AgentOS-uCore Guest 运行测试。把工具预算优先用于写入、编译和三次运行；只有三类测试全部通过后，才能总结实现与证据。
+/quit

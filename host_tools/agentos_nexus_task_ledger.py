@@ -51,21 +51,40 @@ TASK_TOOL_ROLES: Final[Mapping[str, str]] = {
     "search_files": "research",
     "read_file": "research",
     "inspect_system": "system",
+    "write_file": "research",
+    "apply_patch": "research",
+    "build_ucore_program": "research",
+    "run_ucore_program": "research",
 }
 TASK_ARTIFACT_PROVENANCE: Final[Mapping[str, int]] = {
     "search_files": 60,
     "read_file": 60,
     "inspect_system": 53,
+    "write_file": 60,
+    "apply_patch": 60,
+    "build_ucore_program": 60,
+    "run_ucore_program": 60,
 }
 TOOL_PROVENANCE: Final[Mapping[str, int]] = {
     "search_files": 60,
     "read_file": 60,
     "inspect_system": 53,
+    "write_file": 60,
+    "apply_patch": 60,
+    "build_ucore_program": 60,
+    "run_ucore_program": 60,
 }
-WORKSPACE_TOOLS: Final = frozenset(("search_files", "read_file"))
+DEVELOPMENT_TOOLS: Final = frozenset(
+    ("write_file", "apply_patch", "build_ucore_program", "run_ucore_program")
+)
+WORKSPACE_TOOLS: Final = frozenset(("search_files", "read_file", *DEVELOPMENT_TOOLS))
 WORKSPACE_OPERATIONS: Final[Mapping[str, frozenset[str]]] = {
     "search_files": frozenset(("manifest", "search")),
     "read_file": frozenset(("manifest", "read")),
+    "write_file": frozenset(("write",)),
+    "apply_patch": frozenset(("patch",)),
+    "build_ucore_program": frozenset(("build",)),
+    "run_ucore_program": frozenset(("run",)),
 }
 WORKSPACE_RESULT_STATUSES: Final = frozenset(("ok", "stale", "error"))
 # Three complete 10k-object scans fit even when bounded manifests shrink to
@@ -100,6 +119,8 @@ TASK_STATES: Final = frozenset(
 
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}\Z")
 _TOOL_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
+_PROGRAM_PATH_RE = re.compile(r"user/src/nexus_[a-z][a-z0-9_]{0,31}_ucore\.c\Z")
+_TARGET_RE = re.compile(r"nexus_[a-z][a-z0-9_]{0,31}_ucore\Z")
 _SESSION_BLOCK_SUMMARY = "worker_not_quiescent;session_blocked=1"
 _SESSION_BLOCK_SUMMARY_SHA256 = hashlib.sha256(
     _SESSION_BLOCK_SUMMARY.encode("utf-8")
@@ -543,6 +564,14 @@ def _fixed(fields: Sequence[str], values: Mapping[str, object]) -> dict[str, obj
     return {field: values[field] for field in fields}
 
 
+def _projection_field(content: str, name: str) -> str:
+    prefix = f"{name}="
+    for line in content.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix) :]
+    return ""
+
+
 def _json_object(text: str, *, code: str) -> dict[str, object]:
     """Parse one JSON object while rejecting duplicate keys and non-finite data."""
 
@@ -653,6 +682,89 @@ def _tool_argument_binding(
                 "inspect_system arguments are malformed", code="BAD_TOOL_EVENT"
             )
         binding = {"tool": tool, "operation": arguments["operation"]}
+    elif tool in ("write_file", "apply_patch"):
+        body_name = "content" if tool == "write_file" else "patch"
+        if keys != {"path", body_name, "expected_revision"}:
+            raise NexusTaskLedgerError(
+                f"{tool} arguments are malformed", code="BAD_TOOL_EVENT"
+            )
+        path = _argument_text(arguments["path"], "path", maximum=64)
+        body = _argument_text(
+            arguments[body_name], body_name, maximum=2400, empty=True
+        )
+        revision = _argument_text(
+            arguments["expected_revision"], "expected_revision", maximum=64
+        )
+        if (
+            _PROGRAM_PATH_RE.fullmatch(path) is None
+            or (revision != "missing" and _DIGEST_RE.fullmatch(revision) is None)
+        ):
+            raise NexusTaskLedgerError(
+                f"{tool} arguments are outside policy", code="BAD_TOOL_EVENT"
+            )
+        binding = {
+            "tool": tool,
+            "path": path,
+            f"{body_name}_sha256": hashlib.sha256(body.encode()).hexdigest(),
+            "expected_revision": revision,
+        }
+    elif tool == "build_ucore_program":
+        if keys != {"source_path", "target"}:
+            raise NexusTaskLedgerError(
+                "build_ucore_program arguments are malformed", code="BAD_TOOL_EVENT"
+            )
+        source_path = _argument_text(
+            arguments["source_path"], "source_path", maximum=64
+        )
+        target = _argument_text(arguments["target"], "target", maximum=48)
+        if (
+            _PROGRAM_PATH_RE.fullmatch(source_path) is None
+            or _TARGET_RE.fullmatch(target) is None
+            or source_path.rsplit("/", 1)[-1][:-2] != target
+        ):
+            raise NexusTaskLedgerError(
+                "build_ucore_program target is outside policy",
+                code="BAD_TOOL_EVENT",
+            )
+        binding = {"tool": tool, "source_path": source_path, "target": target}
+    elif tool == "run_ucore_program":
+        if keys != {
+            "build_id",
+            "stdin",
+            "expected_output",
+            "expected_exit",
+            "case_kind",
+        }:
+            raise NexusTaskLedgerError(
+                "run_ucore_program arguments are malformed", code="BAD_TOOL_EVENT"
+            )
+        build_id = _argument_text(arguments["build_id"], "build_id", maximum=64)
+        stdin = _argument_text(arguments["stdin"], "stdin", maximum=512, empty=True)
+        expected_output = _argument_text(
+            arguments["expected_output"], "expected_output", maximum=512, empty=True
+        )
+        expected_exit = _integer(
+            arguments["expected_exit"], "expected_exit", minimum=0, maximum=255,
+            code="BAD_TOOL_EVENT",
+        )
+        case_kind = _argument_text(
+            arguments["case_kind"], "case_kind", maximum=7
+        )
+        if _DIGEST_RE.fullmatch(build_id) is None or case_kind not in (
+            "normal", "invalid", "failure"
+        ):
+            raise NexusTaskLedgerError(
+                "run_ucore_program arguments are outside policy",
+                code="BAD_TOOL_EVENT",
+            )
+        binding = {
+            "tool": tool,
+            "build_id": build_id,
+            "stdin_sha256": hashlib.sha256(stdin.encode()).hexdigest(),
+            "expected_output_sha256": hashlib.sha256(expected_output.encode()).hexdigest(),
+            "expected_exit": expected_exit,
+            "case_kind": case_kind,
+        }
     else:
         raise NexusTaskLedgerError(
             "tool is outside the Nexus contract", code="BAD_TOOL_EVENT"
@@ -998,6 +1110,7 @@ class NexusTaskLedger:
                 code="BAD_WORKSPACE_EVENT",
             )
 
+        direct_operation = name in DEVELOPMENT_TOOLS
         if record.workspace_attempts:
             previous = record.workspace_attempts[-1]
             if not previous.status:
@@ -1062,13 +1175,19 @@ class NexusTaskLedger:
                         "workspace manifest cursor skipped or repeated a page",
                         code="BAD_WORKSPACE_EVENT",
                     )
+        elif direct_operation:
+            if generation or cursor != 0:
+                raise NexusTaskLedgerError(
+                    "development exchange did not start with explicit arguments",
+                    code="BAD_WORKSPACE_EVENT",
+                )
         elif op != "manifest" or generation or cursor != 0:
             raise NexusTaskLedgerError(
                 "workspace exchange did not start with a fresh manifest",
                 code="BAD_WORKSPACE_EVENT",
             )
 
-        if op != "manifest":
+        if op != "manifest" and not direct_operation:
             manifests = [
                 item for item in record.workspace_attempts
                 if item.operation == "manifest" and item.status == "ok"
@@ -1338,7 +1457,72 @@ class NexusTaskLedger:
         pending.content_bytes = size
         pending.content_sha256 = digest
         pending.result_sha256 = result_root
+        if name in DEVELOPMENT_TOOLS and outcome == "ok":
+            if content is None:
+                raise NexusTaskLedgerError(
+                    "development result lacks its bounded projection",
+                    code="BAD_WORKSPACE_EVENT",
+                )
+            self._record_development_result(name, generation, content)
         return result_root
+
+    def _record_development_result(
+        self, tool: str, source_revision: str, content: str
+    ) -> None:
+        """Advance the fail-closed development-evidence state."""
+
+        if content.startswith("development_error\n"):
+            self._development_required = True
+            return
+        if tool in ("write_file", "apply_patch"):
+            if _projection_field(content, "revision") != source_revision:
+                raise NexusTaskLedgerError(
+                    "workspace mutation revision is not self-consistent",
+                    code="BAD_WORKSPACE_EVENT",
+                )
+            self._development_required = True
+            self._development_source_revision = source_revision
+            self._development_build_id = ""
+            self._development_case_kinds.clear()
+            return
+        if tool == "build_ucore_program":
+            self._development_required = True
+            if _projection_field(content, "status") == "failed":
+                self._development_build_id = ""
+                self._development_case_kinds.clear()
+                return
+            build_id = _projection_field(content, "build_id")
+            projected_revision = _projection_field(content, "source_revision")
+            if (
+                _projection_field(content, "status") != "passed"
+                or _DIGEST_RE.fullmatch(build_id) is None
+                or projected_revision != source_revision
+            ):
+                raise NexusTaskLedgerError(
+                    "successful build result lacks its source/build binding",
+                    code="BAD_WORKSPACE_EVENT",
+                )
+            self._development_source_revision = source_revision
+            self._development_build_id = build_id
+            self._development_case_kinds.clear()
+            return
+        self._development_required = True
+        if _projection_field(content, "status") == "failed":
+            return
+        build_id = _projection_field(content, "build_id")
+        projected_revision = _projection_field(content, "source_revision")
+        case_kind = _projection_field(content, "case_kind")
+        if (
+            _projection_field(content, "status") != "passed"
+            or build_id != self._development_build_id
+            or projected_revision != self._development_source_revision
+            or case_kind not in ("normal", "invalid", "failure")
+        ):
+            raise NexusTaskLedgerError(
+                "successful run is not bound to the current build",
+                code="BAD_WORKSPACE_EVENT",
+            )
+        self._development_case_kinds.add(case_kind)
 
     def workspace_source_sha256(self, corr_id: object) -> str:
         """Return the Guest-compatible source root for accepted workspace pages."""
@@ -1691,6 +1875,14 @@ class NexusTaskLedger:
         if not self._children_complete():
             raise NexusTaskLedgerError(
                 "provider final preceded child Task completion", code="BAD_TURN"
+            )
+        if self._development_required and (
+            not self._development_build_id
+            or self._development_case_kinds != {"normal", "invalid", "failure"}
+        ):
+            raise NexusTaskLedgerError(
+                "development final lacks a successful current build and three Guest cases",
+                code="BAD_TURN",
             )
         request.response_outcome = "final"
         self._provider_final_frozen = True
@@ -2067,6 +2259,10 @@ class NexusTaskLedger:
         self._sealed = False
         self._task_root_sha256 = ""
         self._artifact_root_sha256 = ""
+        self._development_required = False
+        self._development_source_revision = ""
+        self._development_build_id = ""
+        self._development_case_kinds: set[str] = set()
 
     def _require_active(self, *, code: str) -> None:
         if not self.active:
@@ -2837,7 +3033,7 @@ class NexusTaskLedger:
                 "Coordinator artifact acceptance did not follow its Task Channel CQE"
             )
         workspace = self._workspace_content(tool)
-        if tool.tool == "read_file":
+        if tool.tool == "read_file" or tool.tool in DEVELOPMENT_TOOLS:
             if workspace is None or (
                 resource != workspace.content_bytes
                 or not hmac.compare_digest(digest, workspace.content_sha256)
@@ -2855,7 +3051,15 @@ class NexusTaskLedger:
 
     @staticmethod
     def _workspace_content(tool: _ToolRecord) -> _WorkspaceAttempt | None:
-        target = "search" if tool.tool == "search_files" else "read"
+        targets = {
+            "search_files": "search",
+            "read_file": "read",
+            "write_file": "write",
+            "apply_patch": "patch",
+            "build_ucore_program": "build",
+            "run_ucore_program": "run",
+        }
+        target = targets.get(tool.tool, "")
         for attempt in reversed(tool.workspace_attempts):
             if attempt.status == "stale":
                 break
@@ -2869,6 +3073,8 @@ class NexusTaskLedger:
             return False
         if tool.workspace_attempts[-1].status != "ok":
             return False
+        if tool.tool in DEVELOPMENT_TOOLS:
+            return NexusTaskLedger._workspace_content(tool) is not None
         if tool.tool == "read_file":
             return NexusTaskLedger._workspace_content(tool) is not None
         final = tool.workspace_attempts[-1]

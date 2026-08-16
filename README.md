@@ -30,7 +30,7 @@
 
 内核用生命周期键 `{id, generation}` 区分每次运行。创建 Agent 时，系统会分配角色、能力位和文件访问范围。Context 记录每一步的起因、调用跨度、分支和 provenance（来源追溯）。Execution Contract 列出工具、前置任务、输入指纹、截止时间和资源上限。Live Query 借助 Metadata Catalog 与 Typed Watch，及时报告文件集合变化。Workflow Credit Domain 和工作流调度器分别管理跨进程资源与 CPU 时间。Agent Live 控制台和 Nexus 把这些功能组合成可在 QEMU RISC-V64 Guest（客户机）中直接运行的应用。
 
-性能测量共完成 30 次独立的 QEMU 启动，保存 33 份原始输出、19 个 CSV 数据表和 7,498 条结构化记录。在 96 条文件记录上的 16 组配对测试中，索引查询的核心阶段每次都快于逐项扫描，中位加速比为 3.118 倍；完整流程中索引路径仅在 3/16 组配对中更快，其耗时减去遍历路径的中位差值为 +13.452 毫秒。504 次工作流唤醒从进入可运行状态到真正获得 CPU，等待时间均为 `0–1 tick`。
+最新一轮 Live Query 性能测量完成了 16 次独立的 QEMU 启动。在 96 条文件记录和 4 次发现查询的配对负载中，索引复用路径的核心阶段与完整流程均为 16/16 组更快；两条路径的核心阶段中位耗时相除为 6.216 倍，索引复用减遍历查询的完整流程配对中位差值为 -89.782 毫秒。另有 504 次工作流唤醒从进入可运行状态到真正获得 CPU，等待时间均为 `0–1 tick`。
 
 ### 1.3 系统能力概览
 
@@ -170,7 +170,7 @@ AgentOS-uCore 的总体架构如图 2 所示。系统沿一次 Agent 任务的�
 | **模块** | **关键机制** | **产品能力** |
 | --- | --- | --- |
 | Agent identity 与 Context | 可信映像、角色、能力位、文件访问范围、生命周期 generation、7 页 Context | 受控创建 Agent，记录每一步的起因、调用跨度、分支和 provenance |
-| Structured Tool | 26 项 Tool Registry、V2/V3、批处理、Task Channel（SQ/CQ） | 工具生效前检查请求，并按任务特点选择调用方式 |
+| Structured Tool | 33 项 Tool Registry、V2/V3、批处理、动态 Task Channel（SQ/CQ） | 工具生效前检查请求，并按 Agent 配置选择调用方式 |
 | Live Query | Metadata Catalog、三类等值索引、Typed Watch、重新同步 | 按业务状态查找文件，并根据文件集合变化触发后续工作 |
 | Workflow Runtime | 事件队列、可信 IPC、心跳、Workflow Credit Domain、工作流调度 | 让 Agent 进入睡眠并等待事件，按工作流管理资源与 CPU 时间 |
 | Workflow Fence | 工作流记录环、Context commit lane、Workflow Fence | 汇总 terminal record、metadata generation 和资源用量，并返回回执 |
@@ -181,7 +181,7 @@ AgentOS-uCore 的总体架构如图 2 所示。系统沿一次 Agent 任务的�
 
 ### 3.1 Agent 进程创建与地址空间设计
 
-可信引导进程创建工作流根进程，内核为这次运行分配新的 VFS 文件访问范围、Workflow Credit Domain 和生命周期 generation。同一工作流中，具有 `AGENT_CAP_ORCHESTRATE` 能力位的 Agent 可以创建工作进程。工作进程申请的能力位不能为空，只能从 `AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE` 中选择，而且不能超出调用者已有的能力。内核还会检查目标映像的 VFS 执行权限和可信策略。普通进程继续沿 uCore 原有的创建路径运行，只有经过受控入口和可信映像校验的进程才会取得 Agent identity。
+可信引导进程创建工作流根进程，内核为这次运行分配新的 VFS 文件访问范围、Workflow Credit Domain 和生命周期 generation。同一工作流中，具有 `AGENT_CAP_ORCHESTRATE` 能力位的 Agent 可以通过通用运行时配置创建子 Agent。配置写入 capability、允许工具位图、提示词 Artifact、资源额度、Artifact 数量与字节额度以及摘要高水位；子 Agent 取得的权限和工具必须分别是父 Agent 与用户 workflow policy 的子集。内核还会检查目标映像的 VFS 执行权限和可信策略。普通进程继续沿 uCore 原有的创建路径运行，只有经过受控入口和可信映像校验的进程才会取得 Agent identity。
 
 ```text
 agent_workflow_create()
@@ -195,6 +195,11 @@ agent_worker_create(image, capabilities)
     -> namei_scope_status() + vfs_inode_authorize()
     -> agent_worker_create_proc()
     -> fork_common(... PROC_ADMIT_WORKER, VFS_SPAWN_SCOPE_DROP)
+
+agent_runtime_control(SPAWN, config)
+    -> 核对父 Agent 的 ORCHESTRATE capability
+    -> 检查 capability、allowed_tools 与 workflow policy 的包含关系
+    -> 为通用 Agent Loop 建立独立配额和提示词 Artifact 绑定
 ```
 
 Agent 的低频控制状态放在 PCB 与生命周期记录中，高频读取的数据则放在单独的 Agent Context 区。每个 Agent 固定映射 7 页 Context：前 6 页由内核写入并向用户态只读开放，最后 1 页留给 Guest 程序缓存查询结果等派生数据。记录区固定保存 128 条记录，每条记录包含序号、起因、调用跨度、分支、工具、状态和 provenance label。读取快照时，程序比较发布序号，发现并发 commit 便重新读取。回滚只移动当前分支的可见头，不撤销已经发生的文件或工具副作用。工具、文件和 IPC 统一通过同一条 Context commit lane 写入结果。
@@ -203,7 +208,9 @@ Agent 的低频控制状态放在 PCB 与生命周期记录中，高频读取的
 
 ### 3.2 Agent-OS 内核结构化交互接口与工具调用协议
 
-Agent-OS 内核结构化交互接口以工具调用协议接收工具编号和 typed 参数，并返回状态码与结构化结果。自然语言和整段 Shell 命令留在 Guest Runtime 中处理。Tool Registry 为每项工具登记名称、编号、参数 schema、所需能力位和副作用掩码。V2 请求最多带 8 个带类型信息的参数。V3 在 V2 的基础上增加 Execution Contract generation、节点、尝试次数、schema digest、输入指纹、来源 Context 和 artifact 类型。每份 Execution Contract 最多包含 24 个节点，每个节点最多尝试 4 次。
+Agent-OS 内核结构化交互接口以工具调用协议接收工具编号和 typed 参数，并返回状态码与结构化结果。自然语言和整段 Shell 命令留在 Guest Runtime 中处理。Tool Registry 为每项工具登记名称、编号、参数 schema、所需能力位和副作用掩码。当前 33 项登记分为 20 项可调用工具、3 项 syscall-only 工具、3 项废弃兼容项和 7 项 Host broker 工具。`rerun_stage`、`write_report` 与旧 `ctx_stat` 会返回 `DEPRECATED`；Context 状态、Heartbeat 配置和 Metadata 初始化分别统一为 `context_status`、`heartbeat_configure` 与 `metadata_init`。7 项 brokered 工具包括工作区搜索、revision 绑定读取、Guest 状态观察、版本化写入、补丁、隔离构建和独立 Guest 运行。V2 请求最多带 8 个带类型信息的参数。V3 在 V2 的基础上增加 Execution Contract generation、节点、尝试次数、schema digest、输入指纹、来源 Context 和 Artifact 类型。每份 Execution Contract 最多包含 24 个节点，每个节点最多尝试 4 次。
+
+`apply_patch` 与 `write_file` 使用两个独立工具编号，并共享版本化工作区变更描述符。请求绑定 workflow lifecycle、Host manifest object、预期 revision、目标路径和包含内容的 Guest artifact；工具还要求 `AGENT_CAP_WORKSPACE_WRITE`。普通 V2/V3 执行返回 `BROKER_REQUIRED`，具体修改由 Nexus Host broker 在会话 root 中完成。broker 只接受 `user/src/nexus_*_ucore.c`，逐次核对 SHA-256 revision，再用同目录临时文件、`fsync` 和原子替换提交内容。写入 receipt 带回旧 revision、新 revision、字节数和提交状态。
 
 ```text
 tool_call_v3()
@@ -220,7 +227,7 @@ tool_call_v3()
 
 批处理一次可同步提交 64 项操作。Task Channel 使用 16 槽 SQ/CQ，SQ 和 CQ 各占一页并映射给 Guest；请求状态和资源状态另占两页，只由内核访问。`request_id`、ring generation 和 slot generation 共同判断队列是否已经复用。任务完成结算时至多产生一条 terminal CQE，取消命令不会再产生第二个 CQE。CQ 写满后，内核暂停 commit；协议错误会进入持续重新同步状态，直到新 generation 建立并显式重置。
 
-在初赛的设计中，跨 Agent 委派复用普通 `MESSAGE` 传递固定的 N1 typed Task 状态和 capsule handle，任务 objective 与正文已经存放在 capsule artifact 中。用户态能够核对 task/correlation 和状态迁移，领取、完成、取消及迟到结果的终态裁决仍由 Coordinator 自行维护。加入 deadline 与取消后，完成消息和取消消息可能交错到达，内核也无法据此提供统一的 claim 时点和单次终态交付。为此，我们把 Nexus 接入并扩展已有的内核 Task Channel，再引入独立的 Task resource：它可以从当前进程可读的普通文件导入 1–63 字节 UTF-8，或导入准确的 56 字节 `AGENT_ARTIFACT_TASK` 不可变描述符，同时绑定该 Agent 最新的有效 Context。描述符保存目标身份、task type、task/correlation/parent 编号和 capsule handle；具有 `AGENT_CAP_TASK_ACCEPT` 且取得 TASK route 的目标 Agent 通过 `agent_task_delegate_claim()` 领取任务，完成后调用 `agent_task_delegate_complete()`。任务结算时，发起者至多取得一条 terminal CQE，大段输入与结果继续留在 Guest artifact 中。内核分别拒绝 self delegation 和活动端点交叉担任 owner/target，并限制每个 issuer 同时只有一个未结算委派，这三项约束共同维持二分无环的活动委派关系。
+在初赛的设计中，跨 Agent 委派复用普通 `MESSAGE` 传递固定的 N1 typed Task 状态和 capsule handle，任务 objective 与正文已经存放在 capsule Artifact 中。用户态能够核对 task/correlation 和状态迁移，领取、完成、取消及迟到结果的终态裁决仍由编排程序自行维护。加入 deadline、并行子任务与取消后，完成消息和取消消息可能交错到达，内核也无法据此提供统一的 claim 时点和单次终态交付。为此，我们把 Nexus 接入并扩展已有的内核 Task Channel，再引入独立的 Task resource：它可以从当前进程可读的普通文件导入 1–63 字节 UTF-8，或导入准确的 128 字节 `AGENT_ARTIFACT_TASK` 动态描述符，同时绑定该 Agent 最新的有效 Context。描述符保存 parent task、目标描述 Artifact、输入 Artifact、所需 capability、允许工具、workspace revision、资源预算、deadline 和预期结果类型。具有 `AGENT_CAP_TASK_ACCEPT` 且取得 TASK route 的目标 Agent 通过 `agent_task_delegate_claim()` 领取任务，封存结果 Artifact 后调用 `agent_task_delegate_complete()`。任务完成结算时，发起者至多取得一条 terminal CQE，大段输入与结果继续留在 Artifact Store 中。内核拒绝 self delegation 和任务图中的真实环路，同时允许同一父任务并行委派多个互不依赖的子任务。
 
 同一生命周期中的 controller 可以通过 syscall 568 的 `AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL` 请求取消。请求必须复用 owner/channel/request/slot/task/correlation 的完整绑定，并要求 `ORCHESTRATE`、`WAIT_CANCEL` 以及 caller 到 owner 的 TASK route。`OK` 只确认控制请求已经线性化，任务需要在产生 CQE 后才算结算完成；被 claim 的执行者仍要清理预绑定结果并确认内核给出的最新 `CANCELLED` 或 `TIMEOUT` 终态。当前实现不会强制终止永久无响应的执行者。
 
@@ -230,7 +237,26 @@ Execution Contract 的 `RETIRE` 分两步收敛：先进入 `RETIRING` 并停止
 
 ### 3.3 面向 Agent 查询优化的文件系统扩展
 
-这部分扩展让 Agent 可以描述“需要什么文件”，而不必事先掌握完整路径。Agent 调用 `agent_file_meta_set()` 登记文件所属 project、workflow、run、stage、kind、status 和 summary，内核同时保存 `dev + inum + incarnation`。inode 再次使用时，新的 incarnation 会隔开旧元数据、内容回执和编辑租约。Metadata Catalog 为 `status`、`stage` 和 `kind` 建立等值索引。索引只负责缩小范围，返回结果前仍会逐项核对完整查询条件、文件访问范围、生命周期和 catalog generation；结构化结果可写入 Context 的用户管理缓存，供后续轮次直接使用。
+这部分扩展让 Agent 可以描述“需要什么文件”，无需事先掌握完整路径。Agent 通过 `agent_file_meta_set()` 登记单个文件，也可以用 `agent_file_meta_set_batch()` 在同一生命周期和元数据事务中登记最多 16 项。每项元数据包含 project、workflow、run、stage、kind、status 和 summary，内核同时保存 `dev + inum + incarnation`。inode 再次使用时，新的 incarnation 会隔开旧元数据、内容回执和编辑租约。Metadata Catalog 为 `status`、`stage` 和 `kind` 建立等值索引。索引缩小候选集合后，查询器继续核对完整条件、文件访问范围、生命周期和 catalog generation；结构化结果可写入 Context 的用户管理缓存，供后续轮次直接使用。
+
+在早期开发中，每轮任务逐项登记整份目录，并在一次查询后清理 Catalog。核心索引已经减少了候选数量，反复登记和短暂使用仍会增加完整流程耗时。当前实现根据预计查询次数选择路径：`K=1` 直接遍历；`K=2/4/8` 批量登记元数据，在同一生命周期中建立一次 Catalog，并让后续查询和状态更新继续使用已经验证的目录视图。路径选择与复用过程如图 3 所示。
+
+```mermaid
+flowchart LR
+    A["Expected Uses"] --> B{"K = 1?"}
+    B -->|Yes| C["Traversal"]
+    B -->|No| D["Batch Register"]
+    D --> E["Ready Catalog"]
+    E --> F["Indexed Query"]
+    F --> G["Reuse Hit"]
+    G --> F
+    F --> H["Metadata Update"]
+    H --> F
+```
+
+<p align="center"><strong>图 3　Metadata Catalog 的自适应选择与复用</strong></p>
+
+图 3 中，预计只使用一次的查询跳过建档开销。多次使用时，96 条元数据按每批 16 条分成 6 次调用；Catalog 进入 ready 状态后，发现查询、文件恢复后的元数据更新和结果复核都沿同一生命周期继续执行。目录视图失效或任务结束时再进入清理流程。
 
 ```text
 agent_file_query(query, result)
@@ -273,19 +299,28 @@ Workflow Credit Domain 管理进程、线程、文件对象、文件系统块、
 
 实现代码见 [`os/agent_ipc.c`](os/agent_ipc.c)、[`os/agent_background.c`](os/agent_background.c)、[`os/workflow_credit_domain.c`](os/workflow_credit_domain.c)、[`os/resource_controller.c`](os/resource_controller.c)、[`os/workflow_scheduler.c`](os/workflow_scheduler.c) 和 [`os/proc.c`](os/proc.c)。
 
-### 3.5 Agent Live 与 Nexus
+### 3.5 通用 Agent Loop 与 Nexus Harness
 
 `agentlive_ucore` 运行一个常驻 Agent 循环。Guest 保存轮次、关联编号、Tool Registry、Context 和审批状态。Host 中继负责转发串口帧、建立 TLS 连接，并与模型 Provider 交换 JSON。固定 Replay 与真实 Provider 使用同一套串口协议，便于用固定输入检查多轮工具调用。
 
-`agentnexus_ucore` 是一个通用、类似 coding CLI 的多智能体 Harness。它以任意非空用户输入建立本轮 root Task，模型可以直接回答，也可以按需调用 `search_files`、`read_file` 和 `inspect_system`。前两个工具只读访问启动会话时指定的 Host 工作区，第三个工具查看当前 Guest 的 `status`、`processes` 或 `context`。
+Nexus 的通用多 Agent Harness 如图 4 所示。CLI 只接收用户目标、工作区、资源限制、允许工具和可选 Agent 配置。所有 Agent 使用同一套运行时、Context 接口、Task Channel 和工具协议；名称只用于日志。能力差异来自启动时配置的 capability、工具授权、资源额度、系统提示和任务描述。拥有 `ORCHESTRATE` capability 的 Agent 可以根据目标建立子 Agent、选择可并行的子任务并接纳结果，内核不按 Relay、Coordinator、System 或 Research 等名称分派权限。
 
-Coordinator 通过真正的内核 Task Channel 把 child Task 委派给 Research 或 System。Task descriptor 绑定目标身份、task type、task/correlation/parent 编号和 capsule handle；目标 Agent claim 后从 Guest artifact 取得输入，完成并提交结果 artifact，Coordinator 再用到达的 terminal CQE 结算任务。Coordinator 随后把本代 Execution Contract 收敛到 `RECLAIMED`，才恢复 observer/Host 事件投影、读取结果 artifact 并建立下一代 Contract。`MESSAGE` 保留为一般进程通信，但不传递 child Task 的 payload 或状态。
+![Nexus 通用多 Agent Harness：共同运行时、动态 Task、Artifact、受控 Provider 与预测性预取](docs/figures/architecture/nexus_multiagent_harness.png)
 
-工作区文件先由 Host 在会话指定的 root 内生成带 generation、object id 和 revision 的分页 manifest。Guest 用 1 个 control inode 和当前页面最多 32 个 data-stub inode 建立 Metadata Catalog 窗口，并用 4 组最多 8 项的 Live Query 选择和复核候选；manifest generation 变化通过 control stub 的 Typed Watch `UPDATE` 使旧窗口失效。Host 在 Guest 回传的候选对象中执行正文匹配，或返回指定 object/revision 的分段字节。搜索和读取结果回到 Guest 后，成为 Research 的输入与结果 artifact，再进入 TOOL Context 和后续模型消息。Metadata Catalog 是有界目录窗口，全文匹配由 Host 在 Guest 选定的候选中执行。当前 Harness 保持只读，不提供文件编辑或 Shell 执行。
+<p align="center"><strong>图 4　Nexus 通用多 Agent Harness</strong></p>
 
-核心应用代码位于 [`user/src/agentlive_ucore.c`](user/src/agentlive_ucore.c)、[`user/src/agentnexus_ucore.c`](user/src/agentnexus_ucore.c) 和 [`user/lib/agent_nexus.c`](user/lib/agent_nexus.c)，Host 接入主要位于 [`host_tools/agentos_relayd.py`](host_tools/agentos_relayd.py)、[`host_tools/agentos_workspace.py`](host_tools/agentos_workspace.py) 和 [`host_tools/agentos_nexus_task_ledger.py`](host_tools/agentos_nexus_task_ledger.py)。
+1. **通用 Agent Loop。** 每个 Agent 读取自己的 private Context 和待处理 Task，根据 Task、文件变化、子任务完成、预取完成、取消或心跳事件被唤醒。模型每轮产生一个工具请求、一个子任务委派或最终结果；没有可运行工作时，Agent 进入等待状态。
+2. **动态 Task。** 128 字节描述符绑定 parent task、目标与输入 Artifact、所需 capability、允许工具、workspace revision、资源预算、deadline 和预期结果类型。父 Agent 只能授予自身与 workflow policy 已有权限的子集。Task Channel 负责 pending、claim、complete、cancel 和 terminal CQE；子 Agent 先封存结果 Artifact，再提交终态。父 Agent 复核 producer、Task id、Context sequence、lifecycle 和内容 hash 后，才把结果写入自己的 Context。
+3. **Context Artifact Store。** 用户态保存 USER、TOOL、FINAL、文件、搜索结果、补丁、编译诊断、运行日志、测试结果、子任务报告和团队摘要的完整正文。单项 Artifact 最大 64 KiB；默认 workflow 总额度为 2 MiB，模型单次投影最多 12 KiB。内核保存 handle、类型、长度、SHA-256、生产者、Task、来源 sequence 和 lifecycle，正文通过核验并原子封存后才允许被 Context 或 Task 引用。每个 Agent 保持独立 active path，workflow 共享索引只引用已经结算且声明为共享的 Artifact。
+4. **摘要与回收。** private Context 达到配置的高水位后生成结构化摘要，保留目标、已完成工作、工具、revision、错误、待办和后续计划；workflow 摘要记录任务图、分工、公共 Artifact、build、测试、冲突和未完成任务。仍在运行的 Task、尚未解决的错误和未合并修改不会被摘要清除。rollback 只移动当前 Agent 的 active path；已被接纳或共享的 Artifact 保留，失去引用的私有 Artifact 按 lifecycle 延迟回收。
+5. **受控开发 Provider。** `search_files`、`read_workspace_file`、`inspect_system`、`write_file`、`apply_patch`、`build_ucore_program` 和 `run_ucore_program` 都是 Tool Registry 中的 brokered 工具。工作区 broker 核对会话 root、相对路径、object id、revision、范围和输出长度；写入使用 revision 冲突检查和同目录原子替换。构建 broker 在独立临时工作树中固定 RISC-V 工具链、目标清单和资源上限。运行 broker 为每个用例启动独立的 AgentOS-uCore Guest，并返回实际输出、退出状态和有界日志。
+6. **结构化预测。** 每次成功只读查询都可向内核提交机器可读签名。每个 Agent 的 16 项转移表用 active path 上的 `A -> B` 次数和置信度生成低优先级预取；默认单次不超过 4 KiB、同时最多 2 项。Guest 文件进入异步预取队列，Host 工作区产生 `PREFETCH_HINT`。实际读取仍重新执行 capability、VFS 访问范围、workspace root、revision 和 lifecycle 检查，预测失败不会改变正常读取结果。
 
-Nexus 由 Guest Relay Agent 的 AgentOS Context active path 管理跨轮上下文。每轮 USER、已经结算的 TOOL 和成功 FINAL 都以短节点进入 Context；第 7 页的 4 KiB 用户缓存只在对应 USER/FINAL 节点仍位于 active path 时补充有界的完整正文。Relay 通过 Context 的 direct active query 重建下一轮消息；失败或取消会回滚本轮路径，`/reset` 同时清空 Relay Context 与用户缓存。在线 Provider 与固定 Replay 都使用 Guest 重建的消息和 TOOL artifact 投影，并直接复用 AgentOS 已有的 Context、Task Channel、Metadata Catalog、Live Query 和 Typed Watch。
+当前代码同时保留早期 `agentnexus_ucore` 产品路径用于固定 Replay，并提供 [`agentos_nexus_multiagent.py`](host_tools/agentos_nexus_multiagent.py) 作为通用 Harness。前者继续验证真实 Guest 串口、Metadata Catalog 与原生 Task Channel；后者让真实模型按 capability 和工具集合动态选择单 Agent 或多 Agent 方案。Host Harness 用与 Task Channel 相同的 descriptor、授权包含关系和终态规则协调模型线程，原生 Task Channel 的 128 字节描述符与多子任务图另由 `agenttask_ucore` 在真实 Guest 中验收。两类证据分别说明 Host 编排行为和内核 Task 语义，文档不把它们合并成一次未发生的执行路径。
+
+DeepSeek 的通用开发验收以“创建简易计算器”作为普通用户目标，没有预设文件名、Agent 数量或工具顺序。模型最终选择单 Agent 完成任务，在 21 轮模型交互中调用 20 次工具，经历一次 revision 冲突后重新读取并提交；源码 revision 为 `77c4cd1b...598c4f9`，build id 为 `a88b281e...50d72ad`。正常输入、无效输入和除零路径分别在独立 AgentOS-uCore Guest 中取得成功证据。完整 Artifact hash、运行日志 hash 和 workflow 摘要记录在 [`ci/agentos-nexus-multiagent-evidence.json`](ci/agentos-nexus-multiagent-evidence.json)。这个案例用于验证通用能力，Harness 中没有计算器专用状态机。
+
+实现代码见 [`user/src/agentmulti_ucore.c`](user/src/agentmulti_ucore.c)、[`os/agent_context_artifact.c`](os/agent_context_artifact.c)、[`os/agent_context_prefetch.c`](os/agent_context_prefetch.c)、[`host_tools/agentos_nexus_multiagent.py`](host_tools/agentos_nexus_multiagent.py)、[`host_tools/agentos_nexus_dev.py`](host_tools/agentos_nexus_dev.py) 和 [`host_tools/agentos_workspace.py`](host_tools/agentos_workspace.py)。
 
 ## 四、测试结果
 
@@ -298,7 +333,7 @@ Nexus 由 Guest Relay Agent 的 AgentOS Context active path 管理跨轮上下�
 | ABI 与模块契约 | `agent-uapi-check`、`agent-module-check` | 系统调用号、结构大小与字段偏移、模块依赖和状态转换 |
 | Host 自测 | `local-host-selftests` | Context、Execution Contract、资源、查询、调度、串口协议和校验器 |
 | QEMU Guest | `agentos-test` | Agent identity、VFS、工具、事件、调度、内存、故障和生命周期 |
-| 常驻应用 | 控制台与 Nexus Replay | Console 的多轮工具/审批；Nexus 的自主直接回答或三工具选择、Guest Catalog 工作区候选、版本化读取、Task Channel 委派、Guest 系统观察和会话关闭 |
+| 常驻应用 | 控制台、Nexus Replay 与通用 Harness | Console 的多轮工具/审批；Nexus 的 7 项 brokered 工具、动态 Agent 配置、版本化读写、隔离构建、独立 Guest 测试、Artifact 汇总与正常关闭 |
 | 系统对照 | `dual-platform-run` | 普通 uCore 与 AgentOS-uCore 的业务结果和端到端耗时 |
 
 五项赛题能力另由 `agenteval_ucore` 在同一个 RISC-V64 Guest 程序中串联测试，Host 再确认测试输入一致且输出符合预期：
@@ -315,21 +350,24 @@ AGENT_TEST_CASE=agentpublish_ucore \
   make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-性能测试在 WSL2 Host 上运行，Guest 为 QEMU RISC-V64 `virt` 单 Hart，使用 `riscv64-linux-gnu-gcc 15.2.0` 编译，QEMU 版本为 `10.2.1`。30 次独立启动覆盖 Live Query、Agent Task 和工作流 EEVDF。测试清单、校验结果、原始串口输出和逐样本 CSV 均保存在 [`one_shot_metrics/data/20260811`](one_shot_metrics/data/20260811/)。测试入口和故障检查项见[测试文档](docs/testing.md)。
+性能测试在 WSL2 Host 上运行，Guest 为 QEMU RISC-V64 `virt` 单 Hart，使用 `riscv64-linux-gnu-gcc 15.2.0` 编译，QEMU 版本为 `10.2.1`。最新的 Live Query 批量建档与复用结果保存在 [`one_shot_metrics/data/20260815_catalog_batch`](one_shot_metrics/data/20260815_catalog_batch/)，目录规模、Agent Task 和工作流 EEVDF 的补充测试保存在 [`one_shot_metrics/data/20260811`](one_shot_metrics/data/20260811/)。两个目录都包含原始串口输出和逐样本数据。测试入口和故障检查项见[测试文档](docs/testing.md)。
 
 ### 4.2 Live Query 性能
 
-我们在同一组 96 条文件记录上做了 16 组 AB/BA 配对。traversal（逐项扫描）每次检查 97 条记录，indexed query（索引查询）只检查 2 条。核心耗时从发起查询开始，包含恢复写入、`fsync` 和结果复核。
+优化前的配对测试已经确认索引能够缩短核心查询，16 组核心阶段全部更快；当时完整流程只有 3/16 组更快，索引减遍历的配对中位差值为 +13.452 毫秒。逐项登记 96 条元数据并在单轮任务后清理，使建档成本没有得到复用。我们据此加入批量登记，并按预计查询次数选择遍历或索引复用路径。
 
-| **指标** | **traversal** | **indexed** | **配对结果** |
+当前测试仍使用相同规模的 96 条文件记录，完成 16 次独立 QEMU 启动和均衡的 AB/BA 配对。默认 `K=4`，每条路径执行 4 次发现查询、一次恢复写入和一次结果复核。遍历路径共检查 385 条记录；索引路径分 6 批登记元数据，建立一次 Catalog，并在后续 4 次查询中命中复用状态。核心阶段从发现查询开始，包含恢复写入、`fsync` 和结果复核；完整流程还包含文件准备、批量登记与清理。
+
+| **指标** | **traversal** | **indexed/reused** | **配对结果** |
 | --- | ---: | ---: | ---: |
-| 核心阶段中位耗时 | 34,712.5 微秒 | 13,293.5 微秒 | 16 组中索引查询全部更快 |
-| “索引查询减逐项扫描”的中位差值 | - | - | -23,441.5 微秒 |
-| “逐项扫描耗时除以索引查询耗时”的中位数 | - | - | 3.118 倍 |
-| 完整流程中位耗时 | 711,283.5 微秒 | 723,928.0 微秒 | 配对差值 +13,452 微秒 |
-| 索引查询在完整流程中更快的配对数 | - | - | 3 组（共 16 组） |
+| 核心阶段中位耗时 | 121,206.0 微秒 | 19,499.5 微秒 | 16/16 组索引复用更快 |
+| 索引复用减遍历的核心配对中位差值 | - | - | -105,667.5 微秒 |
+| 两条路径核心中位耗时之比 | - | - | 6.216 倍 |
+| 完整流程中位耗时 | 786,683.5 微秒 | 697,806.5 微秒 | 16/16 组索引复用更快 |
+| 索引复用减遍历的完整流程配对中位差值 | - | - | -89,781.5 微秒 |
+| 两条路径完整流程中位耗时之比 | - | - | 1.127 倍 |
 
-我们又组合了 24、64、96 三种目录规模和 1、2、4、8 四种命中数量，每种组合保留 15 个内部配对。12 种组合的中位加速比为 1.164 至 2.808 倍。在三种目录规模下，索引已经建立时的单次查询中位耗时分别约为 98.3、100.5 和 108.3 微秒。这些结果表明，Metadata Catalog 的索引确实减少了核心查询路径需要核对的对象数，目录越大越能体现这一点；但完整流程中索引路径只有 3/16 次更快，说明核心窗口之外的聚合路径抵消了这部分收益。现有计时还不能把差值定位到某个具体环节，系统端到端路径需要增加分段计时后再作优化。配对分布和不同规模下的结果见[性能测试](docs/performance.md#3-实时查询的核心阶段)。
+96 条元数据的冷建档中位耗时为 11.172 毫秒，6 次批量调用完成一次构建；5 次查询中有 4 次复用，复用查询合计中位耗时为 0.515 毫秒。`K=1` 时系统直接遍历，避免只使用一次的 Catalog 建档成本；`K=2/4/8` 时使用批量建档与同生命周期复用，默认配置为 `K=4`。不同目录规模、命中数和最新配对分布见[性能测试](docs/performance.md#3-实时查询的批量建档与复用)。
 
 ### 4.3 Agent 任务延迟
 
@@ -351,17 +389,17 @@ AGENT_TEST_CASE=agentpublish_ucore \
 
 ### 5.1 工作总结
 
-AgentOS-uCore 已经把 Agent 从创建、交互、记录 Context、查询文件到等待下一轮事件的过程接入 uCore。Agent identity 与生命周期负责管理成员及其关联对象，Context 保存多轮任务的起因与 provenance。Structured Tool 与 Execution Contract 在操作生效前完成检查，Live Query 把状态变化送入 Agent Loop。Workflow Credit Domain 和工作流 EEVDF 负责跨进程资源与 CPU 时间。Agent Live 与 Nexus 直接使用这些内核接口连续运行多轮任务。
+AgentOS-uCore 已经把 Agent 从创建、交互、记录 Context、查询文件到等待下一轮事件的过程接入 uCore。Agent identity 与生命周期负责管理成员及其关联对象，private Context 与共享索引保存多轮任务的起因、provenance 和已经结算的团队事实。Structured Tool、Execution Contract 与动态 Task descriptor 在操作生效前完成检查，Context Artifact Store 保存完整正文，Live Query 和预测器把文件变化及历史访问送入 Agent Loop。Workflow Credit Domain 和工作流 EEVDF 负责跨进程资源与 CPU 时间。Agent Live 与 Nexus 直接使用这些机制连续运行并按配置组织协作。
 
 项目保留了稳定 ABI、细分的 Guest 测试、Host 状态机测试、故障注入、普通 uCore 与 AgentOS-uCore 对照测试，以及逐样本性能数据。每项主要功能都能从文档找到调用入口、实现文件和测试结果。
 
 ### 5.2 当前技术限制
 
-性能测试采用 RISC-V64 QEMU 单 Hart，工作流 EEVDF 场景覆盖 1 至 4 个并发工作流。Metadata Catalog 最多保存 512 条记录，单次 Live Query 最多返回 8 项且没有分页游标。Context、事件队列、Task Channel 和工作流记录环都采用固定容量。多 Hart 调度、长 Provider 延迟和大规模异步积压仍需进一步测试；调度与等待时间以 10 ms tick 为主要粒度，短于一个 tick 的差异需要借助周期计数器进一步区分。
+性能测试采用 RISC-V64 QEMU 单 Hart，工作流 EEVDF 场景覆盖 1 至 4 个并发工作流。Metadata Catalog 最多保存 512 条记录，单次 Live Query 最多返回 8 项且没有分页游标。Context、事件队列、Task Channel、Artifact metadata 表、16 项查询转移表和工作流记录环都采用固定容量。当前通用 Harness 的模型线程在 Host 侧按内核 Task Channel 规则镜像状态机，尚未把每一次真实模型委派都送入同一 QEMU Guest 的原生 Task Channel；Host `PREFETCH_HINT` 消费路径也需要接入早期产品 Relay。多 Hart 调度、长 Provider 延迟和大规模异步积压仍需进一步测试。
 
 ### 5.3 后续工作
 
-下一阶段将为 Live Query 增加分页与复合索引，并补充多 Hart 下的工作流调度和资源记账测试。Task Channel 将继续验证长 Provider 延迟、异步积压和队列饱和时的 backpressure。Nexus 将在当前只读工作区工具的基础上补充更多通用任务类型，并继续测试更长的真实 Provider 会话与取消流程。新负载仍按现有方法保存逐样本数据。
+下一阶段将把 Host 通用 Agent Loop 与单个长期运行的 Guest Task Channel 会话完整接通，使动态模型委派、Artifact seal 和 terminal CQE 在同一次产品运行中留下联合证据；Host `PREFETCH_HINT` 也将接入版本化 workspace broker，并补充命中率、额外 I/O 与多 Agent 信息隔离测试。Live Query 还需增加分页与复合索引，工作流调度和资源记账需要覆盖多 Hart。开发 Harness 将继续加入用户审批策略、更丰富的构建目标、长会话取消回归和构建缓存。
 
 ## 六、运行与文档
 
@@ -388,6 +426,25 @@ make agentos-nexus-replay TOOLPREFIX=riscv64-linux-gnu-
 make agentos-nexus-demo TOOLPREFIX=riscv64-linux-gnu-
 ```
 
+受控开发演示使用 [`ci/agentos-nexus-dev-script.txt`](ci/agentos-nexus-dev-script.txt)。DeepSeek 在一次会话中读取现有程序、创建计算器、调用固定工具链编译，再用同一 build 分别启动 3 个 AgentOS-uCore Guest。正常加法、无效操作数和除零路径均得到预期输出与退出状态，build id、source revision 和三份运行证据见 [`ci/agentos-nexus-dev-evidence.json`](ci/agentos-nexus-dev-evidence.json)。固定的失败编译、修补、重编译和三类运行顺序另由 [`ci/agentos-nexus-dev-replay.jsonl`](ci/agentos-nexus-dev-replay.jsonl) 回放检查。
+
+```bash
+make agentos-nexus \
+  AGENTOS_NEXUS_PROVIDER=deepseek \
+  AGENTOS_NEXUS_SCRIPT=ci/agentos-nexus-dev-script.txt \
+  TOOLPREFIX=riscv64-linux-gnu-
+```
+
+通用 Harness 不预设开发流程。下面的入口只提供目标和 workspace policy，Agent 自行选择是否拆分任务、使用哪些工具以及何时构建和运行；可选配置文件还能为多个 Agent 分别限定 capability、工具、Artifact 与资源额度。
+
+```bash
+make agentos-nexus-harness \
+  AGENTOS_NEXUS_HARNESS_GOAL='开发一个简易计算器并在真实 Guest 中验证正常、无效和失败输入' \
+  TOOLPREFIX=riscv64-linux-gnu-
+```
+
+本次 DeepSeek 实际运行采用单 Agent 方案并成功完成，说明 Harness 会根据目标选择分工，没有把 Agent 数量固定为验收条件。模型生成的 revision、build id、三类 Guest 运行证据、Artifact hash 与团队摘要见 [`ci/agentos-nexus-multiagent-evidence.json`](ci/agentos-nexus-multiagent-evidence.json)。
+
 交互式控制台、真实模型、Nexus、双系统运行和单项测试方法见[运行指南](docs/usage.md)。
 
 ### 6.2 文档体系
@@ -412,7 +469,7 @@ make agentos-nexus-demo TOOLPREFIX=riscv64-linux-gnu-
 | --- | --- |
 | AgentOS 项目介绍视频 | [百度网盘](https://pan.baidu.com/s/1JQKpght9NQuLC5d4VH_9ZQ?pwd=agos)，提取码 `agos` |
 | AgentOS-uCore 展示幻灯片 | [百度网盘](https://pan.baidu.com/s/1odSO5Z_3zVGITqAJRSzdgQ?pwd=8s7c)，提取码 `8s7c` |
-| 仓库内链接记录 | [项目介绍视频和ppt网盘链接.txt](项目介绍视频和ppt网盘链接.txt) |
+| 仓库内链接记录 | [初赛项目介绍视频和ppt网盘链接.txt](初赛项目介绍视频和ppt网盘链接.txt) |
 
 ## 七、参考说明与许可
 
@@ -439,7 +496,7 @@ AgentOS-uCore 基于 LearningOS 的 [uCore-Tutorial-Code-2025S](https://github.c
 ├── scripts/                 # 构建检查、Guest 运行器与故障测试脚本
 ├── user/                    # Guest Runtime、Agent 应用与产品测试
 ├── 决赛文档.pdf             # 决赛完整产品文档
-├── 项目介绍视频和ppt网盘链接.txt # 视频与答辩材料入口
+├── 初赛项目介绍视频和ppt网盘链接.txt # 视频与答辩材料入口
 ├── LICENSE                  # GPL-3.0 源码许可
 ├── LICENSE-DOCS             # CC BY-SA 4.0 文档许可
 ├── Makefile                 # 构建、运行、测试与双目标入口

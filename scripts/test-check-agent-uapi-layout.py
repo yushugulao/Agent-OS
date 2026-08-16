@@ -23,14 +23,18 @@ class AgentUapiLayoutTests(unittest.TestCase):
         )
 
     def test_golden_contract_has_expected_coverage(self):
-        self.assertEqual(len(self.golden), 640)
+        self.assertEqual(len(self.golden), 710)
+        self.assertEqual(
+            self.golden["agent_uapi_layout_value_file_meta_batch_max"],
+            16,
+        )
         self.assertEqual(
             self.golden["agent_uapi_layout_size_task_delegate_descriptor"],
-            56,
+            128,
         )
         self.assertEqual(
             self.golden["agent_uapi_layout_size_task_delegate_claim_result"],
-            128,
+            200,
         )
         self.assertEqual(
             self.golden["agent_uapi_layout_size_task_delegate_complete"],
@@ -351,6 +355,7 @@ class AgentUapiLayoutTests(unittest.TestCase):
             "include/agent_resource_abi.h",
             "include/agent_task_channel_abi.h",
             "include/agent_tool_abi.h",
+            "include/agent_workspace_mutation_abi.h",
             "os/agent.h",
             "user/include/agent.h",
         ):
@@ -371,6 +376,7 @@ class AgentUapiLayoutTests(unittest.TestCase):
                 "provenance",
                 "file-publish",
                 "task-channel",
+                "workspace-mutation",
             },
         )
         temporary, root = self.feature_fixture()
@@ -538,6 +544,17 @@ class AgentUapiLayoutTests(unittest.TestCase):
             ):
                 agent_uapi_layout.validate_agent_syscall_numbers(root)
 
+            batch_definition = "#define SYS_agent_file_meta_set_batch 569\n"
+            self.assertIn(batch_definition, source)
+            path.write_text(
+                source.replace(batch_definition, "", 1),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                agent_uapi_layout.LayoutError, "atomically mirror"
+            ):
+                agent_uapi_layout.validate_agent_syscall_numbers(root)
+
     def schema_fixture(self, key_literal):
         temporary = tempfile.TemporaryDirectory()
         root = Path(temporary.name)
@@ -656,8 +673,8 @@ class AgentUapiLayoutTests(unittest.TestCase):
         with temporary:
             path = root / "os" / "agent_provenance.c"
             source = path.read_text(encoding="utf-8").replace(
-                "#define AGENT_PROVENANCE_CAP_ALL ((1ULL << 14) - 1ULL)",
-                "#define AGENT_PROVENANCE_CAP_ALL ((1ULL << 13) - 1ULL)",
+                "#define AGENT_PROVENANCE_CAP_ALL ((1ULL << 16) - 1ULL)",
+                "#define AGENT_PROVENANCE_CAP_ALL ((1ULL << 15) - 1ULL)",
             )
             path.write_text(source, encoding="utf-8")
             with self.assertRaisesRegex(

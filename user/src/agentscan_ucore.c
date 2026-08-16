@@ -7,6 +7,13 @@
 
 static struct agent_file_query live_query;
 static struct agent_file_query_result live_result;
+static struct agent_file_meta live_batch_items[AGENT_FILE_META_BATCH_MAX];
+static int live_batch_statuses[AGENT_FILE_META_BATCH_MAX + 1];
+static struct agent_op live_generic_watch_op;
+static struct agent_result live_generic_watch_result;
+static struct agent_info live_agent_info;
+
+#define LIVE_BATCH_STATUS_GUARD 0x2468ace
 
 static void check(int ok, const char *msg)
 {
@@ -46,25 +53,22 @@ static void make_file(const char *name, const char *body)
 	check(close(fd) == 0, "close file");
 }
 
-static void set_explicit_meta(const char *name, const char *status,
-			      uint64 update_mask)
+static void fill_explicit_meta(struct agent_file_meta *meta,
+			       const char *name, const char *status,
+			       uint64 update_mask)
 {
-	struct agent_file_meta meta;
-
-	memset(&meta, 0, sizeof(meta));
-	strcpy(meta.physical_name, name);
-	strcpy(meta.logical_path, "/live-query/explicit");
-	strcpy(meta.project, "live-query");
-	strcpy(meta.workflow, "explicit-files");
-	strcpy(meta.run_id, "RUN-LIVE");
-	strcpy(meta.stage, "observe");
-	strcpy(meta.kind, "artifact");
-	strcpy(meta.status, status);
-	strcpy(meta.summary, "explicit live-query object");
-	meta.flags = 0;
-	meta.update_mask = update_mask;
-	check(agent_file_meta_set(&meta) == AGENT_STATUS_OK,
-	      "set explicit metadata");
+	memset(meta, 0, sizeof(*meta));
+	strcpy(meta->physical_name, name);
+	strcpy(meta->logical_path, "/live-query/explicit");
+	strcpy(meta->project, "live-query");
+	strcpy(meta->workflow, "explicit-files");
+	strcpy(meta->run_id, "RUN-LIVE");
+	strcpy(meta->stage, "observe");
+	strcpy(meta->kind, "artifact");
+	strcpy(meta->status, status);
+	strcpy(meta->summary, "explicit live-query object");
+	meta->flags = 0;
+	meta->update_mask = update_mask;
 }
 
 static uint64 wait_change(const char *change, uint64 expected_fid,
@@ -95,7 +99,7 @@ static void run_agent(void)
 	uint64 generation;
 	uint64 previous_generation;
 
-	check(agent_file_meta_init() == AGENT_STATUS_OK, "meta init");
+	check(agent_metadata_init() == AGENT_STATUS_OK, "metadata init");
 	make_file(plain_name, "ordinary-file");
 	check(query_physical(plain_name) == 0,
 	      "ordinary file is absent from explicit catalog");
@@ -104,6 +108,24 @@ static void run_agent(void)
 	printf("agentscan_ucore: explicit_admission ordinary_unindexed=1\n");
 
 	make_file(live_name, "live-query-body");
+	memset(&live_generic_watch_op, 0, sizeof(live_generic_watch_op));
+	memset(&live_generic_watch_result, 0, sizeof(live_generic_watch_result));
+	live_generic_watch_op.version = AGENT_CALL_VERSION;
+	live_generic_watch_op.tool_id = AGENT_TOOL_AGENT_WATCH;
+	live_generic_watch_op.request_id = 62001;
+	live_generic_watch_op.arg0 = AGENT_EVENT_FILE_QUERY;
+	strcpy(live_generic_watch_op.payload, "typed-query-must-not-be-generic");
+	check(agent_run(&live_generic_watch_op, &live_generic_watch_result, 1, 0) ==
+		      1,
+	      "run generic FILE_QUERY watch probe");
+	check(live_generic_watch_result.status == AGENT_STATUS_BAD_PARAM,
+	      "generic FILE_QUERY tool watch rejected");
+	check(agent_info(&live_agent_info) == AGENT_STATUS_OK &&
+	      live_agent_info.watch_count == 0,
+	      "rejected generic FILE_QUERY leaves no cold watch slot");
+	check(agent_watch(AGENT_EVENT_MESSAGE, "batch-generic") ==
+		      AGENT_STATUS_OK,
+	      "install generic watch before typed watch");
 	memset(&watch, 0, sizeof(watch));
 	watch.version = AGENT_FILE_LIVE_WATCH_VERSION;
 	watch.query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
@@ -114,10 +136,24 @@ static void run_agent(void)
 	      "typed watch generation handshake");
 	check((watch.flags & AGENT_FILE_LIVE_WATCH_F_RESYNC_REQUIRED) == 0,
 	      "typed watch starts synchronized");
+	check(agent_unwatch(AGENT_EVENT_NONE, 0) == 1,
+	      "generic clear-all preserves typed watch");
 
-	set_explicit_meta(live_name, "ready", 0);
-	check(query_status_physical("ready", live_name) == 1,
-	      "explicit file enters indexed query");
+	fill_explicit_meta(&live_batch_items[0], live_name, "ready", 0);
+	fill_explicit_meta(&live_batch_items[1], live_name, "reviewed",
+			   AGENT_FILE_META_UPDATE_STATUS);
+	for (int i = 0; i <= AGENT_FILE_META_BATCH_MAX; i++)
+		live_batch_statuses[i] = LIVE_BATCH_STATUS_GUARD;
+	check(agent_file_meta_set_batch(
+		live_batch_items, live_batch_statuses, 2,
+		AGENT_FILE_META_BATCH_F_NONE) == 2,
+	      "set ordered live-query metadata batch");
+	check(live_batch_statuses[0] == AGENT_STATUS_OK &&
+	      live_batch_statuses[1] == AGENT_STATUS_OK &&
+	      live_batch_statuses[2] == LIVE_BATCH_STATUS_GUARD,
+	      "ordered live-query batch statuses");
+	check(query_status_physical("reviewed", live_name) == 1,
+	      "explicit batch enters indexed query");
 	check(live_result.used_index == 1 && live_result.returned == 1,
 	      "explicit query uses status index");
 	check(live_result.hits[0].dev != 0 && live_result.hits[0].inum != 0 &&
@@ -127,20 +163,10 @@ static void run_agent(void)
 	      "explicit file projects current size");
 	fid = (uint64)live_result.hits[0].fid;
 	generation = live_result.fs_generation;
-	check(wait_change("change=ENTER", fid, watch.initial_generation) ==
-		      generation,
-	      "enter event matches visible generation");
-
-	previous_generation = generation;
-	set_explicit_meta(live_name, "reviewed",
-			  AGENT_FILE_META_UPDATE_STATUS);
-	check(query_status_physical("reviewed", live_name) == 1,
-	      "explicit update refreshes status index");
-	check(live_result.fs_generation > previous_generation,
-	      "explicit update advances visible generation");
-	generation = live_result.fs_generation;
+	previous_generation = wait_change(
+		"change=ENTER", fid, watch.initial_generation);
 	check(wait_change("change=UPDATE", fid, previous_generation) == generation,
-	      "update event matches visible generation");
+	      "batched update event matches visible generation");
 
 	previous_generation = generation;
 	check(unlink(live_name) == 0, "unlink explicit file");
@@ -151,7 +177,16 @@ static void run_agent(void)
 	      "leave event matches visible generation");
 	check(agent_live_unwatch(&watch) == AGENT_STATUS_OK,
 	      "remove typed live-query watch");
+	memset(&watch, 0, sizeof(watch));
+	watch.version = AGENT_FILE_LIVE_WATCH_VERSION;
+	watch.query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(watch.query.physical_name, live_name);
+	check(agent_live_watch(&watch) == AGENT_STATUS_OK,
+	      "typed watch capacity released for reinstall");
+	check(agent_live_unwatch(&watch) == AGENT_STATUS_OK,
+	      "remove reinstalled typed watch");
 	check(unlink(plain_name) == 0, "unlink ordinary file");
+	printf("agentscan_ucore: meta_batch items=2 enter=1 update=1 leave=1 ordered=1 guard=1 generic_tool_rejected=1 generic_clear_preserved=1 typed_reinstall=1\n");
 	printf("agentscan_ucore: live_query enter=1 update=1 leave=1 indexed=1\n");
 	printf("agentscan_ucore: passed\n");
 	exit(0);

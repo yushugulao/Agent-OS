@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "scenario": "deepseek_calculator_development",
+  "source_path": "user/src/nexus_calculator_ucore.c",
+  "source_revision": "dd11544a4ff758b77a18a13129d514268525a226c7e1470e147a32d9fb61c6d9",
+  "build_id": "56661080259b1d2ecb1f7bba496649548b9c0f178b37623acce1e92c1d262835",
+  "build_status": "passed",
+  "cases": [
+    {
+      "kind": "normal",
+      "stdin": "12 + 5\n",
+      "expected_output": "17",
+      "expected_exit": 0,
+      "output_match": true,
+      "exit_match": true
+    },
+    {
+      "kind": "invalid",
+      "stdin": "12 + x\n",
+      "expected_output": "Error: invalid syntax",
+      "expected_exit": 1,
+      "output_match": true,
+      "exit_match": true
+    },
+    {
+      "kind": "failure",
+      "stdin": "12 / 0\n",
+      "expected_output": "Error: division by zero",
+      "expected_exit": 1,
+      "output_match": true,
+      "exit_match": true
+    }
+  ],
+  "guest_instances": 3,
+  "task_channel_artifacts": 6,
+  "session_closed": true,
+  "full_log_sha256": "677748ba2535d94a379255fd8583103a9e2bd1a0cd3442b37aabf5e88fb08acb"
+}

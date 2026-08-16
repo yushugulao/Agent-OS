@@ -94,6 +94,8 @@ static inline int key_equal(struct workflow_lifecycle_key a,
 | `struct proc` | Agent 编号、角色、能力位、控制关系、文件访问范围、Context 页、资源账户和事件队列 | 随进程创建、`exec` 和 `exit` 变化 |
 | `workflow_lifecycle_record` | 文件访问范围、generation、控制进程、成员数、操作/退出计数和 fence 阻断状态 | 从工作流根进程创建持续到最后成员与后台工作结束 |
 | `agent_context_record` | 序号、请求号、起因、调用跨度、分支、工具、状态、哈希和 provenance label | 每个 Agent 保留最近 128 条 |
+| Context Artifact metadata | handle、类型、长度、SHA-256、producer、Task、来源 sequence 和 lifecycle | 封存后由引用计数、保留时间和 workflow 额度管理 |
+| 查询预测状态 | 最近签名、16 项转移表、阈值、进行中请求和 hit/miss/cancel/denied 计数 | 随 Agent active path 和 lifecycle 变化 |
 | Metadata Catalog 条目 | inode 身份、incarnation、业务字段、索引项和 catalog generation | 随 VFS 更新，在文件访问范围或生命周期回收时删除 |
 | `workflow_scheduler_entity` | `vruntime`、虚拟截止时间、CPU 服务量、可运行线程数和唤醒指标 | 随工作流建立和释放 |
 | 工作流记录环区段 | 普通/关键槽、缺口、前段根摘要和封存根摘要 | 按工作流保留，由 Workflow Fence 封存 |
@@ -106,19 +108,21 @@ static inline int key_equal(struct workflow_lifecycle_key a,
 
 可信引导进程调用 `agent_workflow_create()` 创建工作流根进程。同一工作流中，具有 `AGENT_CAP_ORCHESTRATE` 能力位的 Agent 可以调用 `agent_worker_create()`，指定工作进程映像和能力上限。最终能力集合取角色策略、映像清单、父进程委派、目标工作流和 VFS 文件访问范围的交集。控制关系使用不可转让的 `control_id`；控制进程退出时先进入 `QUIESCING`，再转交或撤销子控制关系。普通进程沿原有 `fork/exec` 路径运行，只有受控创建并通过映像策略校验的进程才取得 Agent identity。
 
-低频且需要内核保护的角色、能力、Loop 状态、资源账户和 Context 元信息保存在 PCB 或生命周期对象中；高频读取的路径记录、最近响应和查询缓存放在 Agent Context 区。每个 Agent 固定映射 7 页 Context。前 6 页由内核写入，包含表头、最近响应和记录区，用户态只能读取；第 7 页由 Guest 缓存派生数据。另有 9 页内核 sidecar，保存规范化操作与结果、路径索引、执行者和 provenance 状态。commit 时，内核先填好 sidecar，再把发布序号改为奇数，随后更新公开记录、最近响应和表头，最后恢复为偶数。直接读取程序据此判断是否遇到并发 commit。详细设计见 [Agent 进程与 Context](modules/identity-context.md)。
+低频且需要内核保护的角色、能力、Loop 状态、资源账户和 Context 元信息保存在 PCB 或生命周期对象中；高频读取的路径记录、最近响应和查询缓存放在 Agent Context 区。每个 Agent 固定映射 7 页 Context。前 6 页由内核写入，包含表头、最近响应和记录区，用户态只能读取；第 7 页由 Guest 缓存派生数据。另有 9 页内核 sidecar，保存规范化操作与结果、路径索引、执行者和 provenance 状态。完整 USER、TOOL、FINAL 及文件、补丁、编译与测试正文进入用户态 Context Artifact Store，内核只发布经过长度、所有者、类型和 SHA-256 核验的 seal metadata。commit 时，内核先填好 sidecar，再把发布序号改为奇数，随后更新公开记录、最近响应和表头，最后恢复为偶数。直接读取程序据此判断是否遇到并发 commit。详细设计见 [Agent 进程与 Context](modules/identity-context.md)。
 
 ### 5.2 Agent-OS 内核结构化交互接口与工具调用协议
 
 工具调用协议用工具编号、typed 参数、状态码和结构化结果表达一次交互，不让内核解释自然语言。公开接口包括 V1、带类型信息的 V2、ENFORCE V3、批处理和 16 槽 Task Channel（SQ/CQ）。V2 按 Tool Registry 的参数 schema 检查请求；V3 继续绑定冻结的 DAG、前驱、尝试次数、截止时间、输入指纹和资源上限。入口先核对 Agent identity 与生命周期，再解析工具和 schema。登记普通操作后，内核继续检查能力位、Execution Contract、provenance 和 Phase Lease。文件写入在 VFS 路径真正执行时还会再查一次当前文件访问范围。
 
-Task Channel 的 `delegate_task` 把 56 字节不可变描述符作为 `AGENT_ARTIFACT_TASK` 输入，进入同一 Execution Contract 后停留在内核 pending 队列。取得 TASK route 且具有 `AGENT_CAP_TASK_ACCEPT` 的目标 Agent 通过 claim/complete 接口领取和完成；任务结算时，发起者从 CQ 至多取得一条 terminal CQE。描述符绑定目标身份、task type、task/correlation/parent 编号和 capsule handle，大段输入与结果由 Guest artifact 承载。当前实现拒绝 self delegation，也不允许同一活动端点同时成为 owner 与 target。取消、截止时间、目标退出和迟到完成由内核按同一个 Task Channel 状态处理；同一生命周期 controller 可用 syscall 568 的 `REQUEST_CANCEL` 和完整任务绑定请求取消。若任务已被 claim，执行者仍要清理预绑定输出并确认内核选定的最新终态；当前实现不会强制终止永久无响应的执行者。Task CQE 结算后，Contract 还要从 `RETIRING` 收敛到 `RECLAIMED`，普通作用和下一代 Contract 才恢复。
+Task Channel 的 `delegate_task` 把 128 字节动态描述符作为 `AGENT_ARTIFACT_TASK` 输入，进入同一 Execution Contract 后停留在内核 pending 队列。取得 TASK route 且具有 `AGENT_CAP_TASK_ACCEPT` 的目标 Agent 通过 claim/complete 接口领取和完成；任务完成结算时，发起者从 CQ 至多取得一条 terminal CQE。描述符绑定目标 identity、parent task、目标与输入 Artifact、所需 capability、允许工具、workspace revision、资源预算、deadline 和预期结果类型。内核检查父子授权包含关系，拒绝 self delegation 和任务图中的环路，并允许多个独立子任务并行。取消、截止时间、目标退出和迟到完成由内核按同一个 Task Channel 状态处理；同一生命周期 controller 可用 syscall 568 的 `REQUEST_CANCEL` 和完整任务绑定请求取消。若任务已被 claim，执行者仍要清理预绑定输出并确认内核选定的最新终态；当前实现不会强制终止永久无响应的执行者。Task CQE 结算后，Contract 还要从 `RETIRING` 收敛到 `RECLAIMED`，普通作用和下一代 Contract 才恢复。
 
 这样，应用中的一次工具调用被拆成内核能够逐项核对的数据。实现与调用示例见[工具执行](modules/tool-execution.md)，公共布局见 [`include/agent_tool_abi.h`](../include/agent_tool_abi.h)、[`include/agent_execution_contract_abi.h`](../include/agent_execution_contract_abi.h) 和 [`include/agent_task_channel_abi.h`](../include/agent_task_channel_abi.h)。
 
 ### 5.3 面向 Agent 查询优化的文件系统扩展
 
-Metadata Catalog 只收录应用显式登记的文件，并为 `status`、`stage`、`kind` 建立等值索引。查询器依次检查三个字段并选择第一个可用索引。返回前再核对完整查询条件、文件访问范围、生命周期、inode incarnation 和 catalog generation。Typed Watch 保存查询条件及其 generation；目录更新时，内核比较修改前后的结果集合，产生 `ENTER`、`UPDATE` 或 `LEAVE`。增量事件出现 generation 缺口后，应用先安装替代订阅，再读取未截断的有界快照，以此重建基线。
+Metadata Catalog 只收录应用显式登记的文件，并为 `status`、`stage`、`kind` 建立等值索引。标量登记适合零散更新；系统调用 569 每次接收至多 16 项，让一组登记共用生命周期操作和 Metadata transaction，同时保持逐项提交，以及每个已提交项的 generation、Watch 与审计语义。查询器依次检查三个索引字段，返回前再核对完整查询条件、文件访问范围、生命周期、inode incarnation 和 catalog generation。预计只查询一次时，应用直接遍历目录；预计重复查询时，应用批量构建 Catalog 并在同一生命周期内复用。
+
+Typed Watch 保存查询条件及其 generation；目录更新时，内核比较修改前后的结果集合，产生 `ENTER`、`UPDATE` 或 `LEAVE`。当前没有文件状态或文件查询订阅时，精确存在计数使状态迁移跳过进程扫描。`FILE_QUERY` 订阅统一从 typed API 建立和移除，通用 Watch 入口不会创建缺少 `watch_id` 管理的文件查询订阅。增量事件出现 generation 缺口后，应用先安装替代订阅，再读取未截断的有界快照，以此重建基线。
 
 这套机制让工作流能够按业务状态查找文件，并在文件进入或离开结果集合时收到通知。Metadata Catalog、索引、事务和 Typed Watch 的实现见 [Live Query](modules/live-query.md)。
 
@@ -127,6 +131,8 @@ Metadata Catalog 只收录应用显式登记的文件，并为 `status`、`stage
 ### 5.4 Agent Loop 内核运行机制
 
 Agent Loop 的决策策略仍在 Guest 中，内核承担需要跨轮保存和统一调度的部分。文件变化、跨 Agent 消息、心跳、截止时间和模型完成通知都进入事件队列，并由 `agent_wait()` 取出。内核在同一次关中断期间复查队列并登记等待者，等待键使用线程 `identity_generation`。事件接力标记每次只唤醒一个实际接收者。队列总容量为 16，其中一部分槽位留给内核事件和不同来源的事件；队列为空时，线程在等待队列中休眠。
+
+成功结算的只读文件查询还会生成结构化签名。内核为每个 Agent 维护固定 16 项的短期转移表，用 active path 上的 `A -> B` 观察次数和置信度预测下一次访问。Guest 文件目标进入低优先级异步预取队列，Host 文件目标产生带 object id、revision 和 range 的 `PREFETCH_HINT`。预测项在 rollback、Context 清空、生命周期变化以及文件 incarnation、revision 或 workspace generation 变化时失效；正式读取仍执行全部权限和版本检查。
 
 Workflow Credit Domain 以 `free`、`pending`、`used` 三种状态记录资源。外层工作流 EEVDF 使用固定等权调度对象，延迟等级与实际截止时间决定 1、2、4 或 8 tick 的 CPU 时间申请；当前可运行的工作流中，虚拟截止时间最早者先执行。工具与 Context 的 terminal state 写入工作流记录环，控制进程可通过 Workflow Fence 取得 metadata generation、精确资源快照和记录环根摘要。完整流程见 [Workflow Runtime](modules/workflow-runtime.md)。
 
@@ -167,9 +173,13 @@ Guest 提交请求
 
 内核 ABI 只传递结构化状态和系统操作，具体 Provider 协议由 Host 处理。`agentlive_ucore` 通过串口帧发送模型请求、接收工具调用，并把 terminal state 写入 Context。[`host_tools/agentos_relayd.py`](../host_tools/agentos_relayd.py) 负责 TLS、Provider JSON 和本地运行目录。更换模型 Provider 时无需修改内核 ABI。
 
-`agentnexus_ucore` 以任意非空用户输入建立每轮 root Task，并把模型放在一组通用的 Harness 规则与工具中运行。公开工具只有三个：`search_files` 和 `read_file` 只读访问当前 Host 工作区，`inspect_system` 查看当前 Guest 的系统状态。Coordinator 通过内核 Task Channel 的 `delegate_task` 把 child Task 交给 Research 或 System；目标 claim 后读取 capsule 所绑定的 Guest artifact，完成时发布结果 artifact，并由唯一的 terminal CQE 通知 Coordinator 结算。Coordinator 等待 Contract 到达 `RECLAIMED` 后才恢复 observer/Host 事件投影、读取结果 artifact 并创建下一代。
+早期 `agentnexus_ucore` 路径保留用于固定 Replay；[`agentos_nexus_multiagent.py`](../host_tools/agentos_nexus_multiagent.py) 提供新的通用多 Agent Harness。CLI 只接收目标、工作区、workflow policy、资源限制、允许工具和可选 Agent 配置。所有 Agent 运行同一套 Loop，行为由 capability、工具集合、提示词和额度决定。拥有 `ORCHESTRATE` capability 的 Agent 可以动态拆分任务，子 Agent 从同一运行时领取 Task、封存结果 Artifact 并提交终态。Coordinator 只是当前承担编排职责的 Agent，不对应特殊内核进程类型。
 
-Host workspace broker 只在显式配置的 root 内返回版本化 manifest 页面，并为 Guest 已通过 Metadata Catalog/Live Query 选定的候选执行正文匹配或返回 revision 绑定的分段字节。Guest 以 1 个 control inode 和最多 32 个 data-stub inode 维护当前 Catalog 窗口，按 4 个 stage 查询并复核完整路径；control stub 的 Typed Watch 负责在 generation 变化时使旧窗口失效。搜索和读取正文返回 Guest 后依次成为 Research 输入、结果 artifact、TOOL Context 与模型历史，Host 不私建、补写或替换 Provider 请求中的这段工具历史。Metadata Catalog 只负责有界候选选择，全文搜索仍由 Host 在候选内执行。Task ledger 记录 root/child Task 的关系、执行者身份和状态迁移。当前版本不提供编辑文件或执行 Shell 的工具；Research 与 System 均为 Guest 工作进程，模型请求统一由 Relay 经 Host relay 发起。Guest 主程序见 [`user/src/agentnexus_ucore.c`](../user/src/agentnexus_ucore.c)，Host 工作区访问见 [`host_tools/agentos_workspace.py`](../host_tools/agentos_workspace.py)，运行流程与命令见 [Workflow Runtime](modules/workflow-runtime.md)和[运行指南](usage.md)。
+Host workspace broker 只在显式配置的 root 内返回版本化 manifest 页面，并为 Guest 已通过 Metadata Catalog/Live Query 选定的候选执行正文匹配或返回 revision 绑定的分段字节。每个工具 correlation 的第一次 MANIFEST 请求使用空 generation，后续请求携带本次已经校验的 generation。Guest 每次仍重新获取、解析、摘要和校验 manifest；只有生命周期键、cursor、entry count、EOF、workspace generation 与有序对象摘要完全匹配，control stub 也处于 `READY` 时，1 个 control inode 和最多 32 个 data-stub inode 组成的 Catalog 窗口才会复用。
+
+窗口需要更新时，Guest 先发布 `BUILDING`，使旧页面失效，再按每批最多 16 项登记 data stub；全部批次完成后发布 `READY`。失败路径发布 `STALE` 并清理窗口，清理失败执行完整 reset，Host stale 重试也先走相同复位过程。所有工具结果返回 Agent Loop 后先封存为 Artifact，再进入 private Context；只有已经成功结算并声明共享的结果会进入 workflow 共享索引。
+
+开发工具由 [`agentos_nexus_dev.py`](../host_tools/agentos_nexus_dev.py) 执行。写入只接受 `user/src/nexus_*_ucore.c`，每次核对 SHA-256 revision，并以同目录临时文件完成原子提交。构建 broker 把源树复制到会话私有临时目录，只开放与源文件同名的用户程序目标和固定 RISC-V 工具链；运行 broker 为每个用例复制独立镜像，以单 Hart、128 MiB、15 秒、512 字节输入和 64 KiB 捕获上限启动新的 Guest。source revision、build id、诊断和运行日志以 Artifact 交回调用 Agent。完成门只有在最新 build 的正常、无效输入和关键失败路径全部通过后才接受最终答案。Metadata Catalog 继续负责有界候选选择，全文搜索由 Host 在候选内执行；Harness 不开放 Shell 或任意构建命令。通用 Harness 见 [`host_tools/agentos_nexus_multiagent.py`](../host_tools/agentos_nexus_multiagent.py)，Guest 内核机制验收见 [`user/src/agentmulti_ucore.c`](../user/src/agentmulti_ucore.c)，运行流程与命令见 [Workflow Runtime](modules/workflow-runtime.md)和[运行指南](usage.md)。
 
 ## 八、源码位置与检查方法
 

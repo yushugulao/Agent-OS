@@ -34,6 +34,7 @@ if str(_HERE) not in sys.path:
 
 import agentos_local_protocol as local  # noqa: E402
 import agentos_nexus_contract as nexus_contract  # noqa: E402
+import agentos_nexus_dev as nexus_dev  # noqa: E402
 import agentos_nexus_task_ledger as nexus_task_ledger  # noqa: E402
 import agentos_workspace as workspace  # noqa: E402
 import guest_llm_relay as relay  # noqa: E402
@@ -92,8 +93,24 @@ NEXUS_SUCCESS_PROVENANCE = {
     "search_files": 60,
     "read_file": 60,
     "inspect_system": 53,
+    "write_file": 60,
+    "apply_patch": 60,
+    "build_ucore_program": 60,
+    "run_ucore_program": 60,
 }
-NEXUS_WORKSPACE_TOOLS = frozenset(("search_files", "read_file"))
+NEXUS_WORKSPACE_TOOLS = frozenset(
+    (
+        "search_files",
+        "read_file",
+        "write_file",
+        "apply_patch",
+        "build_ucore_program",
+        "run_ucore_program",
+    )
+)
+NEXUS_DEVELOPMENT_TOOLS = frozenset(
+    ("write_file", "apply_patch", "build_ucore_program", "run_ucore_program")
+)
 NEXUS_WORKSPACE_OBSERVATION_RESULT = (
     "workspace_observation_ready;agentos_catalog=1;task_channel=1"
 )
@@ -151,7 +168,9 @@ NEXUS_WORKSPACE_REQUEST_FIELDS = frozenset(
         "arguments",
     )
 )
-NEXUS_WORKSPACE_OPERATIONS = frozenset(("manifest", "search", "read"))
+NEXUS_WORKSPACE_OPERATIONS = frozenset(
+    ("manifest", "search", "read", "write", "patch", "build", "run")
+)
 NEXUS_WORKSPACE_STATUSES = frozenset(("ok", "stale", "error"))
 NEXUS_GUEST_KINDS = relay.WIRE_V2_GUEST_KINDS | frozenset(("TASK_EVENT",))
 NEXUS_WIRE_KINDS = relay.WIRE_V2_HOST_KINDS | NEXUS_GUEST_KINDS
@@ -638,11 +657,17 @@ def _nexus_tool_text(
     *,
     maximum_codepoints: int,
     empty: bool = False,
+    multiline: bool = False,
 ) -> str:
+    allowed_controls = ("\t", "\n", "\r") if multiline else ()
     if (
         not isinstance(value, str)
         or (not empty and not value)
-        or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+        or any(
+            (ord(char) < 0x20 and char not in allowed_controls)
+            or ord(char) == 0x7F
+            for char in value
+        )
     ):
         raise relay.ProviderError(
             "BAD_TOOL_ARGUMENTS",
@@ -793,6 +818,122 @@ def _validate_nexus_tool_arguments(
             raise relay.ProviderError(
                 "BAD_TOOL_ARGUMENTS",
                 "inspect_system.operation is unsupported",
+                retryable=True,
+            )
+    elif tool in ("write_file", "apply_patch"):
+        body_name = "content" if tool == "write_file" else "patch"
+        if keys != {"path", body_name, "expected_revision"}:
+            raise relay.ProviderError(
+                "BAD_TOOL_ARGUMENTS",
+                f"{tool} arguments do not match the Nexus contract",
+                retryable=True,
+            )
+        path = _nexus_tool_text(
+            arguments["path"], f"{tool}.path", maximum_codepoints=64
+        )
+        if nexus_dev._PROGRAM_PATH_RE.fullmatch(path) is None:
+            raise relay.ProviderError(
+                "BAD_TOOL_ARGUMENTS",
+                f"{tool}.path is outside the allowed user-program paths",
+                retryable=True,
+            )
+        _nexus_tool_text(
+            arguments[body_name],
+            f"{tool}.{body_name}",
+            maximum_codepoints=6000,
+            empty=True,
+            multiline=True,
+        )
+        revision = _nexus_tool_text(
+            arguments["expected_revision"],
+            f"{tool}.expected_revision",
+            maximum_codepoints=64,
+        )
+        if revision != nexus_dev.MISSING_REVISION and relay.WIRE_DIGEST_RE.fullmatch(revision) is None:
+            raise relay.ProviderError(
+                "BAD_TOOL_ARGUMENTS",
+                f"{tool}.expected_revision is malformed",
+                retryable=True,
+            )
+    elif tool == "build_ucore_program":
+        if keys != {"source_path", "target"}:
+            raise relay.ProviderError(
+                "BAD_TOOL_ARGUMENTS",
+                "build_ucore_program arguments do not match the Nexus contract",
+                retryable=True,
+            )
+        source_path = _nexus_tool_text(
+            arguments["source_path"],
+            "build_ucore_program.source_path",
+            maximum_codepoints=64,
+        )
+        target = _nexus_tool_text(
+            arguments["target"],
+            "build_ucore_program.target",
+            maximum_codepoints=48,
+        )
+        if (
+            nexus_dev._PROGRAM_PATH_RE.fullmatch(source_path) is None
+            or nexus_dev._TARGET_RE.fullmatch(target) is None
+            or Path(source_path).stem != target
+        ):
+            raise relay.ProviderError(
+                "BAD_TOOL_ARGUMENTS",
+                "build_ucore_program target is outside the allowed build set",
+                retryable=True,
+            )
+    elif tool == "run_ucore_program":
+        if keys != {
+            "build_id",
+            "stdin",
+            "expected_output",
+            "expected_exit",
+            "case_kind",
+        }:
+            raise relay.ProviderError(
+                "BAD_TOOL_ARGUMENTS",
+                "run_ucore_program arguments do not match the Nexus contract",
+                retryable=True,
+            )
+        build_id = _nexus_tool_text(
+            arguments["build_id"],
+            "run_ucore_program.build_id",
+            maximum_codepoints=64,
+        )
+        if relay.WIRE_DIGEST_RE.fullmatch(build_id) is None:
+            raise relay.ProviderError(
+                "BAD_TOOL_ARGUMENTS",
+                "run_ucore_program.build_id is malformed",
+                retryable=True,
+            )
+        _nexus_tool_text(
+            arguments["stdin"],
+            "run_ucore_program.stdin",
+            maximum_codepoints=512,
+            empty=True,
+            multiline=True,
+        )
+        _nexus_tool_text(
+            arguments["expected_output"],
+            "run_ucore_program.expected_output",
+            maximum_codepoints=512,
+            empty=True,
+            multiline=True,
+        )
+        _nexus_tool_u32(
+            arguments["expected_exit"],
+            "run_ucore_program.expected_exit",
+            maximum=255,
+        )
+        case_kind = _nexus_tool_text(
+            arguments["case_kind"],
+            "run_ucore_program.case_kind",
+            maximum_codepoints=7,
+        )
+        if case_kind not in nexus_dev.CASE_KINDS:
+            raise relay.ProviderError(
+                "BAD_TOOL_ARGUMENTS",
+                "run_ucore_program.case_kind is unsupported",
                 retryable=True,
             )
     else:
@@ -1012,9 +1153,9 @@ def _inspect_system_projection_values(
             "runnable_count",
         ),
         "context": (
-            "ctx_stat",
-            "context_base",
-            "context_size",
+            "context_status",
+            "record_count",
+            "record_capacity",
             "call_count",
         ),
     }
@@ -1400,6 +1541,7 @@ class InteractiveSession:
         provider_name: str | None = None,
         model_name: str | None = None,
         workspace_reader: workspace.WorkspaceReader | None = None,
+        development_broker: nexus_dev.NexusDevelopmentBroker | None = None,
     ) -> None:
         if (
             not isinstance(guest_profile, str)
@@ -1468,9 +1610,12 @@ class InteractiveSession:
         self.telemetry_sink = telemetry_sink
         self.session_id = session_id or secrets.token_hex(16)
         self.guest_profile = guest_profile
-        if guest_profile != "nexus" and workspace_reader is not None:
+        if guest_profile != "nexus" and (
+            workspace_reader is not None or development_broker is not None
+        ):
             raise ValueError("workspace access is only valid for the Nexus profile")
         self.workspace_reader = workspace_reader
+        self.development_broker = development_broker
         self.approval_timeout_seconds = APPROVAL_TIMEOUT_SECONDS
         self.max_tool_arguments = (
             relay.MAX_NEXUS_TOOL_ARGUMENTS
@@ -3040,6 +3185,10 @@ class InteractiveSession:
         allowed_operations = {
             "search_files": frozenset(("manifest", "search")),
             "read_file": frozenset(("manifest", "read")),
+            "write_file": frozenset(("write",)),
+            "apply_patch": frozenset(("patch",)),
+            "build_ucore_program": frozenset(("build",)),
+            "run_ucore_program": frozenset(("run",)),
         }
         if operation not in allowed_operations.get(tool, frozenset()):
             raise relay.WireProtocolError(
@@ -3090,7 +3239,7 @@ class InteractiveSession:
             )
 
         if operation == "manifest":
-            if set(arguments) != {"cursor", "limit"}:
+            if set(arguments) != {"cursor", "limit", "path_prefix"}:
                 raise relay.WireProtocolError(
                     code, "manifest arguments are malformed"
                 )
@@ -3102,6 +3251,19 @@ class InteractiveSession:
                 arguments["limit"], "limit", code=code, minimum=1,
                 maximum=workspace.MAX_MANIFEST_PAGE,
             )
+            prefix = _safe_text(
+                arguments["path_prefix"], "path_prefix", code=code,
+                maximum=workspace.MAX_PATH_BYTES, empty=True,
+            )
+            expected_prefix = (
+                public_arguments.get("path_prefix", "")
+                if tool == "search_files"
+                else public_arguments.get("path", "")
+            )
+            if prefix != expected_prefix:
+                raise relay.WireProtocolError(
+                    code, "manifest prefix changed the delivered file request"
+                )
             if cursor == 0 and generation:
                 raise relay.WireProtocolError(
                     code, "manifest restart must refresh the workspace"
@@ -3113,6 +3275,12 @@ class InteractiveSession:
             if cursor != 0 and entry.get("workspace_next_cursor") != cursor:
                 raise relay.WireProtocolError(
                     code, "manifest cursor skipped or repeated a Catalog page"
+                )
+            if cursor == 0:
+                entry["workspace_manifest_prefix"] = prefix
+            elif entry.get("workspace_manifest_prefix") != prefix:
+                raise relay.WireProtocolError(
+                    code, "manifest prefix changed between pages"
                 )
             pending_candidates = entry.get("workspace_pending_candidates", [])
             if tool == "search_files" and pending_candidates:
@@ -3164,7 +3332,7 @@ class InteractiveSession:
                 raise relay.WireProtocolError(
                     code, "search candidates do not cover the Catalog page"
                 )
-        else:
+        elif operation == "read":
             if set(arguments) != {
                 "object_id",
                 "path",
@@ -3214,6 +3382,15 @@ class InteractiveSession:
             ):
                 raise relay.WireProtocolError(
                     code, "read changed the delivered file request"
+                )
+        else:
+            if generation:
+                raise relay.WireProtocolError(
+                    code, "development operation must use its explicit revision binding"
+                )
+            if arguments != dict(public_arguments):
+                raise relay.WireProtocolError(
+                    code, "development operation changed the delivered arguments"
                 )
 
         objects_sha256 = _workspace_objects_sha256(arguments)
@@ -3296,17 +3473,17 @@ class InteractiveSession:
             {"event": "workspace_request", **request_event}, source="guest"
         )
 
-        if self.workspace_reader is None:
+        if operation in ("manifest", "search", "read") and self.workspace_reader is None:
             operation_result = workspace.WorkspaceOperationResult(
                 "error",
                 generation if generation else "0" * 64,
                 "workspace_error=workspace_not_configured",
             )
-        else:
+        elif operation in ("manifest", "search", "read"):
             try:
                 if operation == "manifest":
                     operation_result = self.workspace_reader.manifest(
-                        generation, cursor, limit
+                        generation, cursor, limit, prefix
                     )
                 elif operation == "search":
                     operation_result = self.workspace_reader.search_candidates(
@@ -3326,6 +3503,45 @@ class InteractiveSession:
                     "error",
                     generation if generation else "0" * 64,
                     "workspace_error=host_workspace_failure",
+                )
+        elif self.development_broker is None:
+            operation_result = workspace.WorkspaceOperationResult(
+                "error", "0" * 64, "development_error=broker_not_configured"
+            )
+        else:
+            try:
+                if operation == "write":
+                    development_result = self.development_broker.write_file(
+                        arguments["path"],
+                        arguments["content"],
+                        arguments["expected_revision"],
+                    )
+                elif operation == "patch":
+                    development_result = self.development_broker.apply_patch(
+                        arguments["path"],
+                        arguments["patch"],
+                        arguments["expected_revision"],
+                    )
+                elif operation == "build":
+                    development_result = self.development_broker.build_ucore_program(
+                        arguments["source_path"], arguments["target"]
+                    )
+                else:
+                    development_result = self.development_broker.run_ucore_program(
+                        arguments["build_id"],
+                        arguments["stdin"],
+                        arguments["expected_output"],
+                        arguments["expected_exit"],
+                        arguments["case_kind"],
+                    )
+                operation_result = workspace.WorkspaceOperationResult(
+                    development_result.status,
+                    development_result.workspace_generation,
+                    development_result.content,
+                )
+            except Exception:
+                operation_result = workspace.WorkspaceOperationResult(
+                    "error", "0" * 64, "development_error=host_broker_failure"
                 )
         result_status = operation_result.status
         if result_status not in NEXUS_WORKSPACE_STATUSES:
@@ -3499,7 +3715,7 @@ class InteractiveSession:
                         aggregate.get("manifest_eof")
                     ):
                         aggregate["truncated"] = True
-                else:
+                elif operation == "read":
                     if content.startswith("workspace_error="):
                         if content not in {
                             "workspace_error=binary_file",
@@ -3510,6 +3726,27 @@ class InteractiveSession:
                             raise ValueError("workspace read error is not model-visible")
                     elif not content.startswith("workspace_read\n"):
                         raise ValueError("workspace read result is malformed")
+                elif operation in ("write", "patch"):
+                    expected_prefix = (
+                        "workspace_write\n" if operation == "write" else "workspace_patch\n"
+                    )
+                    if not (
+                        content.startswith(expected_prefix)
+                        or content.startswith("development_error\n")
+                    ):
+                        raise ValueError("workspace mutation result is malformed")
+                elif operation == "build":
+                    if not (
+                        content.startswith("ucore_build\n")
+                        or content.startswith("development_error\n")
+                    ):
+                        raise ValueError("uCore build result is malformed")
+                elif operation == "run":
+                    if not (
+                        content.startswith("ucore_run\n")
+                        or content.startswith("development_error\n")
+                    ):
+                        raise ValueError("uCore run result is malformed")
             except (TypeError, ValueError, workspace._WorkspaceInputError):
                 result_status = "error"
                 content = "workspace_error=invalid_host_result"
@@ -3627,6 +3864,14 @@ class InteractiveSession:
                     }
                 )
             elif operation == "read":
+                entry.update(
+                    {
+                        "workspace_result": content,
+                        "workspace_content_sha256": content_sha256,
+                        "workspace_task_id": task_id,
+                    }
+                )
+            elif tool in NEXUS_DEVELOPMENT_TOOLS:
                 entry.update(
                     {
                         "workspace_result": content,
@@ -3820,23 +4065,30 @@ class InteractiveSession:
                             >= workspace.MAX_RESULTS
                         )
                     )
-                if (
-                    not isinstance(expected_projection, str)
-                    or not search_complete
-                    or model_projection != expected_projection
-                    or entry.get("workspace_content_sha256")
-                    != projection_sha256
-                    or entry.get("workspace_task_id") != values["value1"]
-                    or values["value0"]
-                    != len(expected_projection.encode("utf-8"))
-                    or result != NEXUS_WORKSPACE_OBSERVATION_RESULT
-                    or data_trust != "untrusted"
-                    or artifact_sha256 != projection_sha256
-                    or workspace_source_sha256
-                    != entry.get("workspace_source_sha256")
-                ):
+                binding_checks = {
+                    "projection": isinstance(expected_projection, str)
+                    and model_projection == expected_projection,
+                    "search": search_complete,
+                    "content_digest": entry.get("workspace_content_sha256")
+                    == projection_sha256,
+                    "task": entry.get("workspace_task_id") == values["value1"],
+                    "size": isinstance(expected_projection, str)
+                    and values["value0"]
+                    == len(expected_projection.encode("utf-8")),
+                    "result": result == NEXUS_WORKSPACE_OBSERVATION_RESULT,
+                    "trust": data_trust == "untrusted",
+                    "artifact": artifact_sha256 == projection_sha256,
+                    "source": workspace_source_sha256
+                    == entry.get("workspace_source_sha256"),
+                }
+                failed_bindings = [
+                    name for name, accepted in binding_checks.items() if not accepted
+                ]
+                if failed_bindings:
                     raise relay.WireProtocolError(
-                        code, "workspace observation is not bound to Host bytes"
+                        code,
+                        "workspace observation is not bound to Host bytes: "
+                        + ",".join(failed_bindings),
                     )
             else:
                 if workspace_source_sha256:
@@ -5292,6 +5544,7 @@ class InteractiveRelayDaemon:
         shutdown_grace_seconds: float = SHUTDOWN_GRACE_SECONDS,
         guest_profile: str = "agentlive",
         workspace_reader: workspace.WorkspaceReader | None = None,
+        development_broker: nexus_dev.NexusDevelopmentBroker | None = None,
     ) -> None:
         if not 0 < shutdown_grace_seconds <= 30:
             raise ValueError("shutdown grace must be in (0, 30] seconds")
@@ -5300,7 +5553,9 @@ class InteractiveRelayDaemon:
             or guest_profile not in local.GUEST_PROFILES
         ):
             raise ValueError("Guest profile is unsupported")
-        if guest_profile != "nexus" and workspace_reader is not None:
+        if guest_profile != "nexus" and (
+            workspace_reader is not None or development_broker is not None
+        ):
             raise ValueError("workspace access is only valid for the Nexus profile")
         self.process = process
         self.paths = paths
@@ -5311,6 +5566,7 @@ class InteractiveRelayDaemon:
         self.quiet = quiet
         self.shutdown_grace_seconds = shutdown_grace_seconds
         self.guest_profile = guest_profile
+        self.development_broker = development_broker
         self.ready_line = (
             NEXUS_READY_LINE if guest_profile == "nexus" else READY_LINE
         )
@@ -5339,6 +5595,7 @@ class InteractiveRelayDaemon:
             provider_name=provider_name,
             model_name=model_name,
             workspace_reader=workspace_reader,
+            development_broker=development_broker,
         )
         self.endpoints.controller_initial = lambda: {
             "type": "session_ready",
@@ -5374,6 +5631,8 @@ class InteractiveRelayDaemon:
             self.endpoints.close()
             self.process.stop()
             self.runtime_lock.close()
+            if self.development_broker is not None:
+                self.development_broker.close()
             raise
         self._reader(proc.stdout, "stdout")
         self._reader(proc.stderr, "stderr")
@@ -5448,6 +5707,8 @@ class InteractiveRelayDaemon:
             except local.LocalProtocolError:
                 pass
             self.runtime_lock.close()
+            if self.development_broker is not None:
+                self.development_broker.close()
 
     def request_stop(self) -> None:
         """Signal-safe request; the event loop performs all serial I/O."""
@@ -5594,6 +5855,20 @@ def _configured_workspace_reader(
     return None
 
 
+def _configured_development_broker(
+    args: argparse.Namespace,
+) -> nexus_dev.NexusDevelopmentBroker | None:
+    if args.guest_profile != "nexus":
+        return None
+    if args.workspace_root is None:
+        raise ValueError("--workspace-root is required for Nexus development")
+    return nexus_dev.NexusDevelopmentBroker(
+        args.workspace_root,
+        toolchain_prefix=nexus_dev.TOOLCHAIN_PREFIX,
+        qemu=args.qemu,
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the persistent AgentOS QEMU relay daemon.")
     parser.add_argument("--provider", choices=("openai", "anthropic", "deepseek", "replay"), required=True)
@@ -5645,6 +5920,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
         workspace_reader = _configured_workspace_reader(args)
+        development_broker = _configured_development_broker(args)
         provider = _provider(args)
         session_id = secrets.token_hex(16)
         paths = local.prepare_runtime_paths(session_id, base=args.runtime_dir)
@@ -5669,6 +5945,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             quiet=args.quiet,
             guest_profile=args.guest_profile,
             workspace_reader=workspace_reader,
+            development_broker=development_broker,
         )
 
         def stop(_signum, _frame) -> None:  # type: ignore[no-untyped-def]

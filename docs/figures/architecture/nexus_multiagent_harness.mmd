@@ -1,0 +1,46 @@
+flowchart LR
+  input["Goal + Workspace\nWorkflow Policy"] --> runtime["Common Agent Loop Runtime"]
+  runtime --> agents["Configured Agent Instances\nCapabilities + Tools + Quotas + Prompt"]
+
+  subgraph kernel["AgentOS Kernel"]
+    direction TB
+    task["Task Channel\nPending / Claim / Complete / Cancel"]
+    private["Private Context Paths"]
+    seal["Artifact Seal Metadata\nOwner + Task + Hash + Lifecycle"]
+    predictor["Bounded Query Predictor"]
+  end
+
+  agents <-->|"Dynamic Task Descriptor"| task
+  agents --> private --> seal
+  seal --> shared["Workflow Shared Index\nTask Graph + Revisions + Builds + Tests"]
+  shared --> agents
+
+  agents --> tools["Generic Tool Registry"]
+  subgraph brokers["Controlled Providers"]
+    direction TB
+    workspace["Workspace Broker\nRead / Write / Patch"]
+    build["Build Broker\nIsolated RISC-V Build"]
+    run["Run Broker\nIndependent Guest Evidence"]
+  end
+  tools --> workspace
+  tools --> build
+  tools --> run
+
+  private --> predictor
+  predictor --> guest["Low-Priority Guest Prefetch"]
+  predictor --> hint["Host PREFETCH_HINT"]
+  guest --> private
+  hint --> workspace
+
+  classDef input fill:#EAF2F8,stroke:#4B7FA5,color:#17324D,stroke-width:1.8px;
+  classDef loop fill:#E8F6F3,stroke:#3D8C76,color:#163B32,stroke-width:1.8px;
+  classDef kernelStep fill:#FDEDEC,stroke:#B85B5B,color:#5A2020,stroke-width:1.8px;
+  classDef store fill:#F4ECF7,stroke:#87639A,color:#36213F,stroke-width:1.8px;
+  classDef broker fill:#FEF5E7,stroke:#B58A42,color:#4A3617,stroke-width:1.8px;
+  class input input;
+  class runtime,agents loop;
+  class task,predictor kernelStep;
+  class private,seal,shared store;
+  class tools,workspace,build,run,guest,hint broker;
+  style kernel fill:#FFF9F9,stroke:#C98888,stroke-width:1.5px
+  style brokers fill:#FFFCF6,stroke:#C7A25D,stroke-width:1.5px

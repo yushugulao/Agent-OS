@@ -11,7 +11,8 @@
 	 AGENT_CAP_AUDIT_WRITE | AGENT_CAP_META_WRITE | \
 	 AGENT_CAP_ORCHESTRATE | AGENT_CAP_LLM_RELAY | \
 	 AGENT_CAP_WAIT_CANCEL | AGENT_CAP_ROUTE_MANAGE | \
-	 AGENT_CAP_TASK_ACCEPT)
+	 AGENT_CAP_TASK_ACCEPT | AGENT_CAP_WORKSPACE_WRITE | \
+	 AGENT_CAP_PREFETCH)
 
 static int next_agent_id;
 
@@ -189,6 +190,25 @@ agent_identity_proc_reset(struct proc *p, int preserve_controller)
 	p->agent_controller_id = controller;
 	p->agent_capability_mask = 0;
 	p->agent_role_grant_mask = 0;
+	p->agent_tool_grant_mask = 0;
+	p->agent_prompt_artifact_handle = 0;
+	p->agent_artifact_bytes_limit = 0;
+	p->agent_artifact_read_limit = 0;
+	p->agent_artifact_count_limit = 0;
+	p->agent_summary_high_watermark = 0;
+	p->agent_prefetch_enabled = 0;
+	p->agent_prefetch_policy = 0;
+	p->agent_prefetch_min_observations = 0;
+	p->agent_prefetch_confidence_threshold_ppm = 0;
+	p->agent_prefetch_max_bytes = 0;
+	p->agent_prefetch_max_inflight = 0;
+	p->agent_prefetch_inflight = 0;
+	p->agent_prefetch_hits = 0;
+	p->agent_prefetch_misses = 0;
+	p->agent_prefetch_cancelled = 0;
+	p->agent_prefetch_denied = 0;
+	p->agent_prefetch_last_signature_hash = 0;
+	p->agent_prefetch_last_training_sequence = 0;
 }
 
 int

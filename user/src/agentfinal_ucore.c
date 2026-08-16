@@ -662,7 +662,7 @@ static void context_lane_slow_worker(void *unused)
 	__sync_synchronize();
 	memset(&op, 0, sizeof(op));
 	op.version = AGENT_CALL_VERSION;
-	op.tool_id = AGENT_TOOL_RERUN_STAGE;
+	op.tool_id = AGENT_TOOL_ACTION_COMMIT;
 	op.request_id = 7202;
 	strcpy(op.payload, "align");
 	if (agent_run(&op, &result, 1, 0) != 1 ||
@@ -686,7 +686,7 @@ static void check_context_commit_lane(void)
 	int slow_found = 0;
 	int fast_found = 0;
 
-	status = agent_file_meta_init();
+	status = agent_metadata_init();
 	printf("agentfinal_ucore: context_lane_meta_init=%d\n", status);
 	check(status == 0, "context lane meta init");
 	seed_demo_metadata();
@@ -1552,7 +1552,7 @@ static void check_timeline_wait(void)
 	event_gate = event_wakeup_after == event_wakeup_before;
 	check(event_gate, "timeline wait event gate");
 
-	check(agent_heartbeat_stop() == 0, "timeline wait gate heartbeat stop");
+	check(agent_heartbeat_configure(0) == 0, "timeline wait gate heartbeat stop");
 	for (;;) {
 		consumed = agent_wait(&final_event, 0);
 		if (consumed != AGENT_STATUS_OK)
@@ -1584,7 +1584,7 @@ static void check_timeline_wait(void)
 	      "timeline wait sleep count");
 	check(wait_wakeup_after > wait_wakeup_before,
 	      "timeline wait wakeup count");
-	check(agent_heartbeat_stop() == 0,
+	check(agent_heartbeat_configure(0) == 0,
 	      "timeline wait heartbeat stop before read");
 	for (;;) {
 		consumed = agent_wait(&final_event, 0);
@@ -1620,7 +1620,7 @@ static void check_timeline_wait(void)
 	check(read_wakeup_after > read_wakeup_before,
 	      "timeline read wakeup count");
 
-	check(agent_heartbeat_stop() == 0, "timeline wait heartbeat stop");
+	check(agent_heartbeat_configure(0) == 0, "timeline wait heartbeat stop");
 	for (;;) {
 		consumed = agent_wait(&final_event, 0);
 		if (consumed != AGENT_STATUS_OK)
@@ -1799,7 +1799,7 @@ static void run_agent_child(void)
 	       (int)header->dropped_records);
 	printf("agentfinal_ucore: context_rollback_negative nonexistent=1 evicted=1\n");
 
-	check(agent_file_meta_init() == 0, "meta init");
+	check(agent_metadata_init() == 0, "metadata init");
 	seed_demo_metadata();
 	memset(q, 0, sizeof(*q));
 	q->flags = AGENT_FILE_QUERY_USE_INDEX;

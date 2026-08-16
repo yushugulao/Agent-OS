@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation tests for the task-independent Nexus v4 replay validator."""
+"""Mutation tests for the task-independent Nexus v5 replay validator."""
 
 from __future__ import annotations
 
@@ -37,6 +37,7 @@ TOOL_ARGUMENTS = {
     },
     "inspect_system": {"operation": "status"},
 }
+OBSERVATION_TOOLS = ("search_files", "read_file", "inspect_system")
 DEFAULT_GOAL = "Inspect this workspace and summarize the relevant runtime state."
 WORKER_NOT_QUIESCENT_SESSION_BLOCK = "worker_not_quiescent;session_blocked=1"
 
@@ -1207,10 +1208,18 @@ class NexusReplayValidatorTests(unittest.TestCase):
                 controller, observer, fixture, goals=scenario.goals
             )
 
-    def test_exact_v4_catalog_and_three_identity_runtime(self) -> None:
+    def test_exact_v5_catalog_and_three_identity_runtime(self) -> None:
         self.assertEqual(
             validator.TOOL_NAMES,
-            ("search_files", "read_file", "inspect_system"),
+            (
+                "search_files",
+                "read_file",
+                "inspect_system",
+                "write_file",
+                "apply_patch",
+                "build_ucore_program",
+                "run_ucore_program",
+            ),
         )
         self.assertEqual(
             validator.BUSINESS_ROLES,
@@ -1220,11 +1229,11 @@ class NexusReplayValidatorTests(unittest.TestCase):
         self.assertEqual(summary.turns[0].status, "completed")
         self.assertEqual(
             tuple(tool for _corr, tool in summary.turns[0].tool_calls),
-            validator.TOOL_NAMES,
+            OBSERVATION_TOOLS,
         )
 
     def test_tool_choice_and_order_are_model_owned(self) -> None:
-        for order in itertools.permutations(validator.TOOL_NAMES):
+        for order in itertools.permutations(OBSERVATION_TOOLS):
             with self.subTest(order=order):
                 summary = self.validate(Scenario(tool_orders=(order,)))
                 self.assertEqual(
@@ -1301,7 +1310,7 @@ class NexusReplayValidatorTests(unittest.TestCase):
     def test_zero_or_one_tool_is_a_complete_natural_task(self) -> None:
         direct = self.validate(Scenario(tool_orders=((),)))
         self.assertTrue(direct.turns[0].direct_final)
-        for tool in validator.TOOL_NAMES:
+        for tool in OBSERVATION_TOOLS:
             with self.subTest(tool=tool):
                 summary = self.validate(Scenario(tool_orders=((tool,),)))
                 self.assertEqual(summary.turns[0].tool_calls[0][1], tool)

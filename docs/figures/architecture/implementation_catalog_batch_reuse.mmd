@@ -1,0 +1,33 @@
+flowchart TB
+  subgraph early["Early Development"]
+    direction LR
+    e1["96 Scalar Calls"] --> e2["One Query"] --> e3["Immediate Cleanup"] --> e4["Next Run Rebuild"]
+  end
+
+  subgraph current["Current Design"]
+    direction LR
+    uses{"Expected Uses"}
+    walk["K = 1: Directory Walk"]
+    batch["K >= 2: Batch Register"]
+    fast["Zero-Watch Fast Path"]
+    ready["READY Catalog"]
+    reuse["Query Reuse"]
+    reclaim["Lifecycle Reclaim"]
+    change["Corpus Change"]
+    stale["STALE"]
+
+    uses --> walk
+    uses --> batch --> fast --> ready --> reuse --> reclaim
+    change --> stale --> batch
+  end
+
+  e4 -. "Redesign" .-> uses
+
+  classDef earlyStep fill:#F4F6F7,stroke:#8996A3,color:#263746,stroke-width:1.5px;
+  classDef risk fill:#FDEDEC,stroke:#C65B5B,color:#6E2020,stroke-width:2px;
+  classDef currentStep fill:#EAF2F8,stroke:#5E8FAF,color:#17324D,stroke-width:1.8px;
+  class e1,e2 earlyStep;
+  class e3,e4 risk;
+  class uses,walk,batch,fast,ready,reuse,reclaim,change,stale currentStep;
+  style early fill:#FBFCFD,stroke:#AAB7C4,stroke-width:1.5px
+  style current fill:#F7FBFE,stroke:#7FA8C2,stroke-width:1.5px

@@ -20,6 +20,10 @@ static void agent_text_append(char *dst, int n, const char *src);
 #define AGENT_QUERY_SNAPSHOT_RETRIES 2
 #define AGENT_METADATA_TOOL_READ_VIEW 2
 
+/* Protected by the metadata transaction; never place a full batch on stack. */
+static struct agent_file_meta
+	agent_file_meta_batch_scratch[AGENT_FILE_META_BATCH_MAX];
+
 static void agent_result_text(struct agent_result *res, const char *text) {
 	safestrcpy(res->result, text, sizeof(res->result));
 }
@@ -103,7 +107,7 @@ agent_file_finish_mutation(struct proc *p, struct agent_file_meta *request,
 	if (publish_event && workflow_lifecycle_key_valid(lifecycle))
 		(void)agent_live_query_publish_transition(
 			p, lifecycle, scope_id, before, after, generation);
-	agent_direct_effect_audit(p, AGENT_TOOL_FILE_META_INIT, AGENT_STATUS_OK,
+	agent_direct_effect_audit(p, AGENT_TOOL_METADATA_INIT, AGENT_STATUS_OK,
 		success_text, audit_fid, request->update_mask,
 		0, request->flags, 1);
 	return 0;
@@ -248,6 +252,8 @@ int agent_scope_reclaim_begin(
 	agent_metadata_actions_reclaim_scope(scope_id);
 	agent_metadata_query_invalidate_locked(scope_id, 0);
 	agent_live_query_reclaim(lifecycle, scope_id);
+	agent_context_artifact_reclaim_lifecycle(lifecycle);
+	agent_context_prefetch_reclaim_lifecycle(lifecycle);
 	if (agent_observe_scope_reclaim(scope_id) < 0) {
 		result = -1;
 		goto out_txn;
@@ -553,17 +559,14 @@ static void agent_object_state_update(struct proc *p, struct agent_op *op,
 				      struct agent_result *res,
 				      char *ok_text, char *event_action,
 				      char *summary, int propagate_deps,
-				      int require_selector,
-				      int history_tool_id)
+				      int require_selector)
 {
 	uint64 deps = 0;
-	int action_tool_id;
 	int updated;
 	int delivered;
 	struct agent_object_selector selector;
 	char event_payload[AGENT_EVENT_PAYLOAD_SIZE];
 
-	action_tool_id = history_tool_id ? history_tool_id : op->tool_id;
 	if (require_selector &&
 	    !agent_metadata_catalog_field_contains(op->payload, "=") &&
 	    !agent_metadata_catalog_field_contains(op->payload, ":")) {
@@ -585,7 +588,7 @@ static void agent_object_state_update(struct proc *p, struct agent_op *op,
 		selector.run_id, &deps) < 0)
 		deps = 0;
 	if (agent_metadata_actions_seen(
-		agent_identity_proc_scope(p), action_tool_id, selector.project,
+		agent_identity_proc_scope(p), op->tool_id, selector.project,
 		selector.run_id, selector.label, op->request_id)) {
 		agent_result_status(res, AGENT_STATUS_DUPLICATE, "duplicate");
 		return;
@@ -608,7 +611,7 @@ static void agent_object_state_update(struct proc *p, struct agent_op *op,
 		return;
 	}
 	agent_metadata_actions_remember(
-		agent_identity_proc_scope(p), action_tool_id, selector.project,
+		agent_identity_proc_scope(p), op->tool_id, selector.project,
 		selector.run_id, selector.label, op->request_id);
 	res->value0 = deps;
 	res->value1 = op->request_id;
@@ -639,9 +642,10 @@ static void agent_object_state_update(struct proc *p, struct agent_op *op,
 static int agent_tool_uses_file_metadata(int tool_id)
 {
 	return (tool_id >= AGENT_TOOL_QUERY_FILE &&
-		tool_id <= AGENT_TOOL_WRITE_REPORT &&
-		tool_id != AGENT_TOOL_READ_MESSAGE &&
-		tool_id != AGENT_TOOL_CAPABILITY_CHECK) ||
+		tool_id <= AGENT_TOOL_CAPABILITY_CHECK &&
+		tool_id != AGENT_TOOL_READ_MESSAGE) ||
+	       tool_id == AGENT_TOOL_ACTION_COMMIT ||
+	       tool_id == AGENT_TOOL_ARTIFACT_UPDATE ||
 	       (tool_id >= AGENT_TOOL_READ_FILE_DIGEST &&
 		tool_id <= AGENT_TOOL_DEPENDENCY_UPDATE);
 }
@@ -743,6 +747,16 @@ agent_metadata_dependency_query_tool(struct proc *p, struct agent_op *op,
 				    "dependency_not_found");
 }
 
+static uint64
+agent_metadata_init_locked(struct proc *p)
+{
+	uint scope_id = agent_identity_proc_scope(p);
+
+	agent_metadata_actions_clear_history(scope_id);
+	agent_metadata_query_invalidate_locked(scope_id, 0);
+	return agent_metadata_catalog_generation();
+}
+
 int
 agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 			    struct agent_result *res)
@@ -751,13 +765,11 @@ agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 	case AGENT_TOOL_QUERY_FILE:
 		agent_metadata_query_file_tool(p, op, res);
 		break;
-	case AGENT_TOOL_FILE_META_INIT:
+	case AGENT_TOOL_METADATA_INIT:
 		if (!agent_tool_require_cap(p, res, AGENT_CAP_META_WRITE))
 			break;
-		agent_metadata_actions_clear_history(
-			agent_identity_proc_scope(p));
-		res->value0 = agent_metadata_catalog_generation();
-		agent_result_text(res, "file_meta_init");
+		res->value0 = agent_metadata_init_locked(p);
+		agent_result_text(res, "metadata_init");
 		break;
 	case AGENT_TOOL_READ_FILE_SUMMARY: {
 		int found;
@@ -799,26 +811,19 @@ agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 		else if (res->status == AGENT_STATUS_NO_SPACE)
 			agent_result_text(res, "dependency_full");
 		break;
-	case AGENT_TOOL_RERUN_STAGE:
 	case AGENT_TOOL_ACTION_COMMIT:
 		if (!agent_tool_require_cap(p, res, AGENT_CAP_ACTION_WRITE))
 			break;
 		agent_object_state_update(p, op, res, "action_committed",
 					  "action_commit", "action completed",
-					  1,
-					  op->tool_id == AGENT_TOOL_ACTION_COMMIT,
-					  op->tool_id == AGENT_TOOL_RERUN_STAGE ?
-						  AGENT_TOOL_ACTION_COMMIT : 0);
+					  1, 1);
 		break;
-	case AGENT_TOOL_WRITE_REPORT:
 	case AGENT_TOOL_ARTIFACT_UPDATE:
 		if (!agent_tool_require_cap(p, res, AGENT_CAP_ARTIFACT_WRITE))
 			break;
 		agent_object_state_update(p, op, res, "artifact_updated",
 					  "artifact_update",
-					  "artifact updated", 0, 1,
-					  op->tool_id == AGENT_TOOL_WRITE_REPORT ?
-						  AGENT_TOOL_ARTIFACT_UPDATE : 0);
+					  "artifact updated", 0, 1);
 		break;
 	default:
 		return 0;
@@ -826,10 +831,10 @@ agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 	return 1;
 }
 
-static int agent_file_meta_init_execute(struct proc *p)
+static int agent_metadata_init_execute(struct proc *p)
 {
 	int result = AGENT_STATUS_NO_SPACE;
-	uint scope_id;
+	uint64 generation;
 
 	if (!p->is_agent)
 		return -1;
@@ -838,12 +843,10 @@ static int agent_file_meta_init_execute(struct proc *p)
 		return AGENT_STATUS_DENIED;
 	if (!agent_metadata_txn_lock(1))
 		return AGENT_STATUS_NO_SPACE;
-	scope_id = agent_identity_proc_scope(p);
-	agent_metadata_actions_clear_history(scope_id);
-	agent_metadata_query_invalidate_locked(scope_id, 0);
-	agent_direct_effect_audit(p, AGENT_TOOL_FILE_META_INIT,
+	generation = agent_metadata_init_locked(p);
+	agent_direct_effect_audit(p, AGENT_TOOL_METADATA_INIT,
 				  AGENT_STATUS_OK, "meta_init", 0,
-				  agent_metadata_catalog_generation(), 0,
+				  generation, 0,
 				  0, 1);
 	result = 0;
 	agent_metadata_txn_unlock();
@@ -863,7 +866,7 @@ sys_agent_file_meta_init(void)
 	if (!workflow_lifecycle_key_valid(lifecycle) ||
 	    workflow_lifecycle_operation_enter(lifecycle) < 0)
 		return -1;
-	result = agent_file_meta_init_execute(p);
+	result = agent_metadata_init_execute(p);
 	workflow_lifecycle_operation_leave(lifecycle);
 	return result;
 }
@@ -918,7 +921,23 @@ static uint agent_file_meta_patch_strings(struct agent_file_meta *target,
 	return changes;
 }
 
-static int agent_file_meta_set_execute(struct proc *p, uint64 metaaddr)
+static int
+agent_file_meta_write_scope(struct proc *p, uint *scope_id)
+{
+	if (p == 0 || !p->is_agent)
+		return -1;
+	*scope_id = agent_identity_proc_scope(p);
+	if (!agent_identity_authorize_object(p, AGENT_CAP_META_WRITE,
+				    *scope_id, 0) ||
+	    !agent_scope_valid(*scope_id))
+		return AGENT_STATUS_DENIED;
+	return AGENT_STATUS_OK;
+}
+
+static int agent_file_meta_set_execute(
+	struct proc *p, uint64 metaaddr,
+	const struct agent_file_meta *prepared_meta, uint scope_id,
+	int transaction_owned, int *stop_batch)
 {
 	struct agent_file_meta meta;
 	struct agent_file_meta previous;
@@ -929,7 +948,6 @@ static int agent_file_meta_set_execute(struct proc *p, uint64 metaaddr)
 	struct agent_catalog_undo_token undo;
 	struct agent_catalog_resolution selector;
 	struct agent_file_meta *working;
-	uint scope_id;
 	uint previous_scope = VFS_SCOPE_NONE;
 	int slot = -1;
 	int had_previous;
@@ -937,6 +955,7 @@ static int agent_file_meta_set_execute(struct proc *p, uint64 metaaddr)
 	int commit_status;
 	int bind_status;
 	int fence_active = 0;
+	int release_txn = 0;
 	int result = AGENT_STATUS_NO_SPACE;
 	uint changes = 0;
 	uint64 audit_fid = 0;
@@ -944,17 +963,21 @@ static int agent_file_meta_set_execute(struct proc *p, uint64 metaaddr)
 
 	memset(&mutation_fence, 0, sizeof(mutation_fence));
 	memset(&undo, 0, sizeof(undo));
+	if (stop_batch != 0)
+		*stop_batch = 0;
 
 	if (!p->is_agent)
 		return -1;
-	if (!agent_identity_authorize_object(p, AGENT_CAP_META_WRITE,
-				    agent_identity_proc_scope(p), 0))
-		return AGENT_STATUS_DENIED;
-	scope_id = agent_identity_proc_scope(p);
 	if (!agent_scope_valid(scope_id))
 		return AGENT_STATUS_DENIED;
-	if (copyin(p->pagetable, (char *)&meta, metaaddr, sizeof(meta)) < 0)
+	if (prepared_meta != 0)
+		meta = *prepared_meta;
+	else if (copyin(p->pagetable, (char *)&meta, metaaddr,
+			 sizeof(meta)) < 0) {
+		if (stop_batch != 0)
+			*stop_batch = 1;
 		return -1;
+	}
 	agent_file_meta_terminate_strings(&meta);
 	if (meta.flags & (AGENT_FILE_META_F_PERSIST |
 			  AGENT_FILE_META_F_AUTOSCAN))
@@ -964,11 +987,22 @@ static int agent_file_meta_set_execute(struct proc *p, uint64 metaaddr)
 	if ((meta.dev != 0 || meta.inum != 0 || meta.incarnation != 0) &&
 	    (meta.dev == 0 || meta.inum == 0 || meta.incarnation == 0))
 		return AGENT_STATUS_BAD_PARAM;
-	if (!agent_metadata_txn_lock(1))
-		return AGENT_STATUS_NO_SPACE;
+	if (transaction_owned) {
+		if (!agent_metadata_txn_owned(1)) {
+			if (stop_batch != 0)
+				*stop_batch = 1;
+			return AGENT_STATUS_INDETERMINATE;
+		}
+	} else {
+		if (!agent_metadata_txn_lock(1))
+			return AGENT_STATUS_NO_SPACE;
+		release_txn = 1;
+	}
 	agent_metadata_catalog_resolve(scope_id, &meta, -1, &selector);
 	if (agent_metadata_catalog_mutation_begin(&mutation_fence) < 0) {
 		result = AGENT_STATUS_RETRY;
+		if (stop_batch != 0)
+			*stop_batch = 1;
 		goto out_txn;
 	}
 	fence_active = 1;
@@ -1007,7 +1041,7 @@ static int agent_file_meta_set_execute(struct proc *p, uint64 metaaddr)
 		if (commit_status < 0) {
 			result = agent_catalog_error_status(commit_status);
 			agent_direct_effect_audit(
-				p, AGENT_TOOL_FILE_META_INIT, result,
+				p, AGENT_TOOL_METADATA_INIT, result,
 				"meta_delete_sidecar_io", audit_fid, mask, 0,
 				meta.flags, 1);
 			goto out_txn;
@@ -1131,9 +1165,15 @@ static int agent_file_meta_set_execute(struct proc *p, uint64 metaaddr)
 		scope_id, audit_fid, "meta_set", metadata_changed);
 out_txn:
 	if (fence_active &&
-	    agent_metadata_catalog_mutation_end(&mutation_fence) < 0)
+	    agent_metadata_catalog_mutation_end(&mutation_fence) < 0) {
 		result = AGENT_STATUS_INDETERMINATE;
-	agent_metadata_txn_unlock();
+		if (stop_batch != 0)
+			*stop_batch = 1;
+	}
+	if (result == AGENT_STATUS_INDETERMINATE && stop_batch != 0)
+		*stop_batch = 1;
+	if (release_txn)
+		agent_metadata_txn_unlock();
 	return result;
 }
 
@@ -1142,6 +1182,7 @@ sys_agent_file_meta_set(uint64 metaaddr)
 {
 	struct proc *p = curr_proc();
 	struct workflow_lifecycle_key lifecycle;
+	uint scope_id;
 	int result;
 
 	if (p == 0 || !p->is_agent)
@@ -1150,7 +1191,113 @@ sys_agent_file_meta_set(uint64 metaaddr)
 	if (!workflow_lifecycle_key_valid(lifecycle) ||
 	    workflow_lifecycle_operation_enter(lifecycle) < 0)
 		return -1;
-	result = agent_file_meta_set_execute(p, metaaddr);
+	result = agent_file_meta_write_scope(p, &scope_id);
+	if (result == AGENT_STATUS_OK)
+		result = agent_file_meta_set_execute(
+			p, metaaddr, 0, scope_id, 0, 0);
+	workflow_lifecycle_operation_leave(lifecycle);
+	return result;
+}
+
+static int
+agent_file_meta_set_batch_execute(struct proc *p, uint64 itemsaddr,
+				  uint64 statusesaddr, int count)
+{
+	uint scope_id;
+	int access_status;
+	int processed = 0;
+	uint64 items_bytes = (uint64)count * sizeof(struct agent_file_meta);
+	uint64 statuses_bytes = (uint64)count * sizeof(int);
+	uint64 items_end = itemsaddr + items_bytes;
+	uint64 statuses_end = statusesaddr + statuses_bytes;
+
+	access_status = agent_file_meta_write_scope(p, &scope_id);
+	if (access_status != AGENT_STATUS_OK)
+		return access_status;
+	/*
+	 * Status writes must not alter an item that has not been copied yet.  Stage
+	 * all inputs while a VM snapshot pauses sibling address-space changes, and
+	 * resolve output COW pages before the first metadata mutation.  The global
+	 * scratch is protected by the metadata transaction.
+	 */
+	if (itemsaddr < statuses_end && statusesaddr < items_end)
+		return -1;
+	if (!agent_metadata_txn_lock(1))
+		return AGENT_STATUS_NO_SPACE;
+	if (proc_vm_snapshot_begin(p) < 0)
+		goto out_txn_error;
+	if (user_range_check(p->pagetable, itemsaddr, items_bytes, PTE_R) < 0 ||
+	    user_range_check(p->pagetable, statusesaddr, statuses_bytes, PTE_W) < 0)
+		goto out_snapshot_error;
+	for (int i = 0; i < count; i++) {
+		int preserved;
+		uint64 itemaddr = itemsaddr +
+			(uint64)i * sizeof(struct agent_file_meta);
+		uint64 statusaddr = statusesaddr + (uint64)i * sizeof(preserved);
+
+		if (copyin(p->pagetable,
+			   (char *)&agent_file_meta_batch_scratch[i], itemaddr,
+			   sizeof(agent_file_meta_batch_scratch[i])) < 0 ||
+		    copyin(p->pagetable, (char *)&preserved, statusaddr,
+			   sizeof(preserved)) < 0 ||
+		    copyout(p->pagetable, statusaddr, (char *)&preserved,
+			    sizeof(preserved)) < 0)
+			goto out_snapshot_error;
+	}
+	proc_vm_snapshot_end(p);
+	for (int i = 0; i < count; i++) {
+		int stop_batch = 0;
+		int item_status = agent_file_meta_set_execute(
+			p, 0, &agent_file_meta_batch_scratch[i], scope_id, 1,
+			&stop_batch);
+
+		if (item_status == -1)
+			break;
+		if (copyout(p->pagetable,
+			    statusesaddr + (uint64)i * sizeof(item_status),
+			    (char *)&item_status, sizeof(item_status)) < 0) {
+			processed = AGENT_STATUS_INDETERMINATE;
+			break;
+		}
+		processed++;
+		if (stop_batch || item_status == AGENT_STATUS_INDETERMINATE)
+			break;
+		agent_metadata_txn_work_charge(1);
+	}
+	agent_metadata_txn_unlock();
+	return processed;
+
+out_snapshot_error:
+	proc_vm_snapshot_end(p);
+out_txn_error:
+	agent_metadata_txn_unlock();
+	return -1;
+}
+
+int
+sys_agent_file_meta_set_batch(uint64 itemsaddr, uint64 statusesaddr,
+			      int count, uint64 flags)
+{
+	struct proc *p = curr_proc();
+	struct workflow_lifecycle_key lifecycle;
+	int result;
+
+	if (p == 0 || !p->is_agent)
+		return -1;
+	if (flags != 0 || count < 0 || count > AGENT_FILE_META_BATCH_MAX)
+		return -1;
+	if (count == 0)
+		return 0;
+	if (itemsaddr >= MAXVA || statusesaddr >= MAXVA ||
+	    (uint64)count * sizeof(struct agent_file_meta) > MAXVA - itemsaddr ||
+	    (uint64)count * sizeof(int) > MAXVA - statusesaddr)
+		return -1;
+	lifecycle = vfs_proc_lifecycle(p);
+	if (!workflow_lifecycle_key_valid(lifecycle) ||
+	    workflow_lifecycle_operation_enter(lifecycle) < 0)
+		return -1;
+	result = agent_file_meta_set_batch_execute(
+		p, itemsaddr, statusesaddr, count);
 	workflow_lifecycle_operation_leave(lifecycle);
 	return result;
 }

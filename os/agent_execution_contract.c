@@ -19,7 +19,7 @@
 	 AGENT_CAP_AUDIT_WRITE | AGENT_CAP_META_WRITE | \
 	 AGENT_CAP_ORCHESTRATE | AGENT_CAP_LLM_RELAY | \
 	 AGENT_CAP_WAIT_CANCEL | AGENT_CAP_ROUTE_MANAGE | \
-	 AGENT_CAP_TASK_ACCEPT)
+	 AGENT_CAP_TASK_ACCEPT | AGENT_CAP_WORKSPACE_WRITE)
 
 struct agent_execution_node_internal {
 	uint64 predecessor_mask;
@@ -1111,11 +1111,22 @@ agent_execution_contract_admit(
 			AGENT_EXECUTION_REASON_STALE_LIFECYCLE, claim);
 		return AGENT_EXECUTION_ADMISSION_DENIED;
 	}
-	if (binding == 0 &&
-	    agent_tool_protocol_manifest_query(op->tool_id, &tool_manifest) !=
+	if (agent_tool_protocol_manifest_query(op->tool_id, &tool_manifest) !=
 		    AGENT_STATUS_OK) {
 		agent_execution_result_error(
 			result, AGENT_STATUS_UNKNOWN_TOOL, "unknown_tool",
+			AGENT_EXECUTION_REASON_TOOL_MISMATCH, claim);
+		return AGENT_EXECUTION_ADMISSION_DENIED;
+	}
+	if (tool_manifest.flags == AGENT_TOOL_F_DEPRECATED) {
+		agent_execution_result_error(
+			result, AGENT_STATUS_DEPRECATED, "deprecated_tool",
+			AGENT_EXECUTION_REASON_TOOL_MISMATCH, claim);
+		return AGENT_EXECUTION_ADMISSION_DENIED;
+	}
+	if (tool_manifest.flags == AGENT_TOOL_F_BROKERED) {
+		agent_execution_result_error(
+			result, AGENT_STATUS_BROKER_REQUIRED, "broker_required",
 			AGENT_EXECUTION_REASON_TOOL_MISMATCH, claim);
 		return AGENT_EXECUTION_ADMISSION_DENIED;
 	}
@@ -2197,11 +2208,15 @@ agent_execution_contract_build_node(
 	     node->deadline_tick > record->deadline_tick) ||
 	    agent_tool_protocol_manifest_query(node->tool_id, &manifest) !=
 		    AGENT_STATUS_OK ||
+	    manifest.flags == AGENT_TOOL_F_DEPRECATED ||
 	    ((manifest.flags & AGENT_TOOL_F_CALLABLE) == 0 &&
 	     !(node->tool_id == AGENT_TOOL_DELEGATE_TASK &&
 	       manifest.flags == AGENT_TOOL_F_SYSCALL_ONLY &&
 	       node->input_artifact_type == AGENT_ARTIFACT_TASK &&
-	       node->output_artifact_type == AGENT_ARTIFACT_NONE)) ||
+	       node->output_artifact_type == AGENT_ARTIFACT_NONE) &&
+	     !(manifest.flags == AGENT_TOOL_F_BROKERED &&
+	       node->input_artifact_type != AGENT_ARTIFACT_NONE &&
+	       node->output_artifact_type != AGENT_ARTIFACT_NONE)) ||
 	    (node->required_capabilities &
 	     manifest.provenance.required_capabilities) !=
 		    manifest.provenance.required_capabilities ||

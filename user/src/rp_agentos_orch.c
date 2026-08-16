@@ -1175,8 +1175,8 @@ static int run_research_orchestrator(int timing_read_fd, int timing_write_fd,
 		return 1;
 	phase_mask |= RP_WORKFLOW_PHASE_CHALLENGE;
 
-	if (agent_file_meta_init() < 0) {
-		printf("rp_agentos_orch: file_meta_init_failed\n");
+	if (agent_metadata_init() < 0) {
+		printf("rp_agentos_orch: metadata_init_failed\n");
 		return 1;
 	}
 	if (seed_reference_research_metadata() < 0) {
@@ -1188,7 +1188,7 @@ static int run_research_orchestrator(int timing_read_fd, int timing_write_fd,
 		return 1;
 	}
 	if (!rp_append_status("agentos_kernel=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=agentos.file_meta_init")) return 1;
+	if (!rp_append_file("rp_tool", "tool=agentos.metadata_init")) return 1;
 	phase_mask |= RP_WORKFLOW_PHASE_SCAFFOLD;
 	uint64 ready_ms = get_mtime();
 

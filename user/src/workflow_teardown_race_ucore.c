@@ -720,7 +720,7 @@ static TEST_PHASE_NOINLINE void seed_volatile_metadata(void)
 	struct agent_file_meta meta;
 	int fd;
 
-	check(agent_file_meta_init() == 0, "initialize live metadata catalog");
+	check(agent_metadata_init() == 0, "initialize live metadata catalog");
 	fd = open("racedirty", O_CREATE | O_WRONLY | O_TRUNC);
 	check(fd >= 0, "create volatile metadata object");
 	check(write(fd, "D", 1) == 1, "write volatile metadata object");
@@ -1503,7 +1503,7 @@ static TEST_PHASE_NOINLINE void resource_probe_root(int report_fd)
 	      before.waiters == 0 && before.debt_waiters == 0 &&
 	      before.admission_waiters == 0 && before.cache_resident == 0,
 	      "replacement workflow starts with a clean resource account");
-	check(agent_file_meta_init() == 0,
+	check(agent_metadata_init() == 0,
 	      "metadata store reusable after lifecycle churn");
 	fd = open("resreuse", O_CREATE | O_WRONLY | O_TRUNC);
 	check(fd >= 0, "allocate reusable file and inode");

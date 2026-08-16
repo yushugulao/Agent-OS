@@ -15,8 +15,8 @@
 #include "timer.h"
 #include "vfs_security.h"
 
-_Static_assert(AGENT_TASK_RESOURCE_SNAPSHOT_SIZE == AGENT_OP_PAYLOAD_SIZE,
-	       "Task resource snapshot must fit one tool payload");
+_Static_assert(AGENT_TASK_RESOURCE_SNAPSHOT_SIZE >= AGENT_OP_PAYLOAD_SIZE,
+	       "Task resource snapshot must cover one tool payload");
 
 #define AGENT_TASK_DELEGATE_CAPACITY NPROC
 #define AGENT_TASK_DELEGATE_SLOT_FREE       0U
@@ -149,40 +149,67 @@ agent_task_delegate_lifecycle_matches(
 }
 
 static int
-agent_task_delegate_identity_matches(const struct proc *p, int pid,
-				     int agent_id, uint64 control_id)
-{
-	return p != 0 && p->pid == pid && p->agent_id == agent_id &&
-	       p->agent_control_id == control_id;
-}
-
-static int
-agent_task_delegate_roles_compatible_locked(
+agent_task_delegate_would_cycle_locked(
 	const struct proc *owner, const struct proc *target,
+	struct workflow_lifecycle_key lifecycle,
 	const struct agent_task_delegate_slot *ignore)
 {
-	if (intr_get())
-		panic("delegated Task roles unlocked");
-	if (owner == 0 || target == 0 || owner == target)
-		return 0;
-	for (uint i = 0; i < AGENT_TASK_DELEGATE_CAPACITY; i++) {
-		const struct agent_task_delegate_slot *slot =
-			&agent_task_delegate_slots[i];
+	uint64 reachable[(NPROC + 63U) / 64U];
+	uint owner_index;
+	uint target_index;
 
-		if (slot == ignore ||
-		    slot->state == AGENT_TASK_DELEGATE_SLOT_FREE)
-			continue;
-		/* V1 keeps the delegation graph bipartite and therefore acyclic. */
-		if (agent_task_delegate_identity_matches(
-			    owner, slot->descriptor.target_pid,
-			    (int)slot->descriptor.target_agent_id,
-			    slot->descriptor.target_control_id) ||
-		    agent_task_delegate_identity_matches(
-			    target, slot->owner_pid, slot->owner_agent_id,
-			    slot->owner_control_id))
-			return 0;
+	if (intr_get())
+		panic("delegated Task graph unlocked");
+	if (owner == 0 || target == 0 || owner < pool || owner >= &pool[NPROC] ||
+	    target < pool || target >= &pool[NPROC])
+		return 1;
+	memset(reachable, 0, sizeof(reachable));
+	owner_index = (uint)(owner - pool);
+	target_index = (uint)(target - pool);
+	reachable[target_index / 64U] |= 1ULL << (target_index % 64U);
+	for (uint round = 0; round < NPROC; round++) {
+		int changed = 0;
+
+		for (uint i = 0; i < AGENT_TASK_DELEGATE_CAPACITY; i++) {
+			const struct agent_task_delegate_slot *slot =
+				&agent_task_delegate_slots[i];
+			struct proc *edge_owner;
+			struct proc *edge_target;
+			uint edge_owner_index;
+			uint edge_target_index;
+
+			if (slot == ignore ||
+			    slot->state == AGENT_TASK_DELEGATE_SLOT_FREE ||
+			    !workflow_lifecycle_key_equal(slot->lifecycle, lifecycle))
+				continue;
+			edge_owner = agent_task_delegate_find_proc_locked(
+				slot->owner_pid, slot->owner_agent_id,
+				slot->owner_control_id);
+			edge_target = agent_task_delegate_find_proc_locked(
+				slot->descriptor.target_pid,
+				(int)slot->descriptor.target_agent_id,
+				slot->descriptor.target_control_id);
+			if (edge_owner == 0 || edge_target == 0)
+				continue;
+			edge_owner_index = (uint)(edge_owner - pool);
+			edge_target_index = (uint)(edge_target - pool);
+			if ((reachable[edge_owner_index / 64U] &
+			     (1ULL << (edge_owner_index % 64U))) == 0)
+				continue;
+			if (edge_target_index == owner_index)
+				return 1;
+			if ((reachable[edge_target_index / 64U] &
+			     (1ULL << (edge_target_index % 64U))) == 0) {
+				reachable[edge_target_index / 64U] |=
+					1ULL << (edge_target_index % 64U);
+				changed = 1;
+			}
+		}
+		if (!changed)
+			break;
 	}
-	return 1;
+	return (reachable[owner_index / 64U] &
+		(1ULL << (owner_index % 64U))) != 0;
 }
 
 static struct proc *
@@ -202,10 +229,20 @@ agent_task_delegate_target_locked(
 		descriptor->target_pid, (int)descriptor->target_agent_id,
 		descriptor->target_control_id);
 	if (target == 0 ||
+	    target == owner ||
 	    !agent_task_delegate_lifecycle_matches(target, lifecycle) ||
 	    !agent_identity_has_cap(target, AGENT_CAP_TASK_ACCEPT) ||
-	    !agent_ipc_task_route_allows_locked(owner, target) ||
-	    !agent_task_delegate_roles_compatible_locked(owner, target, ignore))
+	    (descriptor->required_capabilities & owner->agent_capability_mask) !=
+		    descriptor->required_capabilities ||
+	    (descriptor->required_capabilities & target->agent_capability_mask) !=
+		    descriptor->required_capabilities ||
+	    (descriptor->allowed_tools & owner->agent_tool_grant_mask) !=
+		    descriptor->allowed_tools ||
+	    (descriptor->allowed_tools & target->agent_tool_grant_mask) !=
+		    descriptor->allowed_tools ||
+	    agent_task_delegate_would_cycle_locked(
+		    owner, target, lifecycle, ignore) ||
+	    !agent_ipc_task_route_allows_locked(owner, target))
 		return 0;
 	return target;
 }
@@ -217,22 +254,6 @@ agent_task_delegate_alloc_locked(void)
 		if (agent_task_delegate_slots[i].state ==
 		    AGENT_TASK_DELEGATE_SLOT_FREE)
 			return &agent_task_delegate_slots[i];
-	return 0;
-}
-
-static int
-agent_task_delegate_owner_busy_locked(const struct proc *owner)
-{
-	for (uint i = 0; i < AGENT_TASK_DELEGATE_CAPACITY; i++) {
-		const struct agent_task_delegate_slot *slot =
-			&agent_task_delegate_slots[i];
-
-		if (slot->state != AGENT_TASK_DELEGATE_SLOT_FREE &&
-		    owner != 0 && slot->owner_pid == owner->pid &&
-		    slot->owner_agent_id == owner->agent_id &&
-		    slot->owner_control_id == owner->agent_control_id)
-			return 1;
-	}
 	return 0;
 }
 
@@ -1274,6 +1295,18 @@ agent_task_delegate_complete_ready(
 		intr_restore(enabled);
 		return result->status;
 	}
+	if (complete->terminal_status == AGENT_STATUS_OK &&
+	    slot->descriptor.expected_result_type != AGENT_ARTIFACT_NONE &&
+	    !agent_context_artifact_task_result_valid(
+		    worker, slot->descriptor.result_artifact_handle,
+		    slot->descriptor.task_id,
+		    slot->descriptor.expected_result_type, lifecycle)) {
+		agent_task_delegate_complete_result_fill(
+			slot, result, AGENT_TASK_CHANNEL_EVIDENCE,
+			AGENT_TASK_DELEGATE_STATE_CLAIMED);
+		intr_restore(enabled);
+		return result->status;
+	}
 	slot->submitted_status = complete->terminal_status;
 	slot->submitted_flags = complete->flags;
 	slot->worker_completion_recorded = 1;
@@ -1442,8 +1475,13 @@ agent_task_bridge_delegate_descriptor_valid(
 	       descriptor->target_control_id != 0 && descriptor->task_id != 0 &&
 	       descriptor->correlation_id != 0 && descriptor->task_type != 0 &&
 	       descriptor->capsule_handle != 0 &&
-	       descriptor->flags == AGENT_TASK_DELEGATE_F_NONE &&
-	       descriptor->reserved == 0;
+	       (descriptor->required_capabilities & ~AGENT_CAP_KNOWN_ALL) == 0 &&
+	       (descriptor->allowed_tools &
+		~AGENT_TOOL_GRANT_ALL(AGENT_TOOL_COUNT)) == 0 &&
+	       descriptor->expected_result_type <
+		       AGENT_CONTEXT_ARTIFACT_KIND_COUNT &&
+	       (descriptor->expected_result_type == AGENT_ARTIFACT_NONE ||
+		descriptor->result_artifact_handle != 0);
 }
 
 static int
@@ -1482,7 +1520,9 @@ agent_task_bridge_op(const struct agent_task_sqe *sqe,
 	if (!agent_task_bridge_resource_input(sqe, input) &&
 	    !agent_task_bridge_delegate_input(sqe, input))
 		return -1;
-	memmove(op->payload, input->snapshot, (uint)input->length);
+	uint length = input->length > sizeof(op->payload) ?
+		      sizeof(op->payload) : (uint)input->length;
+	memmove(op->payload, input->snapshot, length);
 	if (input->handle.type == AGENT_ARTIFACT_UTF8)
 		op->payload[input->length] = 0;
 	return 0;
@@ -1606,6 +1646,18 @@ agent_task_bridge_delegate_submit(
 	if (curr_thread() != &p->threads[0])
 		return AGENT_TASK_CHANNEL_RETRY;
 	memmove(&descriptor, input->snapshot, sizeof(descriptor));
+	if ((descriptor.deadline_tick != 0 &&
+	     ((sqe->flags & AGENT_TASK_SQE_F_HARD_DEADLINE) == 0 ||
+	      descriptor.deadline_tick != sqe->deadline_tick)) ||
+	    (descriptor.required_capabilities & p->agent_capability_mask) !=
+		    descriptor.required_capabilities ||
+	    (descriptor.allowed_tools & p->agent_tool_grant_mask) !=
+		    descriptor.allowed_tools ||
+	    (descriptor.input_artifact_handle != 0 &&
+	     !agent_context_artifact_task_input_valid(
+		     p, descriptor.input_artifact_handle,
+		     binding->lifecycle)))
+		return AGENT_TASK_CHANNEL_DENIED;
 	enabled = intr_save();
 	target = agent_task_delegate_target_locked(
 		p, &descriptor, binding->lifecycle, 0);
@@ -1745,15 +1797,9 @@ agent_task_bridge_validate(struct proc *p, const struct agent_task_sqe *sqe,
 	struct agent_op op;
 	uint flags;
 	int status;
-	int enabled;
 
 	if (validation == 0 || completion == 0 ||
 	    agent_task_bridge_op(sqe, input, &op) < 0)
-		return AGENT_TASK_CHANNEL_RETRY;
-	enabled = intr_save();
-	status = agent_task_delegate_owner_busy_locked(p);
-	intr_restore(enabled);
-	if (status)
 		return AGENT_TASK_CHANNEL_RETRY;
 	agent_task_bridge_binding(sqe, input, &op, &binding);
 	flags = agent_task_bridge_admission_policy(sqe);
@@ -2109,7 +2155,9 @@ agent_task_bridge_resource_import(
 	     control->resource_type != AGENT_ARTIFACT_TASK) ||
 	    control->resource_flags != AGENT_TASK_HANDLE_F_OWNED ||
 	    control->source_handle >= FD_BUFFER_SIZE || control->length == 0 ||
-	    control->length > AGENT_TASK_RESOURCE_UTF8_MAX ||
+	    control->length > AGENT_TASK_RESOURCE_SNAPSHOT_SIZE ||
+	    (control->resource_type == AGENT_ARTIFACT_UTF8 &&
+	     control->length > AGENT_TASK_RESOURCE_UTF8_MAX) ||
 	    (control->resource_type == AGENT_ARTIFACT_TASK &&
 	     control->length != sizeof(struct agent_task_delegate_descriptor)) ||
 	    file == 0)
@@ -2159,8 +2207,10 @@ agent_task_bridge_resource_import(
 		goto out;
 	}
 	lease_held = 1;
+	uint read_length = length +
+		(control->resource_type == AGENT_ARTIFACT_UTF8 ? 1U : 0U);
 	got = readi_lease(file->ip, &cred, &lease, 0,
-			  (uint64)imported->snapshot, 0, length + 1U);
+			  (uint64)imported->snapshot, 0, read_length);
 	if (got < 0) {
 		status = got == FS_LOOKUP_BUSY ? AGENT_TASK_CHANNEL_RETRY :
 					       AGENT_TASK_CHANNEL_EVIDENCE;
@@ -2237,7 +2287,9 @@ agent_task_bridge_resource_release(struct proc *p, uint type, uint flags,
 	(void)source_handle;
 	if ((type != AGENT_ARTIFACT_UTF8 && type != AGENT_ARTIFACT_TASK) ||
 	    flags != AGENT_TASK_HANDLE_F_OWNED || length == 0 ||
-	    length > AGENT_TASK_RESOURCE_UTF8_MAX ||
+	    length > AGENT_TASK_RESOURCE_SNAPSHOT_SIZE ||
+	    (type == AGENT_ARTIFACT_UTF8 &&
+	     length > AGENT_TASK_RESOURCE_UTF8_MAX) ||
 	    (type == AGENT_ARTIFACT_TASK &&
 	     length != sizeof(struct agent_task_delegate_descriptor)))
 		panic("Task bridge resource release");

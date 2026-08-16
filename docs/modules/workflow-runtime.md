@@ -96,7 +96,7 @@ struct agent_event {
 
 跨 Agent 的 `MESSAGE` 先确认发送方和接收方都仍是有效 Agent，再比较文件访问范围和完整生命周期键。每个接收方最多保存 16 条消息路由。每条路由以发送方 `control_id` 为键，并记录允许的事件类型。普通发送者需要 `MESSAGE_SEND` 能力位。替他人配置路由需要 `ROUTE_MANAGE`，而且控制进程必须同时控制发送方与接收方。
 
-在初赛的设计中，跨 Agent 委派复用了普通 `MESSAGE` 事件：消息携带固定的 N1 typed Task 状态和 capsule handle，任务 objective 与正文保存在 capsule artifact 中；用户态负责核对 task/correlation 和状态迁移，并自行裁决领取、完成、取消与迟到结果。我们随后为委派增加独立的 `AGENT_IPC_ROUTE_TASK` 和 Task Channel，把 claim 时点与终态竞争交给内核任务槽管理。目标必须具有 `AGENT_CAP_TASK_ACCEPT`，发起者的 `delegate_task` SQE 进入内核 pending 队列后，目标用 `agent_task_delegate_claim()` 取得不可变 descriptor，再以 `agent_task_delegate_complete()` 提交 terminal 状态。任务结算时，发起者从自己的 CQ 至多取得一条 terminal CQE；任务正文和结果继续由 Guest artifact 承载，descriptor 保存目标身份、task type、task/correlation/parent 编号和 capsule handle。内核拒绝 self delegation 和活动端点交叉担任 owner/target，并限制每个 issuer 同时只有一个未结算委派，这三项约束共同维持二分无环的活动委派关系。
+在初赛的设计中，跨 Agent 委派复用了普通 `MESSAGE` 事件：消息携带固定的 N1 typed Task 状态和 capsule handle，任务 objective 与正文保存在 capsule Artifact 中；用户态负责核对 task/correlation 和状态迁移，并自行裁决领取、完成、取消与迟到结果。我们随后为委派增加独立的 `AGENT_IPC_ROUTE_TASK` 和 Task Channel，把 claim 时点与终态竞争交给内核任务槽管理。当前 128 字节 descriptor 保存 parent task、目标描述 Artifact、输入 Artifact、所需 capability、允许工具、workspace revision、资源预算、deadline 和预期结果类型。目标必须具有 `AGENT_CAP_TASK_ACCEPT`，父 Agent 的授权不得超出 workflow policy；内核拒绝 self delegation 和任务图中的真实环路，同时允许多个独立子任务并行。目标用 `agent_task_delegate_claim()` 领取任务，先封存结果 Artifact，再以 `agent_task_delegate_complete()` 提交 terminal 状态；任务完成结算时，发起者从自己的 CQ 至多取得一条 terminal CQE。
 
 发送成功后，内核队列项会保存发送方 PID、`control_id`、起因序号、调用跨度和 provenance（来源追溯）标记。公开的 `agent_event` 只返回事件字段，控制编号和来源信息留在内核附加区。接收方处理事件时，内核会先把 `CROSS_AGENT_DATA` 等标记合并到当前 provenance 状态，再追加一条带因果关系的 Context 记录。
 
@@ -118,7 +118,7 @@ int agent_wait_cancel(int pid, const char *reason);
 
 ### 3.3 心跳
 
-`agent_heartbeat_set(interval)` 从当前 tick（时钟节拍）重新计时，`interval` 为 0 时停止心跳。到期后，内核在队列中加入合并后的 `TIMER` 事件。停止心跳不会删除已经入队的事件。`agent_heartbeat_stop()` 可以重复调用。心跳和取消事件成功取出后，会按照事件预留和 Context commit 的正常路径处理。本地等待超时则直接返回 `TIMEOUT`，不占用队列槽位，也不写 Context 记录。
+`agent_heartbeat_configure(interval)` 从当前 tick（时钟节拍）重新计时，`interval` 为 0 时停止心跳。到期后，内核在队列中加入合并后的 `TIMER` 事件。停止心跳不会删除已经入队的事件，重复传入零仍返回成功。心跳和取消事件成功取出后，会按照事件预留和 Context commit 的正常路径处理。本地等待超时则直接返回 `TIMEOUT`，不占用队列槽位，也不写 Context 记录。
 
 ## 四、Workflow Credit Domain
 
@@ -223,28 +223,36 @@ workflow_credit_domain_fence(key, exec, storage, &credit);
 
 对于带请求编号的调用，同一编号配不同 `challenge` 返回 `CONFLICT`，更旧编号返回 `STALE`。上一次生成的回执尚未成功复制到用户态时，后续请求返回 `RETRY`。不要求回执的调用不进入 Replay 检查。生成失败时，内核恢复接纳新操作，也不会递增屏障序号。
 
-## 七、Nexus 多智能体 Harness Runtime
+## 七、Nexus 通用多 Agent Harness Runtime
 
-Nexus 一轮交互中 Host、Guest 与内核的协作路径如图 1 所示。图左侧是 QEMU Guest 内的 Relay、Context、Metadata Catalog 和工作进程，右侧是提供模型与版本化文件字节的 Host relay，底部是保存身份、Task Channel、Context 和工作流状态的 AgentOS kernel runtime；箭头串起从用户输入到模型决策、工具执行和最终结算的主线。
+Nexus 的通用多 Agent Harness 如图 1 所示。用户目标和 workflow policy 进入共同运行时，运行时按 capability、允许工具、资源额度、系统提示和任务描述建立 Agent 实例。AgentOS 内核提供 private Context、动态 Task Channel、Artifact seal metadata 与有界查询预测，workflow 共享索引只引用已经结算的公共 Artifact；工作区、构建和运行由受控 Provider 执行。
 
 <p align="center">
-  <img src="../figures/architecture/nexus_runtime_flow.jpg" alt="Nexus 通用任务、三工具与多智能体消息流程" width="960">
+  <img src="../figures/architecture/nexus_multiagent_harness.png" alt="Nexus 通用 Agent Loop、动态 Task、Artifact 与预测性预取" width="960">
 </p>
 
-**图 1　Nexus 通用多智能体 Harness 运行流程**
+**图 1　Nexus 通用多 Agent Harness**
 
 图中的单轮主线可以按以下顺序阅读：
 
-1. **输入。** Relay 接收非空用户目标，建立本轮 root Task，并在自己的 Context active path 上追加 USER 节点。
-2. **模型。** Guest 从 active path 重建消息，经 Host relay 请求 Provider 或固定 Replay；模型每次返回一个工具调用或最终答案。
-3. **候选。** `search_files` 和 `read_file` 先取得 Host manifest，再由 Guest Metadata Catalog 与 Live Query 选择并复核候选；`inspect_system` 则直接观察 Guest 状态。
-4. **Task。** Coordinator 把工具请求封装为 child Task，通过内核 Task Channel 委派给 Research 或 System，内核负责 claim、complete、cancel 与唯一终态。
-5. **Artifact 与 Context。** 工作进程把结果写入预绑定的 Guest artifact；Coordinator 复核后追加 TOOL 节点并继续模型循环，成功答案最终进入 FINAL 节点。
-6. **结算。** CQE、Execution Contract 和 root Task 依次收敛，成功轮次保留新的 active path，失败或取消则回滚本轮；Host ledger 只接收 Guest 已完成结算的事件投影。
+1. **输入与配置。** CLI 接收非空目标、workspace root、workflow policy、资源限制、允许工具和可选 Agent 配置，不预置与具体应用有关的执行步骤。
+2. **共同 Loop。** 每个 Agent 读取自己的 private Context 和待处理 Task，由新 Task、文件变化、子任务完成、预取完成、取消或 Heartbeat 唤醒；模型每轮返回一个工具请求、一次动态委派或最终结果。
+3. **动态 Task。** 拥有 `ORCHESTRATE` capability 的 Agent 可以建立子 Agent 和 128 字节 Task descriptor。父 Agent 只能授予自身与用户 policy 已有权限的子集，Task Channel 负责 pending、claim、complete、cancel 和 terminal CQE。
+4. **Artifact 与 Context。** USER、TOOL、FINAL、文件、补丁、诊断、运行日志、测试和子任务报告先写入用户态 Artifact Store。内核核验类型、长度、producer、Task、lifecycle 和 SHA-256 后封存 metadata；short Context record 只保存摘要、因果关系和 handle。
+5. **受控工具。** 工作区 broker 提供 revision 绑定的 read/write/patch；构建 broker 在临时工作树中使用固定 RISC-V 工具链；运行 broker 为每个用例启动独立 Guest。工具目录和授权来自 Agent 配置，与 Agent 名称无关。
+6. **共享与预测。** 父 Agent 只接纳成功终态对应的结果 Artifact。workflow 共享索引保存任务图、revision、build 和测试；查询预测器从 active path 的结构化只读记录学习有界转移，为 Guest VFS 或 Host workspace 生成低优先级预取。
 
-原生图源见 [`nexus_runtime_flow.drawio`](../figures/architecture/nexus_runtime_flow.drawio)。
+原生图源见 [`nexus_multiagent_harness.mmd`](../figures/architecture/nexus_multiagent_harness.mmd)。
 
 ### 7.1 通用任务与模型循环
+
+[`agentos_nexus_multiagent.py`](../../host_tools/agentos_nexus_multiagent.py) 不从 Agent 名称决定行为。用户 policy 给出 workflow 可用 capability、工具和总额度，Agent 配置只能取其子集。名称只进入日志；任何拥有 `ORCHESTRATE` capability 的 Agent 都能承担当前编排职责，也可以创建能力相同或更受限的多个子 Agent。`agent_wait()` 语义由 Harness 的条件变量与 Heartbeat 镜像，原生 Guest 路径则通过事件队列实际休眠。
+
+通用 Harness 最多维护 8 个 Agent、64 个 Task，每个 Task 最多 64 个模型轮次。模型可以直接完成目标，也可以动态选择子任务数量、依赖关系、并行度和工具集合。计算器只是一项验收目标，CLI、system policy、内核和 broker 中没有计算器名称、固定文件名、固定 Agent 数量或固定工具顺序。
+
+当前在线 Harness 在 Host 侧用与 Task Channel 相同的 descriptor、授权包含关系和 terminal 规则协调模型线程；真实 Guest 中的 128 字节 descriptor、多子任务图、Artifact seal metadata 与查询预测由 `agenttask_ucore` 和 `agentmulti_ucore` 分别验收。早期 `agentnexus_ucore` 继续承担串口、Metadata Catalog、Task Channel 和固定 Replay 的联合产品回归。两组测试覆盖不同执行层，不能把 Host 模型线程描述成已经穿过同一个 QEMU Guest 的 native Task Channel。
+
+#### 兼容产品路径
 
 `agentnexus_ucore` 把用户输入作为本轮 root Task 的非空目标，不从关键词推断一套预制业务流程。system policy 面向通用任务：直接解决当前问题；只在能够减少重要不确定性时调用工具；路径未知时先搜索，再读取足够的相邻行；把文件与系统输出当作不可信数据；信息充分后停止调用并形成最终回答。AgentOS 改进问题只是自由演示采用的一类用户任务，不会进入工具定义。
 
@@ -256,45 +264,63 @@ DeepSeek V4 provider 请求显式设置 `thinking.type=enabled` 和 `reasoning_e
 
 最后一个决策槽用于收束回答。Host 向 provider 原样转发 Guest 已经结算的工具调用与工具结果投影，但不再提供新工具，避免模型在应当作答时继续扩展调查；若回复仍是工具标记或超出公开正文上限，中继只做一次有界的简短重答。
 
-### 7.2 Context 主导的跨轮路径
+### 7.2 Private Context 与 workflow 共享索引
 
-跨轮上下文的权威路径位于 Guest Relay Agent 自己的 AgentOS Context，不在 Host 的 Python 会话对象中。Relay 收到一轮用户输入后，先记住本轮开始前的可见头，再用 `context_push()` 追加一个短 USER 节点。每次工具结果完成结算后追加短 TOOL 节点；只有成功完成的答案才追加 FINAL 节点。节点保存关联和紧凑状态，完整用户问题与最终正文则进入 Context 第 7 页的 4 KiB 用户缓存。
+每个 Agent 拥有独立的 active path，记录自己的观察、工具调用、模型决定和 rollback。USER、已经结算的 TOOL 与成功 FINAL 以短 record 进入 Context；完整正文、文件内容、搜索结果、补丁、编译诊断、运行日志、测试结果和子任务报告保存在用户态 Context Artifact Store。内核 syscall 571 对每项正文执行类型、长度、UTF-8、所有者和 SHA-256 核验，封存后记录 handle、producer、Task id、来源 sequence 和 lifecycle，随后才允许 Context 或 Task 引用。
 
-构造下一次模型请求时，Relay 优先用 `context_direct_header_snapshot()` 和 `context_direct_active_query()` 直接读取映射页，读取期间会复核 header 是否稳定；映射路径暂时不可用时，再用 `context_snapshot()` 和 `context_query()` 回退。4 KiB 缓存只是完整文本的有界伴随区：Relay 只有在同一轮的 USER 与 FINAL 节点都仍位于 active path 时才采用对应正文。它最多保留两个完整轮次的最新后缀；空间连最新一轮也容纳不下时不缓存正文，绝不截断。因此 active path 决定“哪些轮次可见”，缓存只回答“这些可见轮次的完整文本是什么”。
+Artifact 单项最大 64 KiB；workflow 默认最多 128 项、正文总计 2 MiB，单个 Agent 还有独立数量、字节和读取额度。模型单次投影最多 12 KiB，较大的正文按 offset 分页读取。private Context 达到高水位时，Nexus 生成结构化摘要，保留目标、完成工作、工具、修改文件与 revision、build、测试、错误、待办和计划。摘要携带原 sequence、Artifact handle、Task id、producer 和 hash。
 
-每次模型请求只携带当时可完整装入的先前成功轮次后缀，不会截断或重排所保留的轮次。成功 FINAL 节点位于本轮所有已经结算且仍可见的 TOOL 节点之后。
+workflow 共享索引保存任务图、Agent 配置、公共 Artifact、revision、build id、测试、冲突、关键决定和未完成 Task。它只引用已经成功结算并声明共享的 Artifact，不复制每个 Agent 的完整对话。子 Agent 先封存结果 Artifact，再提交 terminal Task 状态；父 Agent 从 terminal CQE 取得 handle 后，重新核对 producer、Task id、Context sequence、lifecycle 和 SHA-256，复核完成后才接纳结果。
 
-成功轮次把 USER/FINAL 正文对发布到缓存；只有 FINAL 节点与缓存提交完成后，Relay 才确认 Coordinator 将本轮 root Task 置为完成。提交失败时 root Task 以失败结束，Relay 随即回滚本轮 Context，不会留下“任务已完成但上下文未保存”的分叉状态。失败或取消同样调用 Context rollback 回到本轮开始前的可见头，目标为零、已经失效或无法恢复时清空 Context 与缓存。成功的 `/reset` 也会同时清空 Relay Context、这一个用户页以及工作区 Catalog/Typed Watch 状态。Host 不私建、补写或替换 Provider 请求中的跨轮正文，只核对 turn、request、Context sequence 等关联，并把正文留在 Guest 生成的标准消息中。在线 Provider 与固定 Replay 因而接收相同的消息形状；observer 不接收跨轮正文，controller 只在 Guest 完成工具 artifact 复核和结算后收到 Guest 发布的 `TOOL_EVENT` 投影。
+rollback 只移动当前 Agent 的 active path，不撤销其他 Agent 的外部作用。当前分支独占且失去引用的 Artifact 按引用计数和 lifecycle 延迟回收；已经被父任务接纳、被其他 Agent 引用或已经修改共享工作区的结果继续保留。文件冲突依靠 revision 检查、原子替换和补偿 Task 处理。摘要不会移除仍在运行的 Task、未解决错误、尚未合并的修改和其他 Agent 正在依赖的 Artifact。
 
-这条路径把跨轮延续接在 AgentOS 已有的 Context active path 上；工具协作通过真正的内核 Task Channel 和 Guest artifact 完成，`MESSAGE` 只保留为一般进程通信，不传输 child Task 的 payload 或状态。它不是与内核并列的外部记忆或任务系统，也不会绕过已有的生命周期。
-
-### 7.3 三个公开工具与工作进程
+### 7.3 七项 brokered 工具与动态 Task
 
 | 公开工具 | 执行路径 | 返回内容 |
 | --- | --- | --- |
-| `search_files` | Guest 分页接收 manifest，用 Metadata Catalog/Live Query 选出候选；Host 只扫描这些候选；实际结果作为 artifact 通过 Task Channel 交给 Research | 匹配路径或文本行；空查询列出候选文件，可用 `path_prefix` 缩小范围，聚合后最多返回 8 项 |
-| `read_file` | Guest 先以完整路径找到 manifest 对象并用 Catalog 精确复核；Host 返回 object/path/revision 绑定的字节；实际结果作为 artifact 通过 Task Channel 交给 Research | 从一个工作区相对路径读取 1 至 64 行，返回实际范围及是否还有后续内容 |
-| `inspect_system` | Coordinator 通过 Task Channel 把 capsule 交给 System | 只观察当前 Guest 的 `status`、`processes` 或 `context`，不描述 Host 文件 |
+| `search_files` | workspace broker 生成 manifest 并在允许候选中匹配；结果封存为 SEARCH Artifact | 匹配路径或文本行；空查询列出候选文件，可用 `path_prefix` 缩小范围，聚合后最多返回 8 项 |
+| `read_file` | broker 核对 root、object/path/revision/range 后返回字节；结果封存为 FILE Artifact | 从一个工作区相对路径读取 1 至 64 行，返回实际范围及是否还有后续内容 |
+| `inspect_system` | 取得当前 Guest 的受控状态投影并形成 TOOL Artifact | 只观察 `status`、`processes` 或 `context`，不描述 Host 文件 |
+| `write_file` | 开发 broker 核对 root、路径和准确 revision，再执行同目录原子替换 | 新旧 revision、字节数和提交状态；只允许 `user/src/nexus_*_ucore.c` |
+| `apply_patch` | 复核相同路径与 revision 后应用有界 unified diff，冲突时保持原文件 | 新旧 revision、补丁结果和提交状态 |
+| `build_ucore_program` | 在会话私有临时工作树中构建同名目标，固定 RISC-V 工具链并限制 CPU、内存、文件、进程、时间和诊断长度 | source revision、build id、退出状态、镜像状态与有界诊断 |
+| `run_ucore_program` | 从成功 build 复制独立镜像，启动单 Hart、128 MiB 的新 Guest，通过串口输入一个测试用例 | 实际输出、退出状态、日志摘要、超时状态和 `normal/invalid/failure` 类型 |
 
-工具只有在模型选中时才建立 child Task。Coordinator 为目标身份、task/correlation、parent task 和 capsule handle 构造 56 字节不可变 descriptor，以 `AGENT_ARTIFACT_TASK` 导入自己的 Task Channel，并把 `delegate_task` SQE 置入 Execution Contract。内核进入 pending 后，Research 或 System 调用 claim；内核在返回 descriptor 前标记任务已经开始产生作用。该 effect lease 只绑定当前 worker 身份、线程 generation 与 channel/request/slot 代次，并只允许 Contract manifest 声明的 side-effect mask，不是 workflow 范围的额外权限。System/Sentinel 与 Research/Investigator 持有写 result artifact 所需的 `AGENT_CAP_ARTIFACT_WRITE`，但仍要同时通过 artifact manifest permission、VFS 文件访问范围和这项 lease。目标处理 Guest capsule 和输入 artifact，发布预先绑定 handle 的结果 artifact，再调用 complete。CQE 本身不携带大段输入或输出。
+工具只有在模型选中时才执行。拥有 `ORCHESTRATE` capability 的 Agent 可以为子任务构造 128 字节 descriptor，其中包含 parent task、目标描述 Artifact、输入 Artifact、所需 capability、允许工具、workspace revision、资源预算、deadline 和预期结果类型。内核检查父子 capability 与工具集合的包含关系，拒绝 self delegation 和任务图中的真实环路；多个互不依赖的子任务可以并行处于 pending 或 claimed 状态。目标处理输入 Artifact，封存结果 Artifact，再调用 complete。CQE 只返回状态、handle 与关联信息。
 
-Guest 在提交 SQE 前把完整取消绑定交给同一生命周期的 Relay controller。用户取消到达后，controller 以 syscall 568 的 `REQUEST_CANCEL`、`CANCELLED` 和零 ACK 字段回传 owner/channel/request/slot/task/correlation，并同时满足 `ORCHESTRATE`、`WAIT_CANCEL` 与 caller 到 owner 的 TASK route。`OK` 只确认控制请求已经线性化：QUEUED 由 owner lane 终结，CLAIMED 的 Research/System 仍会在 complete 时收到 `CANCELLED` 或优先级更高的 `TIMEOUT` offer，先撤销预绑定结果再 `ACK_TERMINAL`；READY 的先到结果不被迟到取消覆盖。PREPARING/CLAIMING 时 controller 重试同一绑定，结果 copyout 丢失也由内核回执支持相同重试。
+提交方在 SQE 建立前保存完整取消绑定。同一生命周期内具备 `ORCHESTRATE` 与 `WAIT_CANCEL` 的 Agent 可以用 syscall 568 的 `REQUEST_CANCEL` 回传 owner/channel/request/slot/task/correlation。`OK` 只确认控制请求已经线性化：QUEUED 由 owner lane 终结，CLAIMED 的执行 Agent 在 complete 时收到 `CANCELLED` 或优先级更高的 `TIMEOUT` offer，先撤销预绑定结果再 `ACK_TERMINAL`；READY 的先到结果不被迟到取消覆盖。
 
-Coordinator 从唯一 CQE 取得 terminal 状态后，先确认 CQ、释放 Task resource，再调用 `RETIRE`。Contract 首先进入 `RETIRING` 并停止新准入；直接调用和运行引用全部归零后才返回 `OK/RECLAIMED`。Coordinator 确认 `RECLAIMED` 后才恢复 observer、读取结果 artifact、发布 `TASK_EVENT`/`TOOL_EVENT` 并允许下一代 Contract。CREATE 发布时只为普通 inode 操作固定引用，长期阻塞的 pipe/device 控制读取不会阻止 Contract 建立；活动 Contract 内的普通 pipe write 仍按 IPC 副作用检查，因此 observer/Host 事件输出不会成为旁路。正常 complete、cleanup ACK 或目标 quiescence 会在活动作用返回后撤销 delegated lease。当前实现把每个 issuer 的未结算委派限制为一个，也不会强制终止永久无响应的执行者。
+父 Agent 从 terminal CQE 取得状态与结果 handle 后，先确认 CQ、释放 Task resource，再核对结果 Artifact 的 producer、Task、sequence、lifecycle 和 SHA-256。Contract 首先进入 `RETIRING` 并停止新准入；直接调用和运行引用全部归零后返回 `OK/RECLAIMED`。父 Agent 接纳结果后才写入 private Context 或 workflow 共享索引。CREATE 发布时只为普通 inode 操作固定引用，长期阻塞的 pipe/device 控制读取不会阻止 Contract 建立；正常 complete、cleanup ACK 或目标 quiescence 会在活动作用返回后撤销 delegated lease。当前实现不会强制终止永久无响应的执行者。
 
-每次 `search_files` 或 `read_file` 都从 cursor 0 和空 generation 开始取得 Host manifest，一条工具链最多使用 8,192 个 wire attempt，包括 stale 后的重启。Host 每页最多返回 32 个带 object id、path、revision 和 size 的项目；generation 绑定一次目录快照，object id 稳定绑定相对路径，revision 绑定同一已打开对象的实际内容。Guest 在有界运行时 arena 中保留页面的完整字段，同时建立 1 个 control inode 和最多 32 个 data-stub inode；data stub 以 `host/<object_id>` 作为 logical path，按 4 个 stage、每组最多 8 项登记 project、workflow、generation-derived run、kind 和 status。每个 stage 都通过 `agent_file_query()` 选择，Guest 要求返回数量精确且 `truncated=0`，随后再用运行时 arena 中的完整路径检查 prefix 或 exact match。因此 Metadata Catalog 是当前页面的有界目录窗口，不是整仓全文索引。
+每个 `search_files` 或 `read_file` correlation 都从 cursor 0 开始，第一次 MANIFEST 请求保留空 generation，后续请求携带本次已经校验的 generation。一条工具链最多使用 8,192 个 wire attempt，包括 stale 后的重启。Host 每页最多返回 32 个带 object id、path、revision 和 size 的项目；generation 绑定一次目录快照，object id 稳定绑定相对路径，revision 绑定同一已打开对象的实际内容。Guest 每次都重新获取并解析 manifest，计算有序 object/path/revision 摘要，再核对 Host 结果与关联字段。
 
-control stub 由 Typed Watch 订阅。manifest generation 改变时，Guest 先把旧 data window 标为 stale，更新 control metadata，并实际消费 `FILE_QUERY UPDATE`，之后才把新页面视为当前窗口。搜索遍历全部 manifest 页面；某一页没有 Catalog 候选时不会请求 Host 扫描，有候选时只发送最多 32 个 object/path/revision。读取先在 manifest 中找到完整路径，再以 `host/<object_id>` 对 Catalog 做精确查询。Host 强制 manifest 的 cursor 顺序，候选页面必须处理完成后才能前进，read 对象也必须来自同一 correlation 已经交付的 Catalog 页面。Host 返回 `stale` 时，Guest 清除当前 generation 与已累积结果，从 cursor 0 重试。
+Guest 在有界运行时 arena 中保留页面的完整字段，同时建立 1 个 control inode 和最多 32 个 data-stub inode；data stub 以 `host/<object_id>` 作为 logical path，按 4 个 stage、每组最多 8 项登记 project、workflow、generation-derived run、kind 和 status。登记按每批最多 16 项提交。每个 stage 都通过 `agent_file_query()` 选择，Guest 要求返回数量精确且 `truncated=0`，随后再用运行时 arena 中的完整路径检查 prefix 或 exact match。Metadata Catalog 管理当前页面的有界目录窗口，全文匹配继续由 Host 在 Guest 选定的候选内完成。
 
-Host workspace broker 只持有会话显式指定并固定在目录句柄上的 root，通过 V2 `WORKSPACE_REQUEST`/`WORKSPACE_RESULT` 负责有界目录枚举、manifest generation、候选正文扫描和指定 revision 的 UTF-8 字节传输。它拒绝绝对路径、父目录跳转、反斜杠和链接逃逸，不替 Guest 选择候选，也不执行 Nexus child Task。manifest 页正文最多 12,000 字节；候选搜索或读取结果最多 2,800 字节。实际搜索/读取正文回到 Guest 后，Coordinator 先把它发布为 `HOST_WORKSPACE` TOOL_INPUT artifact，并通过 Task capsule 交给 Research；Research 将处理后的字节发布为 RESEARCH_RESULT，complete 后由 Coordinator 复核 artifact，再写入 TOOL Context、模型历史和 `TOOL_EVENT`。Host 不私建、补写或替换 Provider 请求中的这段工具历史。原始 Host workspace event 和 telemetry 只记录绑定、摘要、字节数与 manifest cursor，不携带正文；controller 可在 Guest 完成 artifact 复核和结算后收到 Guest `TOOL_EVENT` 中的 `model_projection`。
+同一生命周期内，复用键同时包含 lifecycle id/generation、cursor、entry count、EOF、workspace generation 和有序对象摘要。新 manifest 与复用键一致，且 control stub 查询仍为 `READY` 时，Guest 直接使用现有 Catalog，省去 data stub 重新登记。需要重建时，Guest 先清除旧复用键，将 control stub 更新为 `BUILDING`，使旧 data window 失效，再载入全部批次；所有批次完成后才发布 `READY` 并记录新键。构建失败会发布 `STALE` 并清理窗口，清理失败执行完整 reset。完整 reset 会按非零 `watch_id` 移除 Typed Watch，并清空 generation、生命周期键和复用键。
 
-### 7.4 Host 协作与测试方式
+control stub 由 Typed Watch 订阅。manifest generation 改变时，Guest 消费 `FILE_QUERY UPDATE`，旧窗口随即失效。搜索遍历全部 manifest 页面；某一页没有 Catalog 候选时不会请求 Host 扫描，有候选时只发送最多 32 个 object/path/revision。读取先在 manifest 中找到完整路径，再以 `host/<object_id>` 对 Catalog 做精确查询。Host 强制 manifest 的 cursor 顺序，候选页面必须处理完成后才能前进，read 对象也必须来自同一 correlation 已经交付的 Catalog 页面。Host 返回 `stale` 时，Guest 先清理 Catalog、generation 与已累积结果，再检查重试额度并从 cursor 0 重新开始。
+
+Host workspace broker 只持有会话显式指定并固定在目录句柄上的 root，通过 V2 `WORKSPACE_REQUEST`/`WORKSPACE_RESULT` 负责有界目录枚举、manifest generation、候选正文扫描、指定 revision 的 UTF-8 字节传输和受控开发操作。它拒绝绝对路径、父目录跳转、反斜杠和链接逃逸，不替 Guest 选择候选。manifest 页正文最多 12,000 字节；候选搜索或读取结果最多 2,800 字节。开发写入正文和补丁最多 6,000 个 schema 字符，broker 另按 UTF-8 字节数执行硬限制；编译诊断和运行日志各最多返回 2,200 字节。
+
+实际结果返回 Agent Loop 后，Harness 先把正文封存为对应类型的 Artifact，再追加 TOOL Context。开发结果中的 source revision、build id、diagnostic SHA-256、实际输出、退出状态与 log SHA-256 沿同一路径保存。完成门在最终答案前检查当前 source revision 具有成功 build，且同一 build 已通过 `normal`、`invalid`、`failure` 三类 Guest 用例。任何后续写入或补丁都会使旧 build 与运行证据失效。
+
+### 7.4 查询预测与预取
+
+每次成功文件查询或读取在 Context record 之外提交机器可读签名，包括操作类型、tool id、`dev + inum + incarnation`、文件 revision、workspace object id、查询指纹、offset、length、Context/cause sequence、tick、workflow lifecycle、branch generation 和执行 Agent identity。内核为每个 Agent 保持私有的 16 项固定转移表；workflow 级共享训练只接收明确共享、已经成功结算且所有目标 Agent 都有读取权限的记录。
+
+提交签名 B 时，内核从当前 Agent 的 active path 找到此前签名 A，更新 `A -> B` 的观察次数和成功次数。再次执行 A 时，若观察数和置信度达到配置阈值，内核产生低优先级请求。Guest VFS 目标进入异步预取队列；Host workspace 目标产生带 object id、revision 和 range 的 `PREFETCH_HINT` 事件。默认单次最多 4 KiB、同时最多 2 项，I/O 按 Agent 与 workflow 记账。
+
+训练只接受成功结算的只读操作。失败、取消、超时、拒绝、未完成 Task 和回滚分支不进入转移表。rollback 清除当前分支的短期预测状态，Context clear、Agent 退出和 lifecycle 变化清理对应预测器；文件 incarnation、revision 或 workspace generation 变化使相关项失效。预取数据只进入缓存，正式读取仍重新执行 capability、文件访问范围、workspace root、revision 和 lifecycle 检查。当前 Guest 验收覆盖预测产生、Host hint 和 hit 计数；旧产品 Relay 对 Host hint 的实际消费仍是后续接入项。
+
+### 7.5 Host 协作与测试方式
 
 Guest 为每轮 root Task 和每个 child Task 发出 `TASK_EVENT`。Host 的 [`agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py) 跟踪 lifecycle/turn、root-child DAG、内核 PID/agent/control identity 与任务状态迁移，用于确认每个工具请求由预期的工作进程完成。它不判断某个 AgentOS 改进结论是否正确，也不把演示题目固化为运行时流程。
 
-固定 Nexus replay 使用保存的 provider 回复重复运行同一套 QEMU、串口、三工具、Task Channel、Metadata Catalog、Typed Watch、artifact 和 Relay Context 路径，属于协议交互回归。在线模式与 replay 都直接使用 Guest 重建的同一消息与真实 TOOL artifact 投影；Host ledger 只核对关联和 Guest 投影，不把自己作为跨轮正文来源，也不私下补写工具结果。Nexus 自由演示连接在线 DeepSeek，关注模型能否针对用户问题自行研究并给出自然合理的结论。模型表现不理想时，我们会调整通用 system policy、文件导航、Context 路径、结果回注或多智能体任务协作，避免增加只服务某道演示题的专用工具。
+固定 Nexus replay 使用保存的 provider 回复重复运行同一套 QEMU、串口、Task Channel、Metadata Catalog、Typed Watch、artifact 和 Relay Context 路径，属于协议交互回归。开发 replay 另行重放写入、失败构建、修补、成功构建和三类 Guest 结果，验证完成门与证据失效规则。在线模式与 replay 都直接使用 Guest 重建的消息与真实 TOOL artifact 投影；Host ledger 只核对关联和 Guest 投影，不把自己作为跨轮正文来源，也不私下补写工具结果。
 
-当前版本是只读 Harness：它可以搜索和读取 Host 工作区、检查 Guest 状态，但不编辑文件、不执行 Shell，也没有独立子模型。`/reset` 与会话关闭都会使 Guest 的工作区 Catalog/Typed Watch 状态失效，下一次工具调用从新的 manifest 开始。Guest 主程序位于 [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)，共用协议见 [`user/include/agent_nexus_protocol.h`](../../user/include/agent_nexus_protocol.h)，Host 合约、工作区访问与 Task ledger 分别位于 [`host_tools/agentos_nexus_contract.py`](../../host_tools/agentos_nexus_contract.py)、[`host_tools/agentos_workspace.py`](../../host_tools/agentos_workspace.py) 和 [`host_tools/agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py)。运行方法见[运行指南](../usage.md#4-使用-nexus-多智能体-harness)。
+通用 Harness 已由 DeepSeek 完成一次真实计算器开发：模型自行选择单 Agent 方案，在 21 个模型轮次中调用 20 次工具，经历一次 revision 冲突后重新读取并提交；最新 build 分别通过正常输入、无效输入和除零路径的独立 Guest 测试。该案例只是一项通用目标，运行时没有计算器专用分支。完整 revision、build id、Artifact hash 与团队摘要见 [`ci/agentos-nexus-multiagent-evidence.json`](../../ci/agentos-nexus-multiagent-evidence.json)。
+
+Shell、任意命令和任意路径写入仍不开放。`/reset` 与会话关闭会使工作区 Catalog/Typed Watch 状态及 Host 临时 build 失效。通用 Harness 位于 [`host_tools/agentos_nexus_multiagent.py`](../../host_tools/agentos_nexus_multiagent.py)，受控开发 broker 位于 [`host_tools/agentos_nexus_dev.py`](../../host_tools/agentos_nexus_dev.py)，内核 Artifact 与预测模块分别位于 [`os/agent_context_artifact.c`](../../os/agent_context_artifact.c) 和 [`os/agent_context_prefetch.c`](../../os/agent_context_prefetch.c)。运行方法见[运行指南](../usage.md#4-使用-nexus-多智能体-harness)。
 
 ## 八、源码位置与测试
 
@@ -306,7 +332,7 @@ Guest 为每轮 root Task 和每个 child Task 发出 `TASK_EVENT`。Host 的 [`
 | 工作流 EEVDF | [`os/workflow_scheduler.c`](../../os/workflow_scheduler.c)、[`os/proc.c`](../../os/proc.c) |
 | 运行记录环与 Workflow Fence | [`os/agent_workflow_fence.c`](../../os/agent_workflow_fence.c) 及相邻运行记录模块 |
 | 运行时间线 | [`os/agent_observe_timeline.c`](../../os/agent_observe_timeline.c) |
-| Nexus 通用合约、Catalog 工作区窗口、Task Channel 委派、工作区 broker 与 Task ledger | [`user/src/agentnexus_ucore.c`](../../user/src/agentnexus_ucore.c)、[`user/lib/agent_nexus.c`](../../user/lib/agent_nexus.c)、[`os/agent_task_bridge.c`](../../os/agent_task_bridge.c)、[`host_tools/agentos_nexus_contract.py`](../../host_tools/agentos_nexus_contract.py)、[`host_tools/agentos_workspace.py`](../../host_tools/agentos_workspace.py) 和 [`host_tools/agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py) |
+| 通用 Agent 配置、动态 Task、Context Artifact、预测器与受控 Provider | [`include/agent_multiagent_abi.h`](../../include/agent_multiagent_abi.h)、[`os/agent_task_bridge.c`](../../os/agent_task_bridge.c)、[`os/agent_context_artifact.c`](../../os/agent_context_artifact.c)、[`os/agent_context_prefetch.c`](../../os/agent_context_prefetch.c)、[`host_tools/agentos_nexus_multiagent.py`](../../host_tools/agentos_nexus_multiagent.py)、[`host_tools/agentos_workspace.py`](../../host_tools/agentos_workspace.py) 和 [`host_tools/agentos_nexus_dev.py`](../../host_tools/agentos_nexus_dev.py) |
 
 Runtime 测试覆盖无丢失唤醒、慢订阅者隔离、心跳、消息路由、Workflow Credit Domain、运行记录环票号、Workflow Fence 重试、EEVDF 和 Nexus Replay：
 

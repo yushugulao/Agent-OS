@@ -28,22 +28,22 @@ struct expected_tool_schema {
 static const struct expected_tool_schema expected_tools[AGENT_TOOL_COUNT] = {
 	{ AGENT_TOOL_ECHO, AGENT_TOOL_F_CALLABLE, 3, "echo", "payload:string,arg0:uint64,arg1:uint64" },
 	{ AGENT_TOOL_PID_INFO, AGENT_TOOL_F_CALLABLE, 0, "pid_info", "none" },
-	{ AGENT_TOOL_CTX_STAT, AGENT_TOOL_F_CALLABLE, 0, "ctx_stat", "none" },
+	{ AGENT_TOOL_CTX_STAT, AGENT_TOOL_F_DEPRECATED, 0, "ctx_stat", "none" },
 	{ AGENT_TOOL_QUERY_PROCESS, AGENT_TOOL_F_CALLABLE, 1, "query_process", "type?:uint64" },
 	{ AGENT_TOOL_GET_SYSTEM_STATUS, AGENT_TOOL_F_CALLABLE, 0, "get_system_status", "none" },
-	{ AGENT_TOOL_READ_CONTEXT, AGENT_TOOL_F_CALLABLE, 0, "read_context", "none" },
+	{ AGENT_TOOL_CONTEXT_STATUS, AGENT_TOOL_F_CALLABLE, 0, "context_status", "none" },
 	{ AGENT_TOOL_QUERY_FILE, AGENT_TOOL_F_CALLABLE, 1, "query_file", "path:string" },
 	{ AGENT_TOOL_SEND_MESSAGE, AGENT_TOOL_F_CALLABLE, 2, "send_message", "target_pid:uint64,message:string" },
 	{ AGENT_TOOL_READ_MESSAGE, AGENT_TOOL_F_CALLABLE, 0, "read_message", "none" },
-	{ AGENT_TOOL_FILE_META_INIT, AGENT_TOOL_F_CALLABLE, 0, "file_meta_init", "none" },
+	{ AGENT_TOOL_METADATA_INIT, AGENT_TOOL_F_CALLABLE, 0, "metadata_init", "none" },
 	{ AGENT_TOOL_READ_FILE_SUMMARY, AGENT_TOOL_F_CALLABLE, 1, "read_file_summary", "selector:string" },
 	{ AGENT_TOOL_DEPENDENCY_QUERY, AGENT_TOOL_F_CALLABLE, 1, "dependency_query", "label:string" },
 	{ AGENT_TOOL_CAPABILITY_CHECK, AGENT_TOOL_F_CALLABLE, 2, "capability_check", "role:uint64,action:string" },
-	{ AGENT_TOOL_RERUN_STAGE, AGENT_TOOL_F_CALLABLE, 2, "rerun_stage", "role?:uint64,stage:string" },
-	{ AGENT_TOOL_WRITE_REPORT, AGENT_TOOL_F_CALLABLE, 2, "write_report", "role?:uint64,payload:string" },
+	{ AGENT_TOOL_RERUN_STAGE, AGENT_TOOL_F_DEPRECATED, 2, "rerun_stage", "role?:uint64,stage:string" },
+	{ AGENT_TOOL_WRITE_REPORT, AGENT_TOOL_F_DEPRECATED, 2, "write_report", "role?:uint64,payload:string" },
 	{ AGENT_TOOL_AGENT_WATCH, AGENT_TOOL_F_CALLABLE, 2, "agent_watch", "event_type:uint64,filter:string" },
 	{ AGENT_TOOL_AGENT_WAIT, AGENT_TOOL_F_SYSCALL_ONLY, 1, "agent_wait", "timeout:uint64" },
-	{ AGENT_TOOL_AGENT_HEARTBEAT, AGENT_TOOL_F_CALLABLE, 1, "agent_heartbeat", "interval:uint64" },
+	{ AGENT_TOOL_HEARTBEAT_CONFIGURE, AGENT_TOOL_F_CALLABLE, 1, "heartbeat_configure", "interval:uint64" },
 	{ AGENT_TOOL_CONTEXT_PUSH, AGENT_TOOL_F_SYSCALL_ONLY, 1, "context_push", "record:string" },
 	{ AGENT_TOOL_READ_FILE_DIGEST, AGENT_TOOL_F_CALLABLE, 1, "read_file_digest", "selector:string" },
 	{ AGENT_TOOL_ACTION_COMMIT, AGENT_TOOL_F_CALLABLE, 2, "action_commit", "role?:uint64,selector:string" },
@@ -52,6 +52,13 @@ static const struct expected_tool_schema expected_tools[AGENT_TOOL_COUNT] = {
 	{ AGENT_TOOL_LLM_RESPONSE, AGENT_TOOL_F_CALLABLE, 2, "llm_response", "target_pid:uint64,reply_summary:string" },
 	{ AGENT_TOOL_DEPENDENCY_UPDATE, AGENT_TOOL_F_CALLABLE, 1, "dependency_update", "selector:string" },
 	{ AGENT_TOOL_DELEGATE_TASK, AGENT_TOOL_F_SYSCALL_ONLY, 0, "delegate_task", "none" },
+	{ AGENT_TOOL_APPLY_PATCH, AGENT_TOOL_F_BROKERED, 3, "apply_patch", "artifact_handle:uint64,expected_rev:uint64,path:string" },
+	{ AGENT_TOOL_WRITE_FILE, AGENT_TOOL_F_BROKERED, 3, "write_file", "artifact_handle:uint64,expected_rev:uint64,path:string" },
+	{ AGENT_TOOL_SEARCH_FILES, AGENT_TOOL_F_BROKERED, 0, "search_files", "none" },
+	{ AGENT_TOOL_READ_WORKSPACE_FILE, AGENT_TOOL_F_BROKERED, 0, "read_workspace_file", "none" },
+	{ AGENT_TOOL_INSPECT_SYSTEM, AGENT_TOOL_F_BROKERED, 0, "inspect_system", "none" },
+	{ AGENT_TOOL_BUILD_UCORE_PROGRAM, AGENT_TOOL_F_BROKERED, 0, "build_ucore_program", "none" },
+	{ AGENT_TOOL_RUN_UCORE_PROGRAM, AGENT_TOOL_F_BROKERED, 0, "run_ucore_program", "none" },
 };
 
 static void check(int ok, const char *message)
@@ -150,9 +157,9 @@ static void check_lists(void)
 		      strcmp(tools_v2[i].params, expected->params) == 0,
 		      "v2 full schema table");
 	}
-	check(strcmp(tools_v2[AGENT_TOOL_AGENT_HEARTBEAT - 1].description,
-		     "set heartbeat interval; zero stops the legacy tool path") == 0,
-	      "heartbeat zero-stop descriptor");
+	check(strcmp(tools_v2[AGENT_TOOL_HEARTBEAT_CONFIGURE - 1].description,
+		     "set or stop the current Agent heartbeat") == 0,
+	      "heartbeat configure descriptor");
 	check(tool_list(tools_v2, 0) == AGENT_TOOL_COUNT,
 	      "tool list compatibility alias");
 	check(syscall(SYS_tool_list, tools_v2, 1,
@@ -169,7 +176,7 @@ static void check_lists(void)
 	      "tool list negative count rejected");
 	printf("agenttoolabi_ucore: tool_list_v1_v2=1 count=%d\n", count);
 	printf("agenttoolabi_ucore: tool_list_contract=1\n");
-	printf("agenttoolabi_ucore: optional_schema=1 heartbeat_zero_stop=1\n");
+	printf("agenttoolabi_ucore: optional_schema=1 heartbeat_unified=1\n");
 	printf("agenttoolabi_ucore: schema_generated=1 validated=%d\n",
 	       AGENT_TOOL_COUNT);
 }
@@ -404,8 +411,20 @@ static void check_v2_rejections(void)
 	expect_status(AGENT_STATUS_BAD_PARAM, "unsupported request flags");
 	request_init(AGENT_TOOL_AGENT_WAIT, "agent_wait", 0);
 	expect_status(AGENT_STATUS_BAD_PARAM, "syscall-only tool rejected");
+	request_init(AGENT_TOOL_RERUN_STAGE, "rerun_stage", 0);
+	expect_status(AGENT_STATUS_DEPRECATED, "rerun_stage deprecated");
+	request_init(AGENT_TOOL_WRITE_REPORT, "write_report", 0);
+	expect_status(AGENT_STATUS_DEPRECATED, "write_report deprecated");
+	request_init(AGENT_TOOL_CTX_STAT, "ctx_stat", 0);
+	expect_status(AGENT_STATUS_DEPRECATED, "ctx_stat deprecated");
+	request_init(AGENT_TOOL_APPLY_PATCH, "apply_patch", 0);
+	expect_status(AGENT_STATUS_BROKER_REQUIRED,
+		      "apply_patch requires workspace broker");
+	request_init(AGENT_TOOL_WRITE_FILE, "write_file", 0);
+	expect_status(AGENT_STATUS_BROKER_REQUIRED,
+		      "write_file requires workspace broker");
 	param_uint(0, "interval", AGENT_HEARTBEAT_MAX_TICKS + 1ULL);
-	request_init(AGENT_TOOL_AGENT_HEARTBEAT, "agent_heartbeat", 1);
+	request_init(AGENT_TOOL_HEARTBEAT_CONFIGURE, "heartbeat_configure", 1);
 	expect_status(AGENT_STATUS_BAD_PARAM,
 		      "tool execution heartbeat limit rejected");
 	check(strcmp(response_buffer.value.result, "bad_heartbeat_interval") == 0,

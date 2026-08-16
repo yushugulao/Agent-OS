@@ -129,7 +129,8 @@ static int run_kernel_exec_observer(void)
 		       execobs_event.type, execobs_event.status);
 		return -1;
 	}
-	if (agent_heartbeat(5) < 0 || agent_heartbeat_stop() < 0)
+	if (agent_heartbeat_configure(5) < 0 ||
+	    agent_heartbeat_configure(0) < 0)
 		return -1;
 	if (agent_info(&after) < 0)
 		return -1;

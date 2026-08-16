@@ -60,6 +60,7 @@ static uint64 agent_performance_workload_syscalls(const struct proc *p)
 	       syscall_count_read(p, SYS_unlinkat) +
 	       syscall_count_read(p, SYS_fsync) +
 	       syscall_count_read(p, SYS_agent_file_meta_set) +
+	       syscall_count_read(p, SYS_agent_file_meta_set_batch) +
 	       syscall_count_read(p, SYS_agent_file_query);
 }
 

@@ -91,7 +91,7 @@ V2 参数数组、V3 绑定信息和 SQE 都会先复制到内核私有内存。
 <a id="schema-与-capability"></a>
 ## schema 与能力
 
-角色说明 Agent 在工作流中的分工，能力位决定它能做什么。现有能力包括读取元数据和文件内容、读取进程信息、发送消息、建立订阅、写入动作和 artifact、写入审计与元数据、管理工作流、转发模型调用、取消等待、管理消息路由以及接收 delegated task。`Sentinel` 和 `Investigator` 作为 System/Research 的真实结果生产者具有 `AGENT_CAP_ARTIFACT_WRITE`；这项能力仍要同时通过 artifact manifest permission、VFS 文件访问范围与当前 delegated effect lease，不能单独扩大写入范围。部分兼容名称会映射到同一能力，例如更新依赖关系使用 `META_WRITE`。
+角色名称只用于兼容与诊断，能力位和允许工具集合决定 Agent 能够执行的操作。现有能力包括读取元数据和文件内容、读取进程信息、发送消息、建立订阅、写入动作和 Artifact、写入审计与元数据、管理工作流、转发模型调用、取消等待、管理消息路由、接收 delegated task 以及申请工作区写入。通用运行时配置必须同时满足父 Agent 授权和用户 workflow policy，父 Agent 只能向子 Agent 授予两者共有集合的子集。`AGENT_CAP_WORKSPACE_WRITE` 允许 Agent 构造 brokered `apply_patch` 或 `write_file` 请求，内核本身不直接修改 Host 文件。Nexus Host broker 继续核对会话 root、允许的 `user/src/nexus_*_ucore.c` 路径、准确 revision、内容长度与摘要；构建和运行只接受同名目标、当前会话 build id 以及固定的资源上限。
 
 Tool Registry 把 schema 和权限要求写在同一项中：
 
@@ -172,9 +172,11 @@ Nexus artifact 通过 `agent_file_publish()` 发布。内核先把 header 与 pa
 
 ## 文件对象与 Live Query
 
-Metadata Catalog 只接收 `agent_file_meta_set()` 显式登记、仅在运行期保存的元数据。记录绑定工作流生命周期、文件访问范围和 `{dev, inum, incarnation}`。uCore 每次重新分配 inode 都会增加 `incarnation`；达到最大值后，该 inode 不再复用。元数据选择器、摘要缓存、编辑租约和待处理删除记录都要核对这三部分身份。
+Metadata Catalog 只接收 `agent_file_meta_set()` 或 `agent_file_meta_set_batch()` 显式登记、仅在运行期保存的元数据。记录绑定工作流生命周期、文件访问范围和 `{dev, inum, incarnation}`。uCore 每次重新分配 inode 都会增加 `incarnation`；达到最大值后，该 inode 不再复用。元数据选择器、摘要缓存、编辑租约和待处理删除记录都要核对这三部分身份。
 
-查询开始和结束时会分别检查生命周期与 `fs_generation`。即使用索引找到候选项，内核仍会重新核对完整查询条件和文件访问范围。Typed Watch 绑定目标控制编号、生命周期、文件访问范围和订阅号，集合变化时发布 `ENTER`、`UPDATE` 或 `LEAVE`。
+批量登记最多接收 16 项，标志只能为零。内核先核对 Metadata 写能力和文件访问范围，再在 VM 快照期间复制所有输入，预先确认状态数组可写，并拒绝输入数组与状态数组重叠。整批共用一次生命周期操作和 Metadata transaction；各项仍按顺序独立提交，每个已提交项独立推进 generation，并分别触发审计与 Typed Watch。普通条目错误写入对应状态后继续处理，致命错误或 `INDETERMINATE` 会停止处理剩余项。后续失败不会撤销此前已经提交的条目；提交完成后若状态无法写回，调用方收到 `AGENT_STATUS_INDETERMINATE`。
+
+查询开始和结束时会分别检查生命周期与 `fs_generation`。即使用索引找到候选项，内核仍会重新核对完整查询条件和文件访问范围。Typed Watch 绑定目标控制编号、生命周期、文件访问范围和订阅号，集合变化时发布 `ENTER`、`UPDATE` 或 `LEAVE`。内核以关中断保护的进程存在表和全局计数维护文件订阅状态；当前没有文件状态或文件查询订阅时，状态迁移跳过订阅扫描。通用 `AGENT_TOOL_AGENT_WATCH` 拒绝 `AGENT_EVENT_FILE_QUERY`，Typed Watch 统一经 `agent_live_watch()` 建立并按 `watch_id` 移除，通用 clear-all 不删除这些订阅。
 
 事件队列已满或增量事件出现 generation 缺口时，内核记录持续待确认的 `resync_generation`。恢复时，旧订阅必须继续工作。Agent 先用同一查询条件建立替代订阅，且不带确认标志；接着执行一次查询，只有 `truncated == 0` 才得到完整基线；随后在旧订阅上确认保存的 generation 缺口，并在同一内核临界区移除旧订阅。替代订阅在整个交接期间一直有效，之后由它继续接收事件，并按顺序补入基线。若又发现更大的 generation 缺口，就重复这组操作。
 
@@ -182,7 +184,21 @@ Metadata Catalog 只接收 `agent_file_meta_set()` 显式登记、仅在运行�
 
 文件提交还要同时核对租约号、inode 的 `incarnation` 和 `expected_version`。
 
-Nexus 访问 Host 工作区时，Host broker 只持有会话显式配置并固定到已打开 handle 的 workspace root。Host 分页返回 generation、object id、相对路径和 revision，Guest 为当前页面建立真实的 Metadata Catalog stub inode，并用不截断的 Live Query 选择候选；generation 变化必须由 control stub 的 Typed Watch `UPDATE` 推进。Catalog 管理当前页面的有界候选，全文匹配由 Host 在 Guest 回传的候选对象内完成。Host 也可以返回与 object/path/revision 同时绑定的指定字节；正文回到 Guest 后形成 Research artifact，并通过 TOOL Context 投影进入后续 Provider 历史。
+Nexus 访问 Host 工作区时，Host broker 只持有会话显式配置并固定到已打开 handle 的 workspace root。Host 分页返回 generation、object id、相对路径和 revision，Guest 为当前页面建立真实的 Metadata Catalog stub inode，并用不截断的 Live Query 选择候选。每次工具调用仍会重新获取、解析、摘要并校验 manifest；同一生命周期内，只有 lifecycle、cursor、entry count、EOF、workspace generation 和有序对象摘要全部匹配，且 control stub 仍为 `READY` 时，Guest 才复用已登记窗口。
+
+需要重建时，Guest 先清除复用键，将 control stub 发布为 `BUILDING`，使旧数据窗口失效，再以每批最多 16 项登记新页面。全部批次成功后才发布 `READY`；任一步失败都进入 `STALE` 并清理，清理失败会执行完整 Catalog reset。Host 返回 stale 时，Guest 也先完成这组复位，再从 cursor 0 重试。每个工具 correlation 的第一次 MANIFEST 请求不携带 generation，后续请求使用本次已经校验的 generation。全文匹配只在 Guest 回传的候选对象内进行；正文返回 Agent Loop 后封存为 FILE/SEARCH Artifact，并通过 TOOL Context 投影进入后续模型消息。
+
+## Context Artifact 与共享事实
+
+用户态 Store 保存 Artifact 正文，内核只封存经过类型、长度、UTF-8、所有者和 SHA-256 核验的 metadata。Seal 记录 handle、producer identity、Task id、来源 Context sequence 和 workflow lifecycle；未完成写入、hash 不符或生命周期失效的对象不能绑定到 Context，也不能作为 Task 结果。父 Agent 只在成功 terminal CQE 后接纳结果，并重新核对 producer、Task、sequence、lifecycle 与 hash。
+
+每个 Agent 受独立 Artifact 数量、字节和读取额度约束，workflow 另有总额度。共享操作要求 `SHARE_ARTIFACT` capability，且对象已经封存、允许共享并由当前 Agent 生产。workflow 共享索引只引用成功结算的公共 Artifact；private Context、私有文件访问和未完成 Task 不会通过摘要或共享索引自动暴露给其他 Agent。rollback 只减少当前分支引用，已经被父任务接纳或其他 Agent 引用的对象继续保留。
+
+## 查询预测的安全约束
+
+预测器只接收 active path 上成功结算的只读查询签名，不解析自然语言。私有转移表按 Agent 隔离；workflow 共享预测只使用明确共享且所有目标 Agent 都有读取权限的记录。失败、取消、超时、拒绝、未完成 Task 和回滚分支不进入训练，lifecycle、branch generation、inode incarnation、file revision 或 workspace generation 变化会使相关状态失效。
+
+预取只填充缓存或产生 `PREFETCH_HINT`，不能发布 Context、改变 Task 状态或替代正式读取。真正访问数据时，Guest 和 Host 继续检查 capability、VFS 文件访问范围、workspace root、object id、revision、range、输出长度和 lifecycle。预取 I/O 使用低优先级，并按 Agent 与 workflow 计费，额度拒绝后直接回到普通读取路径。
 
 ## Task Channel 协议
 
@@ -201,11 +217,11 @@ Task Channel 只有一个提交者，队列水位以内核记录为准。SQ 由�
 
 取消策略若当场拒绝取消命令，取消请求号仍会被记为已使用。此时 `enter` 返回 `DENIED`，不产生取消 CQE，原目标继续运行。CQ 已满时，内核保留尚未写出的结果；用户读取 CQ 后，再继续发布。
 
-类型化资源句柄包含槽位、类型、所有权标志和 generation。`IMPORT` 只接受当前 Agent 可读的普通文件和 OWNED 输入，并要求当前 Agent 已经有一条经过校验的最新 Context；导入只绑定这条记录，不另建 Context。`AGENT_ARTIFACT_UTF8` 接受准确的 1–63 字节文本并检查 EOF、NUL 与 UTF-8；`AGENT_ARTIFACT_TASK` 接受准确的 56 字节委派描述符并检查版本、大小、标志和保留字段。内核从 offset 0 取得内容，不改动共享文件 offset，只把不可变快照、内容指纹与内核生成的 producer/Context/provenance 元数据放入资源表，不保留 `struct file *`。最终 copyout 失败会回滚尚未暴露的资源，因此调用方不会得到“接口失败但槽位已占用”的半成功状态。
+类型化资源句柄包含槽位、类型、所有权标志和 generation。`IMPORT` 只接受当前 Agent 可读的普通文件和 OWNED 输入，并要求当前 Agent 已经有一条经过校验的最新 Context；导入只绑定这条记录，不另建 Context。`AGENT_ARTIFACT_UTF8` 接受准确的 1–63 字节文本并检查 EOF、NUL 与 UTF-8；`AGENT_ARTIFACT_TASK` 接受准确的 128 字节委派描述符并检查版本、大小、标志和保留字段。描述符还要通过父子 capability、工具集合、Task graph、workspace revision、资源预算和 deadline 检查。内核从 offset 0 取得内容，不改动共享文件 offset，只把不可变快照、内容指纹与内核生成的 producer/Context/provenance 元数据放入资源表，不保留 `struct file *`。最终 copyout 失败会回滚尚未暴露的资源，因此调用方不会得到“接口失败但槽位已占用”的半成功状态。
 
 SQE 可以用 BORROWED 别名引用同一 `{slot, type, generation}`。BORROWED 任务结束后引用归还，资源保持 `LIVE`；OWNED 任务结束后资源自动消费。`RELEASE` 以及槽位再次使用都会使旧 generation 返回 `STALE`。ECHO Task Bridge 从内核快照复制 payload，不再读取导入时的 fd；`delegate_task` 也只读取已导入的 TASK 快照。因此文件后来被改写不会改变已经接受的任务输入。
 
-跨 Agent 委派还要求发起者向目标授予独立的 `AGENT_IPC_ROUTE_TASK`，目标持有 `AGENT_CAP_TASK_ACCEPT`，且描述符中的目标 PID、Agent/control 身份和当前生命周期全部一致。TASK route 与 `MESSAGE`/`LLM_DONE` 事件 route 分开。当前实现拒绝 self delegation，并拒绝让活动端点同时承担 owner 与 target，使委派关系保持二分无环。提交成功后，任务进入 Execution Contract `RUNNING` 和内核 pending 队列；`agent_task_delegate_claim()` 在把描述符及 owner/channel/request/slot 绑定复制给目标之前，再次检查身份、生命周期、能力和 route，并登记 effect-start。每个 owner issuer 当前同时只接受一个尚未结算的委派。
+跨 Agent 委派还要求发起者向目标授予独立的 `AGENT_IPC_ROUTE_TASK`，目标持有 `AGENT_CAP_TASK_ACCEPT`，且 128 字节 descriptor 中的目标 identity、当前 lifecycle、parent task、目标/输入 Artifact、capability、工具集合、workspace revision、预算和 deadline 全部有效。TASK route 与 `MESSAGE`/`LLM_DONE` 事件 route 分开。内核拒绝 self delegation 和任务图中的真实环路，并允许同一父任务并行维护多个独立子任务。提交成功后，任务进入 Execution Contract `RUNNING` 和 pending 队列；`agent_task_delegate_claim()` 在复制 descriptor 及 owner/channel/request/slot 绑定前，再次检查身份、生命周期、授权包含关系和 route，并登记 effect-start。
 
 claim 后的 delegated effect lease 不是 workflow 级绕过。它精确绑定执行者 PID/Agent/`control_id`、主线程 identity generation 和 channel/request/slot 代次；Contract 允许的 helper 也必须匹配内核登记的 TID 与 identity generation。每次直接作用只能申请 Contract manifest side-effect mask 的子集，并在调用期间持有 lease 引用。正常 complete、最新终态 offer 的 cleanup ACK，或目标进程完成 quiescence 后，内核会等活动引用全部归零再撤销 lease；该机制不承诺强制终止永久无响应的执行者。
 

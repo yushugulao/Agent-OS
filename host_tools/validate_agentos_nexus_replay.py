@@ -639,9 +639,9 @@ def _system_projection(
             "runnable_count",
         ),
         "context": (
-            "ctx_stat",
-            "context_base",
-            "context_size",
+            "context_status",
+            "record_count",
+            "record_capacity",
             "call_count",
         ),
     }

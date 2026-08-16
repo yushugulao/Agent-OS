@@ -1452,6 +1452,11 @@ static __attribute__((noinline)) int syscall_dispatch(
 	case SYS_agent_file_meta_set:
 		ret = sys_agent_file_meta_set(trapframe->a0);
 		break;
+	case SYS_agent_file_meta_set_batch:
+		ret = sys_agent_file_meta_set_batch(
+			trapframe->a0, trapframe->a1, trapframe->a2,
+			trapframe->a3);
+		break;
 	case SYS_agent_file_query:
 		ret = sys_agent_file_query(trapframe->a0, trapframe->a1);
 		break;
@@ -1475,6 +1480,15 @@ static __attribute__((noinline)) int syscall_dispatch(
 		break;
 	case SYS_agent_worker_create:
 		ret = sys_agent_worker_create(trapframe->a0, trapframe->a1);
+		break;
+	case SYS_agent_runtime_control:
+		ret = sys_agent_runtime_control(trapframe->a0, trapframe->a1);
+		break;
+	case SYS_agent_context_artifact:
+		ret = sys_agent_context_artifact(trapframe->a0, trapframe->a1);
+		break;
+	case SYS_agent_context_prefetch:
+		ret = sys_agent_context_prefetch(trapframe->a0, trapframe->a1);
 		break;
 	case SYS_agent_route_config:
 		ret = sys_agent_route_config(trapframe->a0, trapframe->a1,
@@ -1624,8 +1638,12 @@ syscall_mutates_workflow_cut(int id, const struct trapframe *trapframe)
 	case SYS_tool_call:
 	case SYS_agent_file_meta_init:
 	case SYS_agent_file_meta_set:
+	case SYS_agent_file_meta_set_batch:
 	case SYS_agent_file_query:
 	case SYS_agent_worker_create:
+	case SYS_agent_runtime_control:
+	case SYS_agent_context_artifact:
+	case SYS_agent_context_prefetch:
 	case SYS_agent_task_channel_setup:
 	case SYS_agent_task_channel_enter:
 	case SYS_agent_task_delegate_claim:
@@ -1731,6 +1749,7 @@ syscall_direct_agent_side_effects(
 	case SYS_agent_create_role:
 	case SYS_agent_workflow_create:
 	case SYS_agent_worker_create:
+	case SYS_agent_runtime_control:
 		return AGENT_SIDE_EFFECT_PROCESS;
 	case SYS_agent_scope_delegate_fd:
 	case SYS_agent_sched_config:
@@ -1748,6 +1767,7 @@ syscall_direct_agent_side_effects(
 		return AGENT_SIDE_EFFECT_WATCH;
 	case SYS_agent_file_meta_init:
 	case SYS_agent_file_meta_set:
+	case SYS_agent_file_meta_set_batch:
 	case SYS_agent_file_edit_begin:
 	case SYS_agent_file_edit_commit:
 	case SYS_agent_file_edit_abort:
@@ -1755,6 +1775,10 @@ syscall_direct_agent_side_effects(
 	case SYS_agent_file_publish:
 		return AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA |
 		       AGENT_SIDE_EFFECT_ARTIFACT;
+	case SYS_agent_context_artifact:
+		return AGENT_SIDE_EFFECT_METADATA | AGENT_SIDE_EFFECT_ARTIFACT;
+	case SYS_agent_context_prefetch:
+		return AGENT_SIDE_EFFECT_METADATA;
 	default:
 		return 0;
 	}

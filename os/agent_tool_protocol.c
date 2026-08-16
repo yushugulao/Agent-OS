@@ -39,22 +39,22 @@ struct agent_tool_security_definition {
 #define AGENT_TOOL_REGISTRY(X) \
 	X(AGENT_TOOL_ECHO, AGENT_TOOL_F_CALLABLE, "echo", "return payload and numeric parameters") \
 	X(AGENT_TOOL_PID_INFO, AGENT_TOOL_F_CALLABLE, "pid_info", "return pid, agent id, and agent flag") \
-	X(AGENT_TOOL_CTX_STAT, AGENT_TOOL_F_CALLABLE, "ctx_stat", "return Agent Context base, size, and call count") \
+	X(AGENT_TOOL_CTX_STAT, AGENT_TOOL_F_DEPRECATED, "ctx_stat", "deprecated; use context_status") \
 	X(AGENT_TOOL_QUERY_PROCESS, AGENT_TOOL_F_CALLABLE, "query_process", "count processes and Agent processes") \
 	X(AGENT_TOOL_GET_SYSTEM_STATUS, AGENT_TOOL_F_CALLABLE, "get_system_status", "return process count, agent count, and uptime tick") \
-	X(AGENT_TOOL_READ_CONTEXT, AGENT_TOOL_F_CALLABLE, "read_context", "return post-state Context Path counters") \
+	X(AGENT_TOOL_CONTEXT_STATUS, AGENT_TOOL_F_CALLABLE, "context_status", "return current Context path counters") \
 	X(AGENT_TOOL_QUERY_FILE, AGENT_TOOL_F_CALLABLE, "query_file", "query file inode metadata or Agent file metadata") \
 	X(AGENT_TOOL_SEND_MESSAGE, AGENT_TOOL_F_CALLABLE, "send_message", "send a short Agent message") \
 	X(AGENT_TOOL_READ_MESSAGE, AGENT_TOOL_F_CALLABLE, "read_message", "read current Agent mailbox") \
-	X(AGENT_TOOL_FILE_META_INIT, AGENT_TOOL_F_CALLABLE, "file_meta_init", "initialize the current boot's volatile file metadata view") \
+	X(AGENT_TOOL_METADATA_INIT, AGENT_TOOL_F_CALLABLE, "metadata_init", "initialize current workflow metadata bookkeeping") \
 	X(AGENT_TOOL_READ_FILE_SUMMARY, AGENT_TOOL_F_CALLABLE, "read_file_summary", "read one indexed file summary") \
 	X(AGENT_TOOL_DEPENDENCY_QUERY, AGENT_TOOL_F_CALLABLE, "dependency_query", "return registered dependent object labels") \
 	X(AGENT_TOOL_CAPABILITY_CHECK, AGENT_TOOL_F_CALLABLE, "capability_check", "check role capability") \
-	X(AGENT_TOOL_RERUN_STAGE, AGENT_TOOL_F_CALLABLE, "rerun_stage", "legacy action alias for a scoped state update") \
-	X(AGENT_TOOL_WRITE_REPORT, AGENT_TOOL_F_CALLABLE, "write_report", "legacy artifact alias for a scoped state update") \
+	X(AGENT_TOOL_RERUN_STAGE, AGENT_TOOL_F_DEPRECATED, "rerun_stage", "deprecated; use action_commit") \
+	X(AGENT_TOOL_WRITE_REPORT, AGENT_TOOL_F_DEPRECATED, "write_report", "deprecated; use artifact_update") \
 	X(AGENT_TOOL_AGENT_WATCH, AGENT_TOOL_F_CALLABLE, "agent_watch", "register an Agent Loop watch") \
 	X(AGENT_TOOL_AGENT_WAIT, AGENT_TOOL_F_SYSCALL_ONLY, "agent_wait", "wait for an authorized queued, intrinsic, cancelled, or timeout event") \
-	X(AGENT_TOOL_AGENT_HEARTBEAT, AGENT_TOOL_F_CALLABLE, "agent_heartbeat", "set heartbeat interval; zero stops the legacy tool path") \
+	X(AGENT_TOOL_HEARTBEAT_CONFIGURE, AGENT_TOOL_F_CALLABLE, "heartbeat_configure", "set or stop the current Agent heartbeat") \
 	X(AGENT_TOOL_CONTEXT_PUSH, AGENT_TOOL_F_SYSCALL_ONLY, "context_push", "manual Context Path append") \
 	X(AGENT_TOOL_READ_FILE_DIGEST, AGENT_TOOL_F_CALLABLE, "read_file_digest", "read a real file preview and content digest") \
 	X(AGENT_TOOL_ACTION_COMMIT, AGENT_TOOL_F_CALLABLE, "action_commit", "commit a generic Agent action against object metadata") \
@@ -62,7 +62,14 @@ struct agent_tool_security_definition {
 	X(AGENT_TOOL_LLM_REQUEST, AGENT_TOOL_F_CALLABLE, "llm_request", "record and route a structured LLM request") \
 	X(AGENT_TOOL_LLM_RESPONSE, AGENT_TOOL_F_CALLABLE, "llm_response", "return a structured LLM relay response") \
 	X(AGENT_TOOL_DEPENDENCY_UPDATE, AGENT_TOOL_F_CALLABLE, "dependency_update", "register or update a generic object dependency") \
-	X(AGENT_TOOL_DELEGATE_TASK, AGENT_TOOL_F_SYSCALL_ONLY, "delegate_task", "submit a typed task to another Agent provider")
+	X(AGENT_TOOL_DELEGATE_TASK, AGENT_TOOL_F_SYSCALL_ONLY, "delegate_task", "submit a typed task to another Agent provider") \
+	X(AGENT_TOOL_APPLY_PATCH, AGENT_TOOL_F_BROKERED, "apply_patch", "brokered revision-checked atomic workspace patch") \
+	X(AGENT_TOOL_WRITE_FILE, AGENT_TOOL_F_BROKERED, "write_file", "brokered workspace file-write contract") \
+	X(AGENT_TOOL_SEARCH_FILES, AGENT_TOOL_F_BROKERED, "search_files", "brokered workspace manifest search") \
+	X(AGENT_TOOL_READ_WORKSPACE_FILE, AGENT_TOOL_F_BROKERED, "read_workspace_file", "brokered revision-bound workspace read") \
+	X(AGENT_TOOL_INSPECT_SYSTEM, AGENT_TOOL_F_BROKERED, "inspect_system", "brokered projection of current Guest facts") \
+	X(AGENT_TOOL_BUILD_UCORE_PROGRAM, AGENT_TOOL_F_BROKERED, "build_ucore_program", "controlled RISC-V build in an isolated worktree") \
+	X(AGENT_TOOL_RUN_UCORE_PROGRAM, AGENT_TOOL_F_BROKERED, "run_ucore_program", "controlled AgentOS-uCore Guest execution")
 
 #define ASSERT_TOOL_STRINGS(id, flags, name, description) \
 	_Static_assert(sizeof(name) <= AGENT_TOOL_NAME_SIZE, \
@@ -93,8 +100,8 @@ static const struct agent_tool_definition agent_tools[] = {
 	X(AGENT_CAP_CONTENT_READ, AGENT_PROVENANCE_ALL, PROV_FILE, 0) \
 	X(AGENT_CAP_META_READ, AGENT_PROVENANCE_ALL, PROV_FACT, 0) \
 	X(0, PROV_ACCEPT_CONTROL, PROV_FACT, 0) \
-	X(AGENT_CAP_ACTION_WRITE, PROV_ACCEPT_CONTROL, PROV_DERIVED, AGENT_SIDE_EFFECT_METADATA) \
-	X(AGENT_CAP_ARTIFACT_WRITE, PROV_ACCEPT_ARTIFACT, PROV_DERIVED, AGENT_SIDE_EFFECT_ARTIFACT) \
+	X(0, PROV_ACCEPT_CONTROL, PROV_DERIVED, 0) \
+	X(0, PROV_ACCEPT_CONTROL, PROV_DERIVED, 0) \
 	X(AGENT_CAP_WATCH, PROV_ACCEPT_CONTROL, PROV_DERIVED, AGENT_SIDE_EFFECT_WATCH) \
 	X(0, AGENT_PROVENANCE_ALL, PROV_DERIVED, 0) \
 	X(0, PROV_ACCEPT_CONTROL, PROV_DERIVED, 0) \
@@ -105,7 +112,14 @@ static const struct agent_tool_definition agent_tools[] = {
 	X(AGENT_CAP_MESSAGE_SEND, PROV_ACCEPT_AGENT_LOOP, PROV_DERIVED, AGENT_SIDE_EFFECT_IPC) \
 	X(AGENT_CAP_LLM_RELAY, PROV_ACCEPT_AGENT_LOOP, PROV_TOOL, AGENT_SIDE_EFFECT_IPC) \
 	X(AGENT_CAP_DEPENDENCY_UPDATE, PROV_ACCEPT_CONTROL, PROV_DERIVED, AGENT_SIDE_EFFECT_METADATA) \
-	X(AGENT_CAP_ORCHESTRATE, PROV_ACCEPT_AGENT_LOOP, PROV_DERIVED, AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA | AGENT_SIDE_EFFECT_IPC | AGENT_SIDE_EFFECT_PROCESS | AGENT_SIDE_EFFECT_PERMISSION | AGENT_SIDE_EFFECT_ARTIFACT)
+	X(AGENT_CAP_ORCHESTRATE, PROV_ACCEPT_AGENT_LOOP, PROV_DERIVED, AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA | AGENT_SIDE_EFFECT_IPC | AGENT_SIDE_EFFECT_PROCESS | AGENT_SIDE_EFFECT_PERMISSION | AGENT_SIDE_EFFECT_ARTIFACT) \
+	X(AGENT_CAP_WORKSPACE_WRITE, PROV_ACCEPT_ARTIFACT, PROV_DERIVED, AGENT_SIDE_EFFECT_FILE) \
+	X(AGENT_CAP_WORKSPACE_WRITE, PROV_ACCEPT_ARTIFACT, PROV_DERIVED, AGENT_SIDE_EFFECT_FILE) \
+	X(AGENT_CAP_CONTENT_READ, PROV_ACCEPT_ARTIFACT, PROV_FILE, 0) \
+	X(AGENT_CAP_CONTENT_READ, PROV_ACCEPT_ARTIFACT, PROV_FILE, 0) \
+	X(AGENT_CAP_PROCESS_READ, PROV_ACCEPT_AGENT_LOOP, PROV_FACT, 0) \
+	X(AGENT_CAP_CONTENT_READ | AGENT_CAP_WORKSPACE_WRITE, PROV_ACCEPT_ARTIFACT, PROV_TOOL, AGENT_SIDE_EFFECT_PROCESS | AGENT_SIDE_EFFECT_ARTIFACT) \
+	X(AGENT_CAP_CONTENT_READ, PROV_ACCEPT_ARTIFACT, PROV_TOOL, AGENT_SIDE_EFFECT_PROCESS | AGENT_SIDE_EFFECT_ARTIFACT)
 
 #define SECURITY_ENTRY(caps, accepted, output, effects) \
 	{ caps, accepted, output, effects },
@@ -192,12 +206,15 @@ static const struct param_rule rules[] = {
 	R(TARGET_PID, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(PROMPT_SUMMARY, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 模型请求 */
 	R(TARGET_PID, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(REPLY_SUMMARY, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 模型响应 */
 	R(SELECTOR, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* 依赖更新 */
+	R(ARTIFACT_HANDLE, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(EXPECTED_REV, AGENT_PARAM_UINT64, PARAM_ARG1, 1), R(PATH, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* brokered patch */
+	R(ARTIFACT_HANDLE, AGENT_PARAM_UINT64, PARAM_ARG0, 1), R(EXPECTED_REV, AGENT_PARAM_UINT64, PARAM_ARG1, 1), R(PATH, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1), /* brokered write */
 };
 
-#define AGENT_TOOL_RULE_COUNT 30U
+#define AGENT_TOOL_RULE_COUNT 36U
 static const unsigned char rule_offsets[AGENT_TOOL_COUNT + 1] = {
 	0, 3, 3, 3, 4, 4, 4, 5, 7, 7, 7, 8, 9,
 	11, 13, 15, 17, 18, 19, 20, 21, 23, 25, 27, 29, 30, 30,
+	33, 36, 36, 36, 36, 36, 36,
 };
 #undef R
 #undef AGENT_TOOL_REGISTRY
@@ -301,7 +318,9 @@ static int agent_tool_protocol_schema_valid(void)
 		    string_length(agent_tools[tool].description,
 				  AGENT_TOOL_DESC_SIZE, 0) < 0 ||
 		    (agent_tools[tool].flags != AGENT_TOOL_F_CALLABLE &&
-		     agent_tools[tool].flags != AGENT_TOOL_F_SYSCALL_ONLY) ||
+		     agent_tools[tool].flags != AGENT_TOOL_F_SYSCALL_ONLY &&
+		     agent_tools[tool].flags != AGENT_TOOL_F_DEPRECATED &&
+		     agent_tools[tool].flags != AGENT_TOOL_F_BROKERED) ||
 		    (agent_tool_security[tool].accepted_input_labels &
 		     ~AGENT_PROVENANCE_ALL) != 0 ||
 		    (agent_tool_security[tool].output_add_labels &
@@ -472,6 +491,10 @@ int agent_tool_protocol_resolve(int tool_id, char *name,
 	}
 	if (!tool)
 		REJECT(AGENT_STATUS_UNKNOWN_TOOL, "unknown_tool");
+	if (tool->flags == AGENT_TOOL_F_DEPRECATED)
+		REJECT(AGENT_STATUS_DEPRECATED, "deprecated_tool");
+	if (tool->flags == AGENT_TOOL_F_BROKERED)
+		REJECT(AGENT_STATUS_BROKER_REQUIRED, "broker_required");
 	memset(match, 0, sizeof(*match));
 	match->tool_id = tool->tool_id;
 	match->flags = tool->flags;

@@ -8,10 +8,13 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import sys
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "host_tools"))
+import agentos_nexus_contract as nexus_contract
 GUEST = (ROOT / "user/src/agentnexus_ucore.c").read_text(encoding="utf-8")
 PROTOCOL = (ROOT / "user/include/agent_nexus_protocol.h").read_text(
     encoding="utf-8"
@@ -118,6 +121,10 @@ EXPECTED_TOOLS = [
     },
 ]
 
+# The duplicated v4 values above remain useful review context. The current Host
+# contract is the independent trust anchor compared with the Guest strings.
+EXPECTED_SYSTEM_PROMPT = nexus_contract.SYSTEM_PROMPT
+EXPECTED_TOOLS = list(nexus_contract.TOOLS)
 EXPECTED_POLICY_SHA256 = hashlib.sha256(
     EXPECTED_SYSTEM_PROMPT.encode("utf-8")
 ).hexdigest()
@@ -238,47 +245,47 @@ class AgentNexusHarnessTests(unittest.TestCase):
         ):
             self.assertNotIn(task_specific, prompt)
 
-    def test_exact_three_tool_catalog(self) -> None:
+    def test_exact_public_tool_catalog(self) -> None:
         tools = json.loads(c_string(GUEST, "live_tools_json"))
         self.assertEqual(tools, EXPECTED_TOOLS)
         self.assertEqual(
             [tool["name"] for tool in tools],
-            ["search_files", "read_file", "inspect_system"],
+            [
+                "search_files", "read_file", "inspect_system", "write_file",
+                "apply_patch", "build_ucore_program", "run_ucore_program",
+            ],
         )
         for tool in tools:
             self.assertFalse(tool["input_schema"]["additionalProperties"])
+        for tool in tools[:3]:
             self.assertIn("read-only", tool["description"].lower())
 
     def test_policy_and_catalog_hashes_match_the_protocol_header(self) -> None:
-        self.assertEqual(
-            EXPECTED_POLICY_SHA256,
-            "395eb2871e978672c6a6a8d1485327310545e02132f39a24c5f1dec6a808d6c8",
-        )
-        self.assertEqual(
-            EXPECTED_TOOL_SHA256,
-            "b59a831f6b1337393319c2d3e2af0d3b463ffac50447c11351226dd2989c999b",
-        )
+        self.assertEqual(EXPECTED_POLICY_SHA256, nexus_contract.SYSTEM_POLICY_SHA256)
+        self.assertEqual(EXPECTED_TOOL_SHA256, nexus_contract.TOOL_CATALOG_SHA256)
         require(
             PROTOCOL,
-            "#define AGENT_NEXUS_AUTONOMY_CONTRACT_VERSION 4U",
+            "#define AGENT_NEXUS_AUTONOMY_CONTRACT_VERSION 5U",
             "protocol version drifted",
         )
         require(PROTOCOL, f'"{EXPECTED_POLICY_SHA256}"', "policy hash drifted")
         require(PROTOCOL, f'"{EXPECTED_TOOL_SHA256}"', "catalog hash drifted")
         contract = function_body(GUEST, "live_autonomy_contract_valid")
         for item in (
-            "AGENT_NEXUS_AUTONOMY_CONTRACT_VERSION == 4U",
+            "AGENT_NEXUS_AUTONOMY_CONTRACT_VERSION == 5U",
             "live_digest_text(live_system_prompt, policy_sha256)",
             "live_digest_text(live_tools_json, tools_sha256)",
             "AGENT_NEXUS_SYSTEM_POLICY_SHA256",
             "AGENT_NEXUS_TOOL_CATALOG_SHA256",
         ):
-            require(contract, item, "Guest does not bind the v4 contract")
+            require(contract, item, "Guest does not bind the v5 contract")
 
-    def test_guest_validates_only_the_public_three_tool_schemas(self) -> None:
+    def test_guest_validates_the_public_tool_schemas(self) -> None:
         validate = function_body(GUEST, "live_validate_decision")
-        self.assertEqual(validate.count('!strcmp(decision->tool, "'), 3)
-        for tool in ("search_files", "read_file", "inspect_system"):
+        for tool in (
+            "search_files", "read_file", "inspect_system", "write_file",
+            "apply_patch", "build_ucore_program", "run_ucore_program",
+        ):
             require(validate, f'!strcmp(decision->tool, "{tool}")', f"{tool} missing")
         for schema_rule in (
             "NEXUS_SEARCH_QUERY_MAX_CODEPOINTS",
@@ -875,15 +882,24 @@ class AgentNexusHarnessTests(unittest.TestCase):
     def test_workspace_catalog_window_query_and_typed_watch_are_authoritative(self) -> None:
         initialize = function_body(GUEST, "nexus_workspace_catalog_init")
         reset = function_body(GUEST, "nexus_workspace_catalog_reset")
+        batch = function_body(GUEST, "nexus_workspace_meta_batch_commit")
         invalidate = function_body(GUEST, "nexus_workspace_window_invalidate")
+        window_match = function_body(GUEST, "nexus_workspace_window_matches")
+        load = function_body(GUEST, "nexus_workspace_catalog_load")
+        abort_load = function_body(GUEST, "nexus_workspace_catalog_abort_load")
+        require_ready = function_body(GUEST, "nexus_workspace_catalog_require_ready")
+        exchange = function_body(GUEST, "nexus_workspace_exchange")
+        manifest_fetch = function_body(GUEST, "nexus_workspace_manifest_fetch")
+        forget = function_body(GUEST, "nexus_workspace_forget_generation")
         control_query = function_body(GUEST, "nexus_workspace_control_query")
-        generation = function_body(GUEST, "nexus_workspace_generation_update")
+        control_update = function_body(GUEST, "nexus_workspace_control_update")
         manifest_parse = function_body(GUEST, "nexus_workspace_manifest_parse")
         search_parse = function_body(GUEST, "nexus_workspace_search_parse")
         read_projection = function_body(
             GUEST, "nexus_workspace_read_projection_valid"
         )
         stage_query = function_body(GUEST, "nexus_workspace_catalog_query_stage")
+        exact_query = function_body(GUEST, "nexus_workspace_catalog_exact")
         search = function_body(GUEST, "nexus_workspace_search")
         read = function_body(GUEST, "nexus_workspace_read")
         require(GUEST, "#define NEXUS_WORKSPACE_ATTEMPTS_MAX 8192U", "workspace attempt bound drifted")
@@ -894,18 +910,103 @@ class AgentNexusHarnessTests(unittest.TestCase):
                 "nexus_workspace_catalog_unlink_files()",
                 "nexus_workspace_stub_create(NEXUS_WORKSPACE_CONTROL_STUB)",
                 "agent_file_meta_set(&nexus_workspace_meta)",
-                "nexus_workspace_control_query(0)",
+                "nexus_workspace_control_query(0, NEXUS_WORKSPACE_STALE)",
+                "nexus_workspace_meta_batch_commit(batch_index + 1U)",
                 "nexus_workspace_watch_install(0)",
             ),
             "workspace Catalog initialization is not fail-closed",
         )
         for contract in (
-            "nexus_workspace_unused_logical(i, logical)",
+            "agent_file_meta_set_batch(",
+            "nexus_workspace_meta_batch + completed",
+            "processed <= 0 || (uint)processed > remaining",
+            "nexus_workspace_meta_statuses[completed + (uint)i] !=",
+            "completed += (uint)processed",
+        ):
+            require(batch, contract, "workspace metadata batch result is not verified")
+        for contract in (
+            "nexus_workspace_window_forget()",
+            "nexus_workspace_unused_logical(i, meta->logical_path)",
             "AGENT_FILE_META_UPDATE_LOGICAL",
             "AGENT_FILE_META_UPDATE_STATUS",
-            "agent_file_meta_set(&nexus_workspace_meta)",
+            "nexus_workspace_meta_batch_commit(batch_index + 1U)",
         ):
             require(invalidate, contract, "Catalog slots are not reset to unique stale identities")
+        forbid(
+            invalidate,
+            "agent_file_meta_set(&nexus_workspace_meta)",
+            "Catalog window invalidation regressed to scalar metadata updates",
+        )
+        for contract in (
+            "nexus_workspace_window.cursor == page->cursor",
+            "nexus_workspace_window.entry_count == page->entry_count",
+            "nexus_workspace_window.eof == page->eof",
+            "nexus_workspace_window.workspace_generation, generation",
+            "nexus_workspace_window.objects_sha256, objects_sha256",
+            "nexus_workspace_catalog_lifecycle_matches()",
+        ):
+            require(window_match, contract, "workspace Catalog reuse key is incomplete")
+        require_order(
+            exchange,
+            (
+                "memset(request, 0, sizeof(*request))",
+                "operation == NEXUS_WORKSPACE_MANIFEST && attempt != 1",
+                "nexus_copy_text(request->workspace_generation",
+                "nexus_workspace_generation",
+            ),
+            "a new tool correlation does not begin with an empty manifest generation",
+        )
+        require_order(
+            manifest_fetch,
+            (
+                "nexus_workspace_manifest_objects(page, objects_sha256)",
+                "nexus_workspace_source_accept(",
+                "nexus_workspace_catalog_load(",
+                "objects_sha256",
+            ),
+            "Host manifest validation does not precede Catalog reuse",
+        )
+        require_order(
+            load,
+            (
+                "!nexus_workspace_catalog_lifecycle_matches()",
+                "nexus_workspace_catalog_reset()",
+                "nexus_workspace_catalog_init()",
+                "nexus_workspace_window_matches(",
+                "return 0;",
+            ),
+            "stable Catalog reuse does not check lifecycle and page identity",
+        )
+        require(GUEST, '#define NEXUS_WORKSPACE_BUILDING "building"', "Catalog build state is missing")
+        require_order(
+            load,
+            (
+                "nexus_workspace_window_forget()",
+                "generation, NEXUS_WORKSPACE_BUILDING",
+                "nexus_workspace_window_invalidate()",
+                "nexus_workspace_meta_batch_commit(batch_index + 1U)",
+                "generation, NEXUS_WORKSPACE_READY",
+                "strcpy(nexus_workspace_generation, generation)",
+                "nexus_workspace_window_remember(page, generation, objects_sha256)",
+            ),
+            "Catalog page publication does not gate partial batches with BUILDING/READY",
+        )
+        require_order(
+            abort_load,
+            (
+                "nexus_workspace_window_forget()",
+                "generation, NEXUS_WORKSPACE_STALE",
+                "nexus_workspace_window_invalidate()",
+                "generation, NEXUS_WORKSPACE_STALE",
+                "nexus_workspace_catalog_reset()",
+            ),
+            "failed Catalog publication does not force control and slots stale",
+        )
+        forbid(
+            load,
+            "agent_file_meta_set(&nexus_workspace_meta)",
+            "Catalog page loading regressed to scalar metadata updates",
+        )
         for contract in (
             "agent_file_query(&nexus_workspace_query",
             "nexus_workspace_query_result.total_hits != 1",
@@ -920,8 +1021,15 @@ class AgentNexusHarnessTests(unittest.TestCase):
             '"change=UPDATE;"',
             '"change=RESYNC_REQUIRED;"',
             "nexus_workspace_watch_resync(",
+            "nexus_workspace_control_query(generation, state)",
         ):
-            require(generation, contract, "Typed Watch updates are not consumed strictly")
+            require(control_update, contract, "Typed Watch updates are not consumed strictly")
+        for contract in (
+            "nexus_workspace_window.valid",
+            "nexus_workspace_control_query(",
+            "NEXUS_WORKSPACE_READY",
+        ):
+            require(require_ready, contract, "Catalog queries do not require READY control state")
         for contract in (
             "agent_file_query(&nexus_workspace_query",
             "nexus_workspace_query_result.returned != (int)expected",
@@ -960,8 +1068,9 @@ class AgentNexusHarnessTests(unittest.TestCase):
         require_order(
             search,
             (
-                "nexus_workspace_forget_generation()",
+                "nexus_workspace_source_reset()",
                 "nexus_workspace_manifest_fetch(",
+                "nexus_workspace_catalog_require_ready()",
                 "nexus_workspace_catalog_query_stage(",
                 "if (candidate_count != 0)",
                 "nexus_workspace_exchange(",
@@ -969,15 +1078,79 @@ class AgentNexusHarnessTests(unittest.TestCase):
             ),
             "paged search does not use the bounded Catalog window",
         )
+        self.assertEqual(
+            search.count("nexus_workspace_forget_generation()"),
+            2,
+            "search should reset Catalog only on Host STALE responses",
+        )
+        self.assertEqual(
+            read.count("nexus_workspace_forget_generation()"),
+            2,
+            "read should reset Catalog only on Host STALE responses",
+        )
+        stale_reset = re.compile(
+            r"if \(status == AGENT_STATUS_STALE\)\s*\{\s*"
+            r"if \(nexus_workspace_forget_generation\(\) < 0\).*?"
+            r"if \(restarts\+\+ >= NEXUS_WORKSPACE_RESTART_MAX\)",
+            re.S,
+        )
+        for operation in (search, read):
+            self.assertEqual(
+                len(stale_reset.findall(operation)),
+                2,
+                "every Host STALE must reset Catalog before the retry budget check",
+            )
+        require_order(
+            exact_query,
+            (
+                "nexus_workspace_catalog_require_ready()",
+                "nexus_workspace_object_logical(",
+                "agent_file_query(&nexus_workspace_query",
+            ),
+            "read exact query bypasses READY control state",
+        )
         require(read, "nexus_workspace_catalog_exact(entry)", "read_file bypasses exact Catalog identity")
+        require(
+            forget,
+            "nexus_workspace_catalog_reset()",
+            "Host STALE does not perform a full Catalog reset",
+        )
         require_order(
             reset,
             (
+                "nexus_workspace_watch.watch_id != 0",
                 "agent_live_unwatch(&nexus_workspace_watch)",
                 "nexus_workspace_catalog_purge_records()",
                 "nexus_workspace_catalog_unlink_files()",
+                "nexus_workspace_window_forget()",
             ),
             "workspace reset leaves Catalog records or Typed Watch state",
+        )
+
+    def test_workspace_catalog_reset_and_close_clear_reuse_state(self) -> None:
+        control = function_body(GUEST, "live_v2_control_execute")
+        reset = function_body(GUEST, "nexus_workspace_catalog_reset")
+        shutdown = function_body(GUEST, "nexus_shutdown_specialists")
+        for contract in (
+            "nexus_workspace_generation",
+            "nexus_workspace_catalog_lifecycle",
+            "nexus_workspace_window_forget()",
+            "nexus_workspace_catalog_ready = 0",
+        ):
+            require(reset, contract, "workspace reset retains a reusable Catalog key")
+        require_order(
+            control,
+            (
+                '!strcmp(command->command, "reset")',
+                "nexus_cleanup_session_artifacts()",
+                "nexus_workspace_catalog_reset()",
+            ),
+            "explicit reset does not clear the workspace Catalog",
+        )
+        require(
+            shutdown,
+            "nexus_workspace_catalog_reset()",
+            "session close leaves the reusable workspace Catalog live",
         )
 
     def test_result_artifacts_bind_worker_and_coordinator_context(self) -> None:
@@ -1243,8 +1416,10 @@ class AgentNexusHarnessTests(unittest.TestCase):
         require_order(
             submit,
             (
-                "nexus_task_resource_import(descriptor, &submission->resource)",
-                "submission->deadline_tick = nexus_current_tick()",
+                "memcpy(&wire_descriptor, descriptor, sizeof(wire_descriptor))",
+                "submission->deadline_tick = wire_descriptor.deadline_tick != 0",
+                "wire_descriptor.deadline_tick = submission->deadline_tick",
+                "nexus_task_resource_import(&wire_descriptor,",
                 "nexus_cancel_binding_publish(",
                 "nexus_task_observer_pause(submission)",
                 "nexus_task_contract_create(&submission->contract)",
@@ -1826,10 +2001,9 @@ class AgentNexusHarnessTests(unittest.TestCase):
         discover = function_body(GUEST, "live_discover_tools")
         for kernel_tool in (
             "pid_info",
-            "ctx_stat",
             "query_process",
             "get_system_status",
-            "read_context",
+            "context_status",
             "read_message",
             "send_message",
             "llm_request",

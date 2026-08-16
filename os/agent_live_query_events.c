@@ -96,6 +96,8 @@ static uint agent_live_query_content_cursor;
 static uint agent_live_query_predicate_arena_used;
 static uint64 agent_live_query_next_watch_id;
 static uint64 agent_live_query_global_resync_generation;
+static uchar agent_live_query_file_watch_present[NPROC];
+static uint agent_live_query_file_watch_processes;
 
 static int
 agent_live_query_key_equal(struct workflow_lifecycle_key left,
@@ -199,6 +201,66 @@ agent_live_query_has_file_watch(struct proc *p)
 {
 	return agent_live_query_has_watch_type(p, AGENT_EVENT_FILE_STATUS) ||
 	       agent_live_query_has_watch_type(p, AGENT_EVENT_FILE_QUERY);
+}
+
+static void
+agent_live_query_file_watch_refresh_locked(struct proc *p)
+{
+	uint slot;
+	int present;
+
+	if (intr_get())
+		panic("Agent live query watch cache unlocked");
+	if (p == 0 || p < pool || p >= &pool[NPROC])
+		return;
+	slot = (uint)(p - pool);
+	present = agent_live_query_has_file_watch(p);
+	if (present && !agent_live_query_file_watch_present[slot]) {
+		agent_live_query_file_watch_present[slot] = 1;
+		agent_live_query_file_watch_processes++;
+	} else if (!present && agent_live_query_file_watch_present[slot]) {
+		agent_live_query_file_watch_present[slot] = 0;
+		if (agent_live_query_file_watch_processes == 0)
+			panic("Agent live query watch cache underflow");
+		agent_live_query_file_watch_processes--;
+	}
+}
+
+static void
+agent_live_query_file_watch_clear_locked(struct proc *p)
+{
+	uint slot;
+
+	if (intr_get())
+		panic("Agent live query watch clear unlocked");
+	if (p == 0 || p < pool || p >= &pool[NPROC])
+		return;
+	slot = (uint)(p - pool);
+	if (!agent_live_query_file_watch_present[slot])
+		return;
+	agent_live_query_file_watch_present[slot] = 0;
+	if (agent_live_query_file_watch_processes == 0)
+		panic("Agent live query watch clear underflow");
+	agent_live_query_file_watch_processes--;
+}
+
+void
+agent_live_query_file_watch_changed(struct proc *p)
+{
+	int enabled = intr_save();
+
+	agent_live_query_file_watch_refresh_locked(p);
+	intr_restore(enabled);
+}
+
+static int
+agent_live_query_file_watches_present(void)
+{
+	int enabled = intr_save();
+	int present = agent_live_query_file_watch_processes != 0;
+
+	intr_restore(enabled);
+	return present;
 }
 
 struct agent_live_query_field {
@@ -838,6 +900,9 @@ agent_live_query_events_init(void)
 	agent_live_query_predicate_arena_used = 0;
 	agent_live_query_next_watch_id = 0;
 	agent_live_query_global_resync_generation = 0;
+	memset(agent_live_query_file_watch_present, 0,
+	       sizeof(agent_live_query_file_watch_present));
+	agent_live_query_file_watch_processes = 0;
 	intr_restore(enabled);
 }
 
@@ -942,6 +1007,7 @@ agent_live_query_watch_install_typed(struct proc *p,
 	       sizeof(cold->watch_filter[cold_slot]));
 	memmove(cold->watch_filter[cold_slot], &token, sizeof(token));
 	p->agent_watch_count++;
+	agent_live_query_file_watch_refresh_locked(p);
 	watch->flags = resync_generation == 0 ? 0 :
 			 AGENT_FILE_LIVE_WATCH_F_RESYNC_REQUIRED;
 	watch->watch_id = watch_id;
@@ -977,6 +1043,7 @@ agent_live_query_watch_remove_typed(struct proc *p,
 	subscription = agent_live_query_subscription_find(p, watch->watch_id);
 	if (subscription != 0 && agent_live_query_subscription_valid(subscription)) {
 		agent_live_query_subscription_remove_locked(subscription, 1);
+		agent_live_query_file_watch_refresh_locked(p);
 		status = AGENT_STATUS_OK;
 	}
 	if ((watch->flags & AGENT_FILE_LIVE_WATCH_F_ACK_RESYNC) != 0 &&
@@ -1256,6 +1323,8 @@ agent_live_query_publish_transition(
 	if (!agent_live_query_domain_valid(key, owner_scope) ||
 	    identity == 0 || !identity->used || identity->fid <= 0)
 		return 0;
+	if (!agent_live_query_file_watches_present())
+		return 0;
 	if (generation == 0)
 		generation = agent_file_state_scope_generation(owner_scope);
 	fid = (uint64)(uint)identity->fid;
@@ -1328,6 +1397,7 @@ agent_live_query_watch_installed(struct proc *p)
 	uint scope_id;
 	int enabled = intr_save();
 
+	agent_live_query_file_watch_refresh_locked(p);
 	if (!agent_live_query_target_valid(p, &key, &scope_id) ||
 	    !agent_live_query_has_file_watch(p))
 		goto out;
@@ -1350,6 +1420,7 @@ agent_live_query_watch_removed(struct proc *p)
 	if (p == 0 || p < pool || p >= &pool[NPROC])
 		return;
 	enabled = intr_save();
+	agent_live_query_file_watch_refresh_locked(p);
 	if (!agent_live_query_has_file_watch(p)) {
 		slot = p - pool;
 		agent_live_query_proc_resync_clear(
@@ -1373,6 +1444,7 @@ agent_live_query_proc_reset(struct proc *p)
 				&agent_live_query_subscriptions[slot], 0);
 	agent_live_query_proc_resync_clear(
 		&agent_live_query_proc_resync[p - pool]);
+	agent_live_query_file_watch_clear_locked(p);
 	intr_restore(enabled);
 }
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build publication figures from the 20260811 measurement tables.
+"""Build publication figures from explicit current and supporting campaigns.
 
-The script reads CSV tables only. It refuses to place outputs inside the
-measurement input directory and confirms that the source tables remain unchanged
-while rendering.
+The current campaign supplies the contest-demo measurements used by Figures 01,
+06, and 07.  A supporting campaign supplies the unchanged AgentEval, task, and
+scheduler tables used by the remaining figures.  Source paths are always passed
+on the command line; the generator never selects a dated campaign implicitly.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import argparse
 import hashlib
 import json
 import math
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -32,6 +34,87 @@ GRAY = "#7D8790"
 LIGHT_GRAY = "#D9DEE5"
 INK = "#20262D"
 
+CONTEST_IO_METRICS = (
+    "bytes_read",
+    "directory_block_probes",
+    "directory_entries_examined",
+    "physical_reads",
+    "physical_writes",
+    "durable_flushes",
+    "virtio_notifications",
+    "virtio_submitted_requests",
+    "virtio_batched_read_requests",
+    "overwrite_prereads_skipped",
+)
+
+CURRENT_TABLES = frozenset({"contest_paired", "contest_io_normalized"})
+
+TABLE_COLUMNS: dict[str, list[str]] = {
+    "contest_paired": [
+        "sample_id",
+        "order",
+        "traversal_core_duration_us",
+        "indexed_core_duration_us",
+        "indexed_minus_traversal_core_us",
+        "traversal_over_indexed_core_ratio",
+        "traversal_end_to_end_duration_us",
+        "indexed_end_to_end_duration_us",
+    ],
+    "contest_io_normalized": [
+        "path",
+        "metric",
+        "per_workload_syscall",
+        "counter_scope",
+        "counter_window",
+    ],
+    "agenteval_pairs": [
+        "experiment",
+        "dataset_size",
+        "operations",
+        "speedup_baseline_over_treatment",
+    ],
+    "agenteval_samples": [
+        "experiment",
+        "load",
+        "pair",
+        "variant",
+        "operations",
+        "duration_us",
+    ],
+    "task_sequences": [
+        "source_file",
+        "boot_round",
+        "path",
+        "operations",
+        "duration_us",
+    ],
+    "eevdf_wakeups": [
+        "scenario",
+        "wakeup_latency_ticks",
+        "right_censored",
+    ],
+    "eevdf_samples": [
+        "source_file",
+        "scenario",
+        "index",
+        "service",
+    ],
+    "task_perf_normalized": ["path", "metric", "per_operation"],
+}
+
+FIGURE_TABLES: dict[str, tuple[str, ...]] = {
+    "01_paired_core_performance": ("contest_paired",),
+    "02_catalog_speedup_landscape": ("agenteval_pairs",),
+    "03_scan_state_groups": ("agenteval_samples",),
+    "04_task_latency_distributions": ("task_sequences",),
+    "05_eevdf_latency_fairness": ("eevdf_wakeups", "eevdf_samples"),
+    "06_normalized_io_heatmaps": (
+        "contest_io_normalized",
+        "task_perf_normalized",
+    ),
+    "07_core_end_to_end_scope": ("contest_paired",),
+}
+
 PATH_COLORS = {
     "traversal": ORANGE,
     "indexed": BLUE,
@@ -39,6 +122,213 @@ PATH_COLORS = {
     "scalar_v3": ORANGE,
     "sq_cq": BLUE,
 }
+
+
+@dataclass
+class FigureData:
+    """Resolve and preserve the exact files used to render a figure set."""
+
+    current_campaign: Path
+    supporting_campaign: Path
+    _frames: dict[str, pd.DataFrame] = field(default_factory=dict)
+    _sources: dict[Path, set[str]] = field(default_factory=dict)
+    _summary: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        self.current_campaign = self.current_campaign.expanduser().resolve()
+        self.supporting_campaign = self.supporting_campaign.expanduser().resolve()
+        for label, path in (
+            ("current campaign", self.current_campaign),
+            ("supporting campaign", self.supporting_campaign),
+        ):
+            if not path.is_dir():
+                raise FileNotFoundError(f"{label} directory does not exist: {path}")
+
+    @staticmethod
+    def _first_file(root: Path, candidates: tuple[Path, ...], label: str) -> Path:
+        for relative in candidates:
+            path = root / relative
+            if path.is_file():
+                return path.resolve()
+        rendered = ", ".join(str(root / item) for item in candidates)
+        raise FileNotFoundError(f"{label} not found; tried: {rendered}")
+
+    def _record_source(self, path: Path, table: str) -> None:
+        self._sources.setdefault(path.resolve(), set()).add(table)
+
+    def _current_measurements(self) -> Path:
+        return self._first_file(
+            self.current_campaign,
+            (Path("measurements.csv"), Path("raw/contest/measurements.csv")),
+            "current contest measurements",
+        )
+
+    def _current_summary_path(self) -> Path:
+        return self._first_file(
+            self.current_campaign,
+            (Path("summary.json"), Path("raw/contest/summary.json")),
+            "current contest summary",
+        )
+
+    def _table_path(self, table: str) -> Path:
+        root = (
+            self.current_campaign if table in CURRENT_TABLES else self.supporting_campaign
+        )
+        candidates = (Path("tables") / f"{table}.csv", Path(f"{table}.csv"))
+        try:
+            return self._first_file(root, candidates, f"{table} table")
+        except FileNotFoundError:
+            if table in CURRENT_TABLES:
+                return self._current_measurements()
+            raise
+
+    def _read_current_measurements(self) -> pd.DataFrame:
+        path = self._current_measurements()
+        self._record_source(path, "contest_measurements")
+        frame = pd.read_csv(path)
+        required = TABLE_COLUMNS["contest_paired"]
+        require_columns(frame, required, path.name)
+        return frame
+
+    def _derive_contest_io(self, paired: pd.DataFrame) -> pd.DataFrame:
+        rows: list[dict[str, Any]] = []
+        source = self._current_measurements()
+        self._record_source(source, "contest_io_normalized")
+        for _, sample in paired.iterrows():
+            for path_name in ("traversal", "indexed"):
+                denominator_column = f"{path_name}_workload_syscalls"
+                if denominator_column not in paired.columns:
+                    raise ValueError(
+                        f"{source.name}: missing column {denominator_column}"
+                    )
+                denominator = pd.to_numeric(
+                    pd.Series([sample[denominator_column]]), errors="raise"
+                ).iloc[0]
+                if denominator <= 0:
+                    raise ValueError(
+                        f"{source.name}: {denominator_column} must be positive"
+                    )
+                for metric in CONTEST_IO_METRICS:
+                    column = f"{path_name}_{metric}"
+                    if column not in paired.columns:
+                        continue
+                    raw_value = pd.to_numeric(
+                        pd.Series([sample[column]]), errors="raise"
+                    ).iloc[0]
+                    lane_reported = metric == "bytes_read"
+                    rows.append(
+                        {
+                            "sample_id": sample["sample_id"],
+                            "order": sample["order"],
+                            "path": path_name,
+                            "metric": metric,
+                            "counter_scope": (
+                                "workflow_lane" if lane_reported else "global_kernel"
+                            ),
+                            "counter_window": "core" if lane_reported else "end_to_end",
+                            "raw_value": raw_value,
+                            "workload_syscalls": denominator,
+                            "per_workload_syscall": raw_value / denominator,
+                        }
+                    )
+        if not rows:
+            raise ValueError(f"{source.name}: no contest I/O metrics were found")
+        return pd.DataFrame(rows)
+
+    def read_table(
+        self, table: str, columns: list[str] | tuple[str, ...]
+    ) -> pd.DataFrame:
+        if table not in self._frames:
+            path = self._table_path(table)
+            if table == "contest_paired" and path == self._current_measurements():
+                frame = self._read_current_measurements()
+            elif table == "contest_io_normalized" and path == self._current_measurements():
+                frame = self._derive_contest_io(self._read_current_measurements())
+            else:
+                self._record_source(path, table)
+                frame = pd.read_csv(path)
+            self._frames[table] = frame
+        frame = self._frames[table]
+        require_columns(frame, list(columns), table)
+        return frame.copy()
+
+    def validate_current_summary(self) -> dict[str, Any]:
+        if self._summary is not None:
+            return self._summary
+        path = self._current_summary_path()
+        self._record_source(path, "contest_summary")
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"invalid current contest summary {path}: {error}") from error
+        if not isinstance(raw, dict):
+            raise ValueError(f"{path}: summary root must be an object")
+        if raw.get("kind") != "agentos-contest-demo-results":
+            raise ValueError(f"{path}: unexpected contest result kind")
+        schema = raw.get("schema_version")
+        if not isinstance(schema, int) or isinstance(schema, bool) or schema < 1:
+            raise ValueError(f"{path}: schema_version must be a positive integer")
+        samples = raw.get("samples")
+        campaign = raw.get("campaign")
+        if not isinstance(samples, list) or not isinstance(campaign, dict):
+            raise ValueError(f"{path}: campaign or samples are malformed")
+        paired = self.read_table("contest_paired", TABLE_COLUMNS["contest_paired"])
+        boots = campaign.get("qemu_boots")
+        if boots != len(samples) or boots != len(paired):
+            raise ValueError(
+                f"{path}: qemu_boots, samples, and measurements row counts differ"
+            )
+        if len(paired) < 2 or len(paired) % 2:
+            raise ValueError(f"{path}: paired campaign must contain an even row count")
+        order_counts = paired["order"].value_counts().to_dict()
+        if set(order_counts) != {
+            "traversal_then_indexed",
+            "indexed_then_traversal",
+        } or len(set(order_counts.values())) != 1:
+            raise ValueError(f"{path}: measurements are not balanced AB/BA pairs")
+        self._summary = raw
+        return raw
+
+    def preflight(self, table_names: set[str]) -> None:
+        self.validate_current_summary()
+        for table in sorted(table_names):
+            self.read_table(table, TABLE_COLUMNS[table])
+
+    def table_source_label(self, table: str) -> str:
+        path = self._table_path(table)
+        root = self.current_campaign if table in CURRENT_TABLES else self.supporting_campaign
+        campaign = "current" if table in CURRENT_TABLES else "supporting"
+        return f"{campaign}:{path.relative_to(root).as_posix()}"
+
+    def source_snapshot(self) -> list[dict[str, Any]]:
+        def campaign_path(path: Path, roles: set[str]) -> tuple[str, str]:
+            current_roles = CURRENT_TABLES | {
+                "contest_measurements",
+                "contest_summary",
+            }
+            if roles & current_roles:
+                return "current", path.relative_to(self.current_campaign).as_posix()
+            try:
+                return (
+                    "supporting",
+                    path.relative_to(self.supporting_campaign).as_posix(),
+                )
+            except ValueError:
+                return (
+                    "current",
+                    path.relative_to(self.current_campaign).as_posix(),
+                )
+
+        return [
+            {
+                "campaign": campaign_path(path, roles)[0],
+                "path": campaign_path(path, roles)[1],
+                "roles": sorted(roles),
+                "bytes": path.stat().st_size,
+                "sha256": sha256(path),
+            }
+            for path, roles in sorted(self._sources.items(), key=lambda item: str(item[0]))
+        ]
 
 
 def configure_matplotlib() -> str:
@@ -74,7 +364,7 @@ def configure_matplotlib() -> str:
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
             "svg.fonttype": "none",
-            "svg.hashsalt": "agentos-doc-figures-20260811",
+            "svg.hashsalt": "agentos-doc-figures-v2",
             "savefig.facecolor": "white",
             "savefig.edgecolor": "none",
         }
@@ -106,13 +396,8 @@ def require_columns(frame: pd.DataFrame, columns: list[str], table: str) -> None
         raise ValueError(f"{table}: missing columns {', '.join(missing)}")
 
 
-def read_table(tables: Path, name: str, columns: list[str]) -> pd.DataFrame:
-    path = tables / f"{name}.csv"
-    if not path.is_file():
-        raise FileNotFoundError(path)
-    frame = pd.read_csv(path)
-    require_columns(frame, columns, path.name)
-    return frame
+def read_table(data: FigureData, name: str, columns: list[str]) -> pd.DataFrame:
+    return data.read_table(name, columns)
 
 
 def style_axis(ax: Any, *, grid_axis: str = "both") -> None:
@@ -232,7 +517,7 @@ def export_figure(
     return exported
 
 
-def make_paired_core(tables: Path) -> tuple[Any, dict[str, Any]]:
+def make_paired_core(tables: FigureData) -> tuple[Any, dict[str, Any]]:
     columns = [
         "sample_id",
         "order",
@@ -265,7 +550,7 @@ def make_paired_core(tables: Path) -> tuple[Any, dict[str, Any]]:
             zorder=1,
         )
     ax0.scatter(frame["traversal_ms"], y, s=28, color=ORANGE, label="遍历查询", zorder=3)
-    ax0.scatter(frame["indexed_ms"], y, s=28, color=BLUE, label="索引查询", zorder=3)
+    ax0.scatter(frame["indexed_ms"], y, s=28, color=BLUE, label="索引复用", zorder=3)
     ax0.set_yticks(y, [f"S{int(value):02d}" for value in frame["sample_id"]])
     ax0.set_xlabel("核心查询耗时（ms）")
     ax0.set_ylabel("启动样本")
@@ -280,7 +565,7 @@ def make_paired_core(tables: Path) -> tuple[Any, dict[str, Any]]:
     draw_half_raincloud(
         ax1,
         groups,
-        [f"遍历查询\nn={len(frame)}", f"索引查询\nn={len(frame)}"],
+        [f"遍历查询\nn={len(frame)}", f"索引复用\nn={len(frame)}"],
         [ORANGE, BLUE],
         seed=6101,
     )
@@ -305,7 +590,7 @@ def make_paired_core(tables: Path) -> tuple[Any, dict[str, Any]]:
         color=ORANGE,
         fontsize=8.2,
     )
-    ax2.set_xlabel("索引查询减遍历查询（ms）")
+    ax2.set_xlabel("索引复用减遍历查询（ms）")
     ax2.set_ylabel("累计概率")
     ax2.set_ylim(0, 1.03)
     ax2.set_title("配对差值累积分布")
@@ -315,19 +600,19 @@ def make_paired_core(tables: Path) -> tuple[Any, dict[str, Any]]:
     faster = int((frame["delta_ms"] < 0).sum())
     speedup = float(frame["traversal_over_indexed_core_ratio"].median())
     order_counts = frame["order"].value_counts().to_dict()
-    fig.suptitle("遍历查询与索引查询的配对耗时", fontsize=13.5, weight="bold", y=0.985)
+    fig.suptitle("遍历查询与索引复用的配对耗时", fontsize=13.5, weight="bold", y=0.985)
     fig.subplots_adjust(left=0.055, right=0.992, top=0.83, bottom=0.13)
     return fig, {
-        "sources": ["contest_paired.csv"],
+        "sources": [tables.table_source_label("contest_paired")],
         "paired_boots": int(len(frame)),
         "indexed_faster_pairs": faster,
         "median_indexed_minus_traversal_ms": median,
-        "median_speedup": speedup,
+        "median_pairwise_core_speedup": speedup,
         "order_counts": {str(key): int(value) for key, value in order_counts.items()},
     }
 
 
-def make_catalog_landscape(tables: Path) -> tuple[Any, dict[str, Any]]:
+def make_catalog_landscape(tables: FigureData) -> tuple[Any, dict[str, Any]]:
     columns = [
         "experiment",
         "dataset_size",
@@ -418,7 +703,7 @@ def make_catalog_landscape(tables: Path) -> tuple[Any, dict[str, Any]]:
     fig.suptitle("目录规模、命中数与查询加速比", fontsize=13.5, weight="bold", y=0.985)
     fig.subplots_adjust(left=0.065, right=0.985, top=0.84, bottom=0.11)
     return fig, {
-        "sources": ["agenteval_pairs.csv"],
+        "sources": [tables.table_source_label("agenteval_pairs")],
         "measured_cells": int(len(grouped)),
         "pairs_per_cell": sorted(int(value) for value in grouped["n"].unique()),
         "catalog_sizes": catalogs,
@@ -432,7 +717,7 @@ def make_catalog_landscape(tables: Path) -> tuple[Any, dict[str, Any]]:
     }
 
 
-def make_scan_states(tables: Path) -> tuple[Any, dict[str, Any]]:
+def make_scan_states(tables: FigureData) -> tuple[Any, dict[str, Any]]:
     columns = ["experiment", "load", "pair", "variant", "operations", "duration_us"]
     frame = read_table(tables, "agenteval_samples", columns)
     frame = frame[
@@ -477,8 +762,15 @@ def make_scan_states(tables: Path) -> tuple[Any, dict[str, Any]]:
             label=f"{category_labels[category]}（n={min(counts)}）",
         )
         ax.errorbar(x, medians, yerr=[medians - q1, q3 - medians], fmt="none", color=INK, capsize=2.5, linewidth=0.85)
-        for bar, value in zip(bars, medians):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), f"{value:.0f}", ha="center", va="bottom", fontsize=7.8)
+        for bar, value, upper in zip(bars, medians, q3):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                max(value, upper) + 3.0,
+                f"{value:.0f}",
+                ha="center",
+                va="bottom",
+                fontsize=7.8,
+            )
 
     ax.set_xticks(base, [str(value) for value in catalogs])
     ax.set_xlabel("目录条目数")
@@ -488,7 +780,7 @@ def make_scan_states(tables: Path) -> tuple[Any, dict[str, Any]]:
     style_axis(ax, grid_axis="y")
     fig.subplots_adjust(left=0.10, right=0.985, top=0.89, bottom=0.13)
     return fig, {
-        "sources": ["agenteval_samples.csv"],
+        "sources": [tables.table_source_label("agenteval_samples")],
         "catalog_sizes": catalogs,
         "rows": int(len(frame)),
         "fresh_boots": 4,
@@ -500,7 +792,7 @@ def make_scan_states(tables: Path) -> tuple[Any, dict[str, Any]]:
     }
 
 
-def make_task_latency(tables: Path) -> tuple[Any, dict[str, Any]]:
+def make_task_latency(tables: FigureData) -> tuple[Any, dict[str, Any]]:
     columns = ["source_file", "boot_round", "path", "operations", "duration_us"]
     frame = read_table(tables, "task_sequences", columns).copy()
     frame["duration_us"] = pd.to_numeric(frame["duration_us"], errors="raise")
@@ -544,14 +836,14 @@ def make_task_latency(tables: Path) -> tuple[Any, dict[str, Any]]:
     fig.suptitle("三种任务提交方式的耗时分布", fontsize=13.5, weight="bold", y=0.985)
     fig.subplots_adjust(left=0.075, right=0.985, top=0.82, bottom=0.14, wspace=0.25)
     return fig, {
-        "sources": ["task_sequences.csv"],
+        "sources": [tables.table_source_label("task_sequences")],
         "samples_per_path": {path: int(len(values)) for path, values in zip(paths, groups)},
         "operations_per_sequence": sorted(int(value) for value in frame["operations"].unique()),
         "median_duration_ms": medians,
     }
 
 
-def make_eevdf_combo(tables: Path) -> tuple[Any, dict[str, Any]]:
+def make_eevdf_combo(tables: FigureData) -> tuple[Any, dict[str, Any]]:
     wake_columns = ["scenario", "wakeup_latency_ticks", "right_censored"]
     wake = read_table(tables, "eevdf_wakeups", wake_columns).copy()
     for column in wake_columns:
@@ -652,7 +944,10 @@ def make_eevdf_combo(tables: Path) -> tuple[Any, dict[str, Any]]:
     fig.suptitle("工作流 EEVDF 的唤醒等待时间与 Jain 公平指数", fontsize=13.5, weight="bold", y=0.985)
     fig.subplots_adjust(left=0.075, right=0.985, top=0.82, bottom=0.14, wspace=0.25)
     return fig, {
-        "sources": ["eevdf_wakeups.csv", "eevdf_samples.csv"],
+        "sources": [
+            tables.table_source_label("eevdf_wakeups"),
+            tables.table_source_label("eevdf_samples"),
+        ],
         "exact_wakeup_probes": int(len(wake)),
         "right_censored": int(wake["right_censored"].sum()),
         "wakeup_by_scenario": wake_summary,
@@ -701,7 +996,7 @@ def heatmap_panel(
                 "sq_cq": "SQ/CQ",
                 "batch": "批量提交",
                 "traversal": "遍历查询",
-                "indexed": "索引查询",
+                "indexed": "索引复用",
             }.get(str(value), str(value))
             for value in pivot.index
         ],
@@ -714,7 +1009,7 @@ def heatmap_panel(
     return image
 
 
-def make_io_heatmaps(tables: Path) -> tuple[Any, dict[str, Any]]:
+def make_io_heatmaps(tables: FigureData) -> tuple[Any, dict[str, Any]]:
     contest_columns = ["path", "metric", "per_workload_syscall", "counter_scope", "counter_window"]
     task_columns = ["path", "metric", "per_operation"]
     contest = read_table(tables, "contest_io_normalized", contest_columns).copy()
@@ -793,7 +1088,10 @@ def make_io_heatmaps(tables: Path) -> tuple[Any, dict[str, Any]]:
     fig.suptitle("各执行路径的内核 I/O 与任务开销", fontsize=13.5, weight="bold", y=0.992)
     fig.subplots_adjust(left=0.105, right=0.89, top=0.86, bottom=0.14, hspace=0.64)
     return fig, {
-        "sources": ["contest_io_normalized.csv", "task_perf_normalized.csv"],
+        "sources": [
+            tables.table_source_label("contest_io_normalized"),
+            tables.table_source_label("task_perf_normalized"),
+        ],
         "contest_metrics": contest_metrics,
         "task_metrics": task_metrics,
         "contest_samples_per_cell": sorted(int(value) for value in contest_counts.stack().unique()),
@@ -802,7 +1100,7 @@ def make_io_heatmaps(tables: Path) -> tuple[Any, dict[str, Any]]:
     }
 
 
-def make_scope_comparison(tables: Path) -> tuple[Any, dict[str, Any]]:
+def make_scope_comparison(tables: FigureData) -> tuple[Any, dict[str, Any]]:
     columns = [
         "order",
         "traversal_core_duration_us",
@@ -838,7 +1136,7 @@ def make_scope_comparison(tables: Path) -> tuple[Any, dict[str, Any]]:
         ax.scatter(np.ones(len(left)), left, color=ORANGE, s=26, edgecolor="white", linewidth=0.35, zorder=3)
         ax.scatter(np.full(len(right), 2), right, color=BLUE, s=26, edgecolor="white", linewidth=0.35, zorder=3)
         ax.plot([1, 2], [np.median(left), np.median(right)], color=INK, marker="D", markersize=5, linewidth=1.6, label="配对中位数")
-        ax.set_xticks([1, 2], [f"遍历查询\nn={len(left)}", f"索引查询\nn={len(right)}"])
+        ax.set_xticks([1, 2], [f"遍历查询\nn={len(left)}", f"索引复用\nn={len(right)}"])
         ax.set_ylabel(ylabel)
         ax.set_title(title)
         style_axis(ax, grid_axis="y")
@@ -871,7 +1169,7 @@ def make_scope_comparison(tables: Path) -> tuple[Any, dict[str, Any]]:
         ax2.text(median, position + 0.25, f"P50 {median:.2f} ms", ha="center", color=color, fontsize=8.2)
     ax2.axvline(0, color=INK, linestyle="--", linewidth=1.0)
     ax2.set_yticks(positions, ["核心查询阶段", "完整流程"])
-    ax2.set_xlabel("索引查询减遍历查询（ms）")
+    ax2.set_xlabel("索引复用减遍历查询（ms）")
     ax2.set_title("索引与遍历的耗时差")
     style_axis(ax2, grid_axis="x")
     panel_label(ax2, "c", x=-0.045)
@@ -887,12 +1185,12 @@ def make_scope_comparison(tables: Path) -> tuple[Any, dict[str, Any]]:
     fig.suptitle("核心查询阶段与完整流程耗时", fontsize=13.5, weight="bold", y=0.985)
     fig.subplots_adjust(left=0.105, right=0.985, top=0.85, bottom=0.10)
     return fig, {
-        "sources": ["contest_paired.csv"],
+        "sources": [tables.table_source_label("contest_paired")],
         "paired_boots": int(len(frame)),
         "median_core_delta_ms": core_median,
         "median_end_to_end_delta_ms": e2e_median,
-        "median_core_speedup": speedup_median,
-        "median_core_speedup_by_order": {
+        "median_pairwise_core_speedup": speedup_median,
+        "median_pairwise_core_speedup_by_order": {
             str(key): float(value) for key, value in order_speedups.items()
         },
         "indexed_faster_core_pairs": core_wins,
@@ -900,7 +1198,7 @@ def make_scope_comparison(tables: Path) -> tuple[Any, dict[str, Any]]:
     }
 
 
-FIGURES: list[tuple[str, Callable[[Path], tuple[Any, dict[str, Any]]]]] = [
+FIGURES: list[tuple[str, Callable[[FigureData], tuple[Any, dict[str, Any]]]]] = [
     ("01_paired_core_performance", make_paired_core),
     ("02_catalog_speedup_landscape", make_catalog_landscape),
     ("03_scan_state_groups", make_scan_states),
@@ -914,6 +1212,25 @@ FIGURES: list[tuple[str, Callable[[Path], tuple[Any, dict[str, Any]]]]] = [
 def parse_args() -> argparse.Namespace:
     script = Path(__file__).resolve()
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--campaign-dir",
+        type=Path,
+        required=True,
+        help=(
+            "Current contest-demo campaign containing measurements.csv and "
+            "summary.json (either at its root or under raw/contest)."
+        ),
+    )
+    parser.add_argument(
+        "--supporting-campaign-dir",
+        "--baseline-campaign-dir",
+        dest="supporting_campaign_dir",
+        type=Path,
+        help=(
+            "Campaign containing supporting tables/*.csv. Defaults to "
+            "--campaign-dir when a single campaign contains every table."
+        ),
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -930,6 +1247,11 @@ def parse_args() -> argparse.Namespace:
         action="append",
         help="Render only the named stem to a non-canonical --output-dir; may be repeated.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Resolve, parse, and hash all selected inputs without writing figures.",
+    )
     return parser.parse_args()
 
 
@@ -944,34 +1266,85 @@ def is_within(path: Path, parent: Path) -> bool:
 def main() -> int:
     args = parse_args()
     script = Path(__file__).resolve()
-    tables = (script.parents[3] / "one_shot_metrics" / "data" / "20260811" / "tables").resolve()
+    current_campaign = args.campaign_dir.expanduser().resolve()
+    supporting_campaign = (
+        current_campaign
+        if args.supporting_campaign_dir is None
+        else args.supporting_campaign_dir.expanduser().resolve()
+    )
+    tables = FigureData(current_campaign, supporting_campaign)
     output_dir = args.output_dir.expanduser().resolve()
-    campaign_root = tables.parent
-    if is_within(output_dir, campaign_root):
-        raise SystemExit(f"Refusing to write inside measurement input directory: {output_dir}")
+    if not args.dry_run and any(
+        is_within(output_dir, campaign)
+        for campaign in {current_campaign, supporting_campaign}
+    ):
+        raise SystemExit(
+            f"Refusing to write inside a measurement input directory: {output_dir}"
+        )
     formats = [value.strip().lower() for value in args.formats.split(",") if value.strip()]
     invalid_formats = sorted(set(formats) - {"png", "pdf", "svg"})
     if invalid_formats:
         raise SystemExit(f"Unsupported formats: {', '.join(invalid_formats)}")
     selected = set(args.only or [stem for stem, _ in FIGURES])
-    if args.only and output_dir == script.parent:
+    if args.only and output_dir == script.parent and not args.dry_run:
         raise SystemExit("--only requires an explicit non-canonical --output-dir; run all figures to refresh the canonical manifest")
     known = {stem for stem, _ in FIGURES}
     unknown = sorted(selected - known)
     if unknown:
         raise SystemExit(f"Unknown figure stems: {', '.join(unknown)}")
 
+    required_tables = {
+        table
+        for stem in selected
+        for table in FIGURE_TABLES[stem]
+    }
+    tables.preflight(required_tables)
+    before = tables.source_snapshot()
+    if args.dry_run:
+        summary = tables.validate_current_summary()
+        comparison = summary.get("comparison", {})
+        print(
+            json.dumps(
+                {
+                    "status": "ready",
+                    "current_campaign": str(current_campaign),
+                    "supporting_campaign": str(supporting_campaign),
+                    "contest_schema_version": summary["schema_version"],
+                    "qemu_boots": summary["campaign"]["qemu_boots"],
+                    "adaptive_selection": comparison.get(
+                        "adaptive_selection", "indexed"
+                    ),
+                    "catalog_reuse": summary.get("catalog_reuse"),
+                    "figures": sorted(selected),
+                    "tables": sorted(required_tables),
+                    "inputs": before,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+
     font = configure_matplotlib()
-    input_paths = sorted(tables.glob("*.csv"))
-    before = {path.name: sha256(path) for path in input_paths}
+    summary = tables.validate_current_summary()
     manifest: dict[str, Any] = {
-        "schema": "agentos-doc-figures-v1",
-        "campaign": campaign_root.name,
+        "schema": "agentos-doc-figures-v2",
+        "campaigns": {
+            "current": current_campaign.name,
+            "supporting": supporting_campaign.name,
+        },
+        "contest_schema_version": summary["schema_version"],
+        "qemu_boots": summary["campaign"]["qemu_boots"],
         "font": font,
         "formats": formats,
         "inputs": before,
         "figures": {},
     }
+    manifest["adaptive_selection"] = summary.get("comparison", {}).get(
+        "adaptive_selection", "indexed"
+    )
+    if "catalog_reuse" in summary:
+        manifest["catalog_reuse"] = summary["catalog_reuse"]
     for stem, maker in FIGURES:
         if stem not in selected:
             continue
@@ -980,7 +1353,7 @@ def main() -> int:
         manifest["figures"][stem] = {"metrics": metrics, "outputs": outputs}
         print(f"rendered {stem}: {', '.join(path['path'] for path in outputs.values())}")
 
-    after = {path.name: sha256(path) for path in input_paths}
+    after = tables.source_snapshot()
     if before != after:
         raise RuntimeError("Measurement input changed while rendering")
     manifest_path = output_dir / "figure_manifest.json"

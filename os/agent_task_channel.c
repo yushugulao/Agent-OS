@@ -159,11 +159,11 @@ _Static_assert(sizeof(struct agent_task_private_header) == 128,
 	       "Task Channel private header layout");
 _Static_assert(sizeof(struct agent_task_request_slot) == 224,
 	       "Task Channel private request layout");
-_Static_assert(sizeof(struct agent_task_resource_slot) == 192,
+_Static_assert(sizeof(struct agent_task_resource_slot) == 256,
 	       "Task Channel private resource layout");
-_Static_assert(sizeof(struct agent_task_resource_import) == 152,
+_Static_assert(sizeof(struct agent_task_resource_import) == 216,
 	       "Task Channel resource import hook layout");
-_Static_assert(sizeof(struct agent_task_resource_view) == 160,
+_Static_assert(sizeof(struct agent_task_resource_view) == 224,
 	       "Task Channel resource view hook layout");
 _Static_assert(sizeof(struct agent_task_private_page) == PAGE_SIZE,
 	       "Task Channel copied descriptors and terminal state must fit one page");
@@ -303,10 +303,12 @@ agent_task_snapshot_valid(const struct agent_task_resource_import *imported)
 	if ((imported->resource_type != AGENT_ARTIFACT_UTF8 &&
 	     imported->resource_type != AGENT_ARTIFACT_TASK) ||
 	    imported->length == 0 ||
-	    imported->length > AGENT_TASK_RESOURCE_UTF8_MAX)
+	    imported->length > AGENT_TASK_RESOURCE_SNAPSHOT_SIZE)
 		return 0;
 	length = (uint)imported->length;
 	if (imported->resource_type == AGENT_ARTIFACT_UTF8) {
+		if (length > AGENT_TASK_RESOURCE_UTF8_MAX)
+			return 0;
 		if (imported->snapshot[length] != 0)
 			return 0;
 		for (uint i = 0; i < length; i++)

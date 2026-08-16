@@ -403,8 +403,10 @@ int agent_ipc_watch_set(struct proc *p, int event_type, char *filter)
 		if (cold->watch_valid[i] &&
 		    cold->watch_event_type[i] == event_type &&
 		    strncmp(cold->watch_filter[i], filter,
-			    AGENT_WATCH_FILTER_SIZE) == 0)
+			    AGENT_WATCH_FILTER_SIZE) == 0) {
+			agent_live_query_file_watch_changed(p);
 			return 0;
+		}
 		if (!cold->watch_valid[i] && free_slot < 0)
 			free_slot = i;
 	}
@@ -415,6 +417,7 @@ int agent_ipc_watch_set(struct proc *p, int event_type, char *filter)
 	safestrcpy(cold->watch_filter[free_slot], filter,
 		   sizeof(cold->watch_filter[free_slot]));
 	p->agent_watch_count++;
+	agent_live_query_file_watch_changed(p);
 	return 0;
 }
 
@@ -426,6 +429,10 @@ static int agent_ipc_watch_clear(struct proc *p, int event_type, char *filter)
 
 	for (int i = 0; i < AGENT_WATCH_MAX; i++) {
 		if (!cold->watch_valid[i])
+			continue;
+		/* Typed FILE_QUERY subscriptions are removed by watch id so their
+		 * predicate storage and resync acknowledgement stay synchronized. */
+		if (cold->watch_event_type[i] == AGENT_EVENT_FILE_QUERY)
 			continue;
 		if (!clear_all) {
 			if (event_type != AGENT_EVENT_NONE &&
@@ -444,6 +451,7 @@ static int agent_ipc_watch_clear(struct proc *p, int event_type, char *filter)
 	p->agent_watch_count -= removed;
 	if (p->agent_watch_count < 0)
 		p->agent_watch_count = 0;
+	agent_live_query_file_watch_changed(p);
 	return removed;
 }
 
@@ -625,7 +633,8 @@ struct agent_ipc_origin_policy {
 static const struct agent_ipc_origin_policy agent_ipc_origin_policy[] = {
 	[AGENT_EVENT_ORIGIN_KERNEL] = {
 		AGENT_EVENT_ATTRIBUTED_SET | AGENT_EVENT_SET(AGENT_EVENT_TIMER) |
-			AGENT_EVENT_SET(AGENT_EVENT_CANCELLED), 0 },
+			AGENT_EVENT_SET(AGENT_EVENT_CANCELLED) |
+			AGENT_EVENT_SET(AGENT_EVENT_PREFETCH_HINT), 0 },
 	[AGENT_EVENT_ORIGIN_DIRECTED] = {
 		AGENT_EVENT_SET(AGENT_EVENT_MESSAGE) |
 			AGENT_EVENT_SET(AGENT_EVENT_LLM_DONE),
@@ -828,6 +837,23 @@ agent_ipc_queue_intrinsic_timer_locked(struct proc *p, uint64 corr_id,
 	return agent_ipc_queue_event_locked(
 		p, 0, AGENT_EVENT_ORIGIN_KERNEL, AGENT_EVENT_TIMER, corr_id,
 		p->context_path_latest, payload, AGENT_EVENT_INTRINSIC_COALESCED);
+}
+
+int
+agent_ipc_prefetch_hint(struct proc *p, uint64 corr_id)
+{
+	int enabled;
+	int result;
+
+	if (p == 0 || !p->is_agent || !proc_teardown_live(p))
+		return AGENT_STATUS_NOT_FOUND;
+	enabled = intr_save();
+	result = agent_ipc_queue_event_locked(
+		p, 0, AGENT_EVENT_ORIGIN_KERNEL, AGENT_EVENT_PREFETCH_HINT,
+		corr_id, p->context_path_latest, "prefetch_hint",
+		AGENT_EVENT_INTRINSIC_COALESCED);
+	intr_restore(enabled);
+	return result < 0 ? AGENT_STATUS_NO_SPACE : AGENT_STATUS_OK;
 }
 
 static int agent_ipc_queue_heartbeat_if_due(struct proc *p, uint64 now)
@@ -1477,7 +1503,7 @@ static int agent_ipc_heartbeat_syscall(uint64 interval_ticks, char *action)
 		agent_lifecycle_context_lane_leave(p);
 		return status;
 	}
-	agent_context_append_system(p, AGENT_TOOL_AGENT_HEARTBEAT, 0,
+	agent_context_append_system(p, AGENT_TOOL_HEARTBEAT_CONFIGURE, 0,
 				    interval_ticks, action, action,
 				    AGENT_STATUS_OK, interval_ticks,
 				    now, 0);
@@ -1487,7 +1513,8 @@ static int agent_ipc_heartbeat_syscall(uint64 interval_ticks, char *action)
 
 int sys_agent_heartbeat(uint64 interval_ticks)
 {
-	return agent_ipc_heartbeat_syscall(interval_ticks, "heartbeat_legacy");
+	(void)interval_ticks;
+	return AGENT_STATUS_DEPRECATED;
 }
 
 int sys_agent_heartbeat_set(uint64 interval_ticks)

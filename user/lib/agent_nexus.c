@@ -41,9 +41,9 @@ static const struct agent_nexus_tool_spec nexus_tool_specs[AGENT_TOOL_COUNT] = {
 	NX_SPEC(AGENT_TOOL_PID_INFO, NX_ALL, 0, 0, "pid_info", "none",
 		"inspect the current Agent identity", "not for another pid",
 		"pid, agent id, Agent flag"),
-	NX_SPEC(AGENT_TOOL_CTX_STAT, NX_ALL, 0, 0, "ctx_stat", "none",
-		"inspect current Context counters", "not for Context contents",
-		"Context base, size, call count"),
+	NX_SPEC(AGENT_TOOL_CTX_STAT, 0, 0, 0, "ctx_stat", "none",
+		"deprecated compatibility entry", "use context_status",
+		"deprecated"),
 	NX_SPEC(AGENT_TOOL_QUERY_PROCESS, NX_COORD | NX_SYSTEM,
 		AGENT_CAP_PROCESS_READ, 0, "query_process", "type?:uint64",
 		"count process classes", "not for process mutation",
@@ -52,10 +52,10 @@ static const struct agent_nexus_tool_spec nexus_tool_specs[AGENT_TOOL_COUNT] = {
 		AGENT_CAP_PROCESS_READ, 0, "get_system_status", "none",
 		"capture a bounded system snapshot", "not a benchmark",
 		"process count, Agent count, tick"),
-	NX_SPEC(AGENT_TOOL_READ_CONTEXT, NX_COORD | NX_SYSTEM | NX_RESEARCH,
-		0, 0, "read_context", "none",
-		"read current Context counters", "not cross-Agent content",
-		"post-state Context counters"),
+	NX_SPEC(AGENT_TOOL_CONTEXT_STATUS, NX_COORD | NX_SYSTEM | NX_RESEARCH,
+		0, 0, "context_status", "none",
+		"read current Context path counters", "not cross-Agent content",
+		"record count, capacity, call count"),
 	NX_SPEC(AGENT_TOOL_QUERY_FILE, NX_COORD | NX_SYSTEM | NX_RESEARCH,
 		AGENT_CAP_META_READ, 0, "query_file", "path:string",
 		"query one workflow path or a structured metadata selector",
@@ -68,9 +68,10 @@ static const struct agent_nexus_tool_spec nexus_tool_specs[AGENT_TOOL_COUNT] = {
 	NX_SPEC(AGENT_TOOL_READ_MESSAGE, NX_ALL, 0, 0, "read_message", "none",
 		"inspect current mailbox", "prefer agent_wait for blocking",
 		"one bounded message"),
-	NX_SPEC(AGENT_TOOL_FILE_META_INIT, NX_COORD, AGENT_CAP_META_WRITE,
-		AGENT_SIDE_EFFECT_METADATA, "file_meta_init", "none",
-		"initialize metadata once", "not a worker operation", "status"),
+	NX_SPEC(AGENT_TOOL_METADATA_INIT, NX_COORD, AGENT_CAP_META_WRITE,
+		AGENT_SIDE_EFFECT_METADATA, "metadata_init", "none",
+		"initialize workflow metadata bookkeeping once",
+		"not a worker operation", "catalog generation"),
 	NX_SPEC(AGENT_TOOL_READ_FILE_SUMMARY, NX_COORD | NX_RESEARCH,
 		AGENT_CAP_CONTENT_READ, 0, "read_file_summary", "selector:string",
 		"read an indexed summary", "not for secrets", "bounded summary"),
@@ -83,15 +84,14 @@ static const struct agent_nexus_tool_spec nexus_tool_specs[AGENT_TOOL_COUNT] = {
 		"check whether the current Agent identity may perform an action",
 		"the role argument is compatibility metadata, not impersonation or approval",
 		"allowed flag, current kernel role and current capability mask"),
-	NX_SPEC(AGENT_TOOL_RERUN_STAGE, NX_COORD, AGENT_CAP_ACTION_WRITE,
-		AGENT_SIDE_EFFECT_METADATA, "rerun_stage",
-		"role?:uint64,stage:string", "legacy controlled state update",
-		"not a general shell", "updated state"),
+	NX_SPEC(AGENT_TOOL_RERUN_STAGE, 0, 0, 0, "rerun_stage",
+		"role?:uint64,stage:string", "deprecated compatibility entry",
+		"use action_commit", "deprecated"),
 	NX_SPEC(AGENT_TOOL_WRITE_REPORT, 0,
-		AGENT_CAP_ARTIFACT_WRITE, AGENT_SIDE_EFFECT_ARTIFACT,
+		0, 0,
 		"write_report", "role?:uint64,payload:string",
-		"legacy platform compatibility entry",
-		"not exposed to any Nexus product role", "legacy state"),
+		"deprecated compatibility entry",
+		"use artifact_update", "deprecated"),
 	NX_SPEC(AGENT_TOOL_AGENT_WATCH, NX_ALL, AGENT_CAP_WATCH,
 		AGENT_SIDE_EFFECT_WATCH, "agent_watch",
 		"event_type:uint64,filter:string", "register an event interest",
@@ -99,8 +99,9 @@ static const struct agent_nexus_tool_spec nexus_tool_specs[AGENT_TOOL_COUNT] = {
 	NX_SPEC(AGENT_TOOL_AGENT_WAIT, NX_ALL, 0, 0, "agent_wait",
 		"timeout:uint64", "sleep for a watched event",
 		"syscall-only; not callable through V2", "event or timeout"),
-	NX_SPEC(AGENT_TOOL_AGENT_HEARTBEAT, NX_ALL, 0, 0, "agent_heartbeat",
-		"interval:uint64", "maintain liveness", "not a task result", "status"),
+	NX_SPEC(AGENT_TOOL_HEARTBEAT_CONFIGURE, NX_ALL, 0, 0,
+		"heartbeat_configure", "interval:uint64", "maintain liveness",
+		"not a task result", "configured interval and tick"),
 	NX_SPEC(AGENT_TOOL_CONTEXT_PUSH, NX_ALL, 0, 0, "context_push",
 		"record:string", "append verified local context",
 		"syscall-only; never copy hidden reasoning", "Context sequence"),
@@ -134,6 +135,46 @@ static const struct agent_nexus_tool_spec nexus_tool_specs[AGENT_TOOL_COUNT] = {
 		"submit a typed specialist task through the kernel Task Channel",
 		"syscall-only; never expose as a model-selected tool",
 		"kernel Task Channel terminal completion"),
+	NX_SPEC(AGENT_TOOL_APPLY_PATCH, 0, AGENT_CAP_WORKSPACE_WRITE,
+		AGENT_SIDE_EFFECT_FILE, "apply_patch",
+		"artifact_handle:uint64,expected_rev:uint64,path:string",
+		"request a revision-checked brokered patch operation",
+		"not available through the legacy in-Guest selector",
+		"brokered mutation receipt"),
+	NX_SPEC(AGENT_TOOL_WRITE_FILE, 0, AGENT_CAP_WORKSPACE_WRITE,
+		AGENT_SIDE_EFFECT_FILE, "write_file",
+		"artifact_handle:uint64,expected_rev:uint64,path:string",
+		"request a revision-checked brokered file write",
+		"not available through the legacy in-Guest selector",
+		"brokered mutation receipt"),
+	NX_SPEC(AGENT_TOOL_SEARCH_FILES, 0, AGENT_CAP_CONTENT_READ, 0,
+		"search_files", "none",
+		"search a verified Host workspace manifest",
+		"not available through the legacy in-Guest selector",
+		"bounded workspace candidates"),
+	NX_SPEC(AGENT_TOOL_READ_WORKSPACE_FILE, 0, AGENT_CAP_CONTENT_READ, 0,
+		"read_workspace_file", "none",
+		"read revision-bound bytes through the workspace broker",
+		"not available through the legacy in-Guest selector",
+		"bounded file bytes and revision"),
+	NX_SPEC(AGENT_TOOL_INSPECT_SYSTEM, 0, AGENT_CAP_PROCESS_READ, 0,
+		"inspect_system", "none",
+		"request a bounded projection of current Guest facts",
+		"not available through the legacy in-Guest selector",
+		"structured system facts"),
+	NX_SPEC(AGENT_TOOL_BUILD_UCORE_PROGRAM, 0,
+		AGENT_CAP_CONTENT_READ | AGENT_CAP_WORKSPACE_WRITE,
+		AGENT_SIDE_EFFECT_PROCESS | AGENT_SIDE_EFFECT_ARTIFACT,
+		"build_ucore_program", "none",
+		"request a controlled RISC-V build in an isolated worktree",
+		"not available through the legacy in-Guest selector",
+		"build id and bounded diagnostics"),
+	NX_SPEC(AGENT_TOOL_RUN_UCORE_PROGRAM, 0, AGENT_CAP_CONTENT_READ,
+		AGENT_SIDE_EFFECT_PROCESS | AGENT_SIDE_EFFECT_ARTIFACT,
+		"run_ucore_program", "none",
+		"request controlled execution in an isolated Guest",
+		"not available through the legacy in-Guest selector",
+		"exit status, output, and bounded run log"),
 };
 
 _Static_assert(sizeof(nexus_tool_specs) / sizeof(nexus_tool_specs[0]) ==
@@ -425,10 +466,10 @@ static int nexus_tool_runtime_only(int tool_id)
 	switch (tool_id) {
 	case AGENT_TOOL_SEND_MESSAGE:
 	case AGENT_TOOL_READ_MESSAGE:
-	case AGENT_TOOL_FILE_META_INIT:
+	case AGENT_TOOL_METADATA_INIT:
 	case AGENT_TOOL_AGENT_WATCH:
 	case AGENT_TOOL_AGENT_WAIT:
-	case AGENT_TOOL_AGENT_HEARTBEAT:
+	case AGENT_TOOL_HEARTBEAT_CONFIGURE:
 	case AGENT_TOOL_CONTEXT_PUSH:
 	case AGENT_TOOL_LLM_REQUEST:
 	case AGENT_TOOL_LLM_RESPONSE:
@@ -701,7 +742,8 @@ unsigned long long agent_nexus_product_capabilities(
 		       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE |
 		       AGENT_CAP_META_WRITE | AGENT_CAP_ORCHESTRATE |
 		       AGENT_CAP_LLM_RELAY | AGENT_CAP_WAIT_CANCEL |
-		       AGENT_CAP_ROUTE_MANAGE | AGENT_CAP_TASK_ACCEPT;
+		       AGENT_CAP_ROUTE_MANAGE | AGENT_CAP_TASK_ACCEPT |
+		       AGENT_CAP_WORKSPACE_WRITE;
 	default:
 		return 0;
 	}

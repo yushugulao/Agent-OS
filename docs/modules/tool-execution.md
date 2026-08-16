@@ -16,7 +16,7 @@ Agent 通过工具调用协议向内核提交工具编号、typed 参数和版�
 <a id="工具目录与-typed-abi"></a>
 ## Tool Registry 与 typed schema
 
-内核 Tool Registry 固定登记 26 项工具。每项记录工具名称/编号、参数 schema、所需能力位、允许的输入 label、输出 provenance label 和副作用掩码。Registry 定义位于 [`os/agent_tool_protocol.c`](../../os/agent_tool_protocol.c)，ABI 常量位于 [`include/agent_tool_abi.h`](../../include/agent_tool_abi.h)。
+内核 Tool Registry 固定登记 33 项工具，其中 20 项可通过结构化调用执行，3 项仅由系统调用或 Task Channel 使用，3 项保留为废弃兼容编号，7 项交给受控 Host broker 执行。7 项 brokered 工具包括工作区搜索、revision 绑定读取、Guest 状态观察、版本化写入、补丁、隔离构建和独立 Guest 运行。每项记录工具名称/编号、参数 schema、所需能力位、允许的输入 label、输出 provenance label 和副作用掩码。Registry 定义位于 [`os/agent_tool_protocol.c`](../../os/agent_tool_protocol.c)，ABI 常量位于 [`include/agent_tool_abi.h`](../../include/agent_tool_abi.h)。
 
 ```c
 #define AGENT_TOOL_REGISTRY(X) \
@@ -24,7 +24,11 @@ Agent 通过工具调用协议向内核提交工具编号、typed 参数和版�
     X(AGENT_TOOL_QUERY_FILE, AGENT_TOOL_F_CALLABLE, "query_file", ...) \
     X(AGENT_TOOL_SEND_MESSAGE, AGENT_TOOL_F_CALLABLE, "send_message", ...) \
     X(AGENT_TOOL_ACTION_COMMIT, AGENT_TOOL_F_CALLABLE, "action_commit", ...) \
-    X(AGENT_TOOL_DELEGATE_TASK, AGENT_TOOL_F_SYSCALL_ONLY, "delegate_task", ...)
+    X(AGENT_TOOL_DELEGATE_TASK, AGENT_TOOL_F_SYSCALL_ONLY, "delegate_task", ...) \
+    X(AGENT_TOOL_APPLY_PATCH, AGENT_TOOL_F_BROKERED, "apply_patch", ...) \
+    X(AGENT_TOOL_WRITE_FILE, AGENT_TOOL_F_BROKERED, "write_file", ...) \
+    X(AGENT_TOOL_BUILD_UCORE_PROGRAM, AGENT_TOOL_F_BROKERED, "build_ucore_program", ...) \
+    X(AGENT_TOOL_RUN_UCORE_PROGRAM, AGENT_TOOL_F_BROKERED, "run_ucore_program", ...)
 
 static const struct param_rule rules[] = {
     R(PAYLOAD, AGENT_PARAM_STRING, PARAM_PAYLOAD, 1),
@@ -34,6 +38,14 @@ static const struct param_rule rules[] = {
 ```
 
 系统启动时会自检这张表，包括工具编号是否连续、名称是否重复、参数写入位置是否重叠，以及 provenance 和副作用位是否合法。随后，内核以 `agentos.tool.manifest.v1` 作为摘要域，对工具编号、标志、能力位、provenance 规则、副作用、名称和 schema 计算内容摘要，生成 `schema_digest`。Execution Contract 通过这份摘要确认工具语义没有发生变化。`delegate_task` 是 syscall-only 条目：它参与 Registry、Contract 和 Task Channel 结算，但不能通过普通 V2/V3 调用直接执行。
+
+接口清理保留了旧编号，避免工具清单发生错位。`rerun_stage`、`write_report` 与 `ctx_stat` 标记为 `AGENT_TOOL_F_DEPRECATED`，调用时返回 `AGENT_STATUS_DEPRECATED`。现有功能分别由 `action_commit`、`artifact_update` 与 `context_status` 承担。Context 状态读取、Heartbeat 配置和 Metadata 初始化使用 `context_status`、`heartbeat_configure`、`metadata_init` 三个规范名称；旧 C 包装函数只负责兼容已有程序。
+
+`apply_patch` 与 `write_file` 是两个独立的 `AGENT_TOOL_F_BROKERED` 条目。它们要求 `AGENT_CAP_WORKSPACE_WRITE`，声明文件副作用，并采用 `artifact_handle:uint64,expected_rev:uint64,path:string` schema。共享的 [`agent_workspace_mutation_request`](../../include/agent_workspace_mutation_abi.h) 进一步绑定 workflow lifecycle、Host manifest object、预期 revision、内容 artifact、内容长度与 SHA-256。普通 V2/V3 执行返回 `AGENT_STATUS_BROKER_REQUIRED`；Nexus 将同名能力放入模型可见目录，再由 Host 开发 broker 核对会话 root、固定路径模式、SHA-256 revision 和内容上限。写入使用同目录临时文件、数据同步、原子替换与目录同步，receipt 返回旧 revision、新 revision、字节数和提交状态。
+
+`build_ucore_program` 与 `run_ucore_program` 也使用独立的 Registry 编号和 `AGENT_TOOL_F_BROKERED` 标志。前者只构建 `user/src/nexus_*_ucore.c` 对应的同名目标，在独立临时工作树内使用固定 RISC-V 工具链，并限制时间、CPU、地址空间、文件大小、进程数和诊断长度。后者只运行当前会话中成功 build 的镜像，每个用例启动独立的单 Hart Guest，并限制内存、时间、串口输入和日志规模。写入、补丁、编译和运行结果都先形成封存 Artifact，再以 TOOL 节点进入 Agent 的 private Context；Host 完成门要求最新 build 的 `normal`、`invalid` 和 `failure` 三类真实 Guest 用例全部通过。
+
+通用 Nexus Harness 为每个 Agent 配置 capability、允许工具位图、提示词 Artifact 和资源额度。拥有 `ORCHESTRATE` capability 的父 Agent 可以创建子 Agent，但所授 capability 和工具集合必须分别包含在父 Agent 与 workflow policy 中。模型看到的工具目录直接从配置生成，因此只读、写入、构建、运行和编排权限可以任意组合，Agent 名称不参与授权判断。运行时控制结构见 [`include/agent_multiagent_abi.h`](../../include/agent_multiagent_abi.h)。
 
 AgentOS 保留三代工具接口：
 
@@ -187,15 +199,15 @@ Nexus 的 artifact 由 Guest Runtime 组织，再通过 `agent_file_publish()` �
 
 已经接受的目标任务形成可交付终态后，至多产生一条 CQE。取消命令使用自己递增的 `request_id`，并以 `link_request_id` 指向目标，不会另行产生一条取消 CQE。若取消策略当场拒绝命令，取消命令的编号仍会记为已使用；`enter` 返回 `DENIED`，原目标继续运行。CQ 已满时，内核保留尚未写出的结果，等用户确认读取后继续发布。普通桥接任务的强制截止时间由定时器路径标记，任务到达可调度检查点后，内核生成带 `AGENT_TASK_CQE_F_DEADLINE` 的 CQE；已经被另一个 Agent claim 的委派则使用下述协作式终态确认。
 
-任务资源 ABI 提供导入、释放和查询操作，并使用 16 字节的类型化句柄，其中包含槽位 generation。`IMPORT` 从当前 Agent 可读的普通文件描述符导入 OWNED 资源，并绑定该 Agent 已经存在且经过校验的最新 Context，不会借导入操作新建 Context。`AGENT_ARTIFACT_UTF8` 接受准确的 1–63 字节文本；`AGENT_ARTIFACT_TASK` 只接受准确的 56 字节 `agent_task_delegate_descriptor`。Task Bridge 从 offset 0 读取并额外探测 EOF，不改变文件的共享 offset。UTF-8 资源要通过 NUL 与编码检查，TASK 资源要通过描述符版本、大小、标志和保留字段检查；随后内核保存不可变快照、内容指纹、producer、Context sequence 和 provenance，不保留文件对象指针。
+任务资源 ABI 提供导入、释放和查询操作，并使用 16 字节的类型化句柄，其中包含槽位 generation。`IMPORT` 从当前 Agent 可读的普通文件描述符导入 OWNED 资源，并绑定该 Agent 已经存在且经过校验的最新 Context，不会借导入操作新建 Context。`AGENT_ARTIFACT_UTF8` 接受准确的 1–63 字节文本；`AGENT_ARTIFACT_TASK` 只接受准确的 128 字节 `agent_task_delegate_descriptor`。Task Bridge 从 offset 0 读取并额外探测 EOF，不改变文件的共享 offset。UTF-8 资源要通过 NUL 与编码检查，TASK 资源要通过描述符版本、大小、标志和保留字段检查；随后内核保存不可变快照、内容指纹、producer、Context sequence 和 provenance，不保留文件对象指针。
 
 SQE 可以把同一句柄作为 BORROWED 输入。ECHO Task Bridge 会把 UTF-8 快照复制到工具 payload；`delegate_task` 使用 BORROWED TASK 句柄把不可变描述符送入内核 pending 队列。BORROWED 任务完成后资源继续处于 `LIVE`，OWNED 任务完成后则自动消费。显式 `RELEASE` 或槽位再次使用后，旧 generation 查询返回 `STALE`；成功 IMPORT 的最终 copyout 失败时，通道会回滚尚未暴露的槽位。
 
 ### 跨 Agent 委派
 
-`agent_task_delegate_descriptor` 固定为 56 字节，只保存目标 PID、Agent/control 身份、任务类型、task/correlation/parent 标识和 capsule handle。输入和结果正文留在 Guest artifact 中，Task descriptor 只负责绑定 handle。发起者用 `AGENT_TOOL_DELEGATE_TASK` 提交 SQE 后，节点进入真实的 Execution Contract `RUNNING` 与内核 pending 队列。目标必须具有 `AGENT_CAP_TASK_ACCEPT`，并取得发起者授予的 `AGENT_IPC_ROUTE_TASK`；该 TASK route 与一般 `MESSAGE`/`LLM_DONE` 事件 route 分开。当前实现不接受 self delegation，也不允许一个活动端点同时成为 owner 与 target，使委派图保持二分无环。
+`agent_task_delegate_descriptor` 固定为 128 字节，保存目标 PID 与 Agent/control 身份、parent task、目标描述 Artifact、输入 Artifact、所需 capability、允许工具位图、workspace revision、资源预算、deadline 和预期结果类型。输入和结果正文留在 Context Artifact Store 中，Task descriptor 只负责绑定对象和授权约束。发起者用 `AGENT_TOOL_DELEGATE_TASK` 提交 SQE 后，节点进入真实的 Execution Contract `RUNNING` 与内核 pending 队列。目标必须具有 `AGENT_CAP_TASK_ACCEPT`，并取得发起者授予的 `AGENT_IPC_ROUTE_TASK`；该 TASK route 与一般 `MESSAGE`/`LLM_DONE` 事件 route 分开。内核检查父子 capability 与工具集合的包含关系，拒绝 self delegation 和任务图中的真实环路，同时允许同一 owner 建立多个互不依赖的活动子任务。
 
-目标 Agent 调用 `agent_task_delegate_claim()`，取得描述符以及 owner PID/Agent/control、channel generation、request id 和 slot generation 的完整副本。内核在 claim 返回前重新核对目标身份、生命周期、能力与 route，登记执行者并进入 effect-start。目标从 capsule 对应的 Guest artifact 取得输入，发布预绑定的结果 artifact，再调用 `agent_task_delegate_complete()` 提交业务状态。CQE 的输出类型保持 `NONE`，发起者从 capsule 绑定的 artifact 读取应用结果；每个 owner issuer 当前同时只允许一个尚未结算的委派。
+目标 Agent 调用 `agent_task_delegate_claim()`，取得描述符以及 owner PID/Agent/control、channel generation、request id 和 slot generation 的完整副本。内核在 claim 返回前重新核对目标身份、生命周期、能力与 route，登记执行者并进入 effect-start。目标读取输入 Artifact，封存预绑定的结果 Artifact，再调用 `agent_task_delegate_complete()` 提交业务状态。CQE 只返回状态、handle 和关联信息；父 Agent 还要复核结果的 producer、Task id、Context sequence、lifecycle 和 SHA-256，复核通过后才能把它接纳为 private Context 或 workflow 共享索引中的事实。
 
 effect-start 同时建立一项仅供本委派使用的 delegated effect lease。它绑定执行者 PID/Agent/`control_id`、主线程 identity generation 以及 channel/request/slot 代次；只有 Contract 明确允许 PROCESS 作用时，内核才会登记一个同样带 TID/generation 的 helper。直接作用的 mask 必须是 Contract manifest side-effect mask 的子集，每个进行中的调用还会固定当前委派代次。活动引用归零后，正常 complete、终态 cleanup ACK 或目标 quiescence 才结束 lease；它不能把一个 delegated task 扩张成 workflow 范围的作用权限。
 

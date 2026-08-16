@@ -228,7 +228,8 @@ static int open_file_io_syscall_context(enum vfs_operation operation,
 	    thread_trap_cold(thread)->kernel_work_depth == 0 ||
 	    (operation == VFS_OP_READ ?
 		 (target_syscall != SYS_read &&
-		  target_syscall != SYS_agent_task_channel_resource) :
+		  target_syscall != SYS_agent_task_channel_resource &&
+		  target_syscall != SYS_agent_context_artifact) :
 		 target_syscall != SYS_write))
 		return 0;
 	*proc_out = proc;

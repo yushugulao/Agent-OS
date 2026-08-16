@@ -455,7 +455,7 @@ def inspect_system_result(
     specifications = {
         "status": ("get_system_status", "process_count", "agent_count", "uptime_tick"),
         "processes": ("query_process", "process_count", "agent_count", "runnable_count"),
-        "context": ("ctx_stat", "context_base", "context_size", "call_count"),
+        "context": ("context_status", "record_count", "record_capacity", "call_count"),
     }
     tool_name, first_label, second_label, omitted = specifications[operation]
     projection = (
@@ -642,6 +642,16 @@ def send_workspace_request(
     workspace_generation: str,
     arguments: dict[str, object],
 ) -> dict[str, object]:
+    if operation == "manifest" and "path_prefix" not in arguments:
+        entry = harness.session._nexus_tool_ledger.get(corr_id, {})
+        public = entry.get("arguments", {}) if isinstance(entry, dict) else {}
+        if tool == "search_files":
+            path_prefix = public.get("path_prefix", "")
+        elif tool == "read_file":
+            path_prefix = public.get("path", "")
+        else:
+            path_prefix = ""
+        arguments = {**arguments, "path_prefix": str(path_prefix)}
     arguments_sha256 = hashlib.sha256(
         relay.canonical_json_bytes(arguments)
     ).hexdigest()
@@ -1970,6 +1980,28 @@ class NexusProfileTests(unittest.TestCase):
             daemon._validate_nexus_tool_arguments("read_file", unicode_read),
             unicode_read,
         )
+        multiline_write = {
+            "path": "user/src/nexus_probe_ucore.c",
+            "content": "#include <stdio.h>\nint main(void) {\n\treturn 0;\n}\n",
+            "expected_revision": "missing",
+        }
+        self.assertEqual(
+            daemon._validate_nexus_tool_arguments("write_file", multiline_write),
+            multiline_write,
+        )
+        multiline_run = {
+            "build_id": "a" * 64,
+            "stdin": "1 + 2\n",
+            "expected_output": "3\n",
+            "expected_exit": 0,
+            "case_kind": "normal",
+        }
+        self.assertEqual(
+            daemon._validate_nexus_tool_arguments(
+                "run_ucore_program", multiline_run
+            ),
+            multiline_run,
+        )
         for tool, arguments in (
             ("search_files", {"query": "界" * 96}),
             ("search_files", {"query": "ok", "path_prefix": "😀" * 112}),
@@ -2632,47 +2664,25 @@ class NexusProfileTests(unittest.TestCase):
             snapshot = reader._snapshot_cache
             self.assertIsNotNone(snapshot)
             assert snapshot is not None
-            hidden = next(item for item in snapshot.entries if item.path == "b.txt")
-            hidden_binding = {
-                "object_id": hidden.object_id,
-                "path": hidden.path,
-                "revision": hidden.revision,
+            selected = next(item for item in snapshot.entries if item.path == "b.txt")
+            selected_binding = {
+                "object_id": selected.object_id,
+                "path": selected.path,
+                "revision": selected.revision,
             }
-            with self.assertRaises(relay.WireProtocolError):
-                send_workspace_request(
-                    harness,
-                    tool="read_file",
-                    operation="read",
-                    attempt=2,
-                    task_id=9,
-                    workspace_generation=generation,
-                    arguments={
-                        **hidden_binding,
-                        "start_line": 1,
-                        "max_lines": 1,
-                    },
-                )
-            second = send_workspace_request(
-                harness,
-                tool="read_file",
-                operation="manifest",
-                attempt=2,
-                task_id=9,
-                workspace_generation=generation,
-                arguments={"cursor": 1, "limit": 1},
+            _cursor, _next, eof, entries = daemon._parse_workspace_manifest_content(
+                str(manifest["content"])
             )
-            _cursor, _next, _eof, entries = daemon._parse_workspace_manifest_content(
-                str(second["content"])
-            )
-            self.assertEqual(entries, [hidden_binding])
+            self.assertTrue(eof)
+            self.assertEqual(entries, [selected_binding])
             read = send_workspace_request(
                 harness,
                 tool="read_file",
                 operation="read",
-                attempt=3,
+                attempt=2,
                 task_id=9,
                 workspace_generation=generation,
-                arguments={**hidden_binding, "start_line": 1, "max_lines": 1},
+                arguments={**selected_binding, "start_line": 1, "max_lines": 1},
             )
             self.assertEqual(read["status"], "ok")
             self.assertIn("content=b", str(read["content"]))
@@ -3166,7 +3176,15 @@ class NexusProfileTests(unittest.TestCase):
     def test_nexus_catalog_contains_only_general_harness_tools(self) -> None:
         self.assertEqual(
             [tool["name"] for tool in daemon.NEXUS_TOOL_CATALOG],
-            ["search_files", "read_file", "inspect_system"],
+            [
+                "search_files",
+                "read_file",
+                "inspect_system",
+                "write_file",
+                "apply_patch",
+                "build_ucore_program",
+                "run_ucore_program",
+            ],
         )
 
     def test_agentlive_hello_is_unchanged_and_nexus_negotiates_task_events(self) -> None:

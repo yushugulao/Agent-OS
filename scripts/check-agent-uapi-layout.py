@@ -31,6 +31,10 @@ SHARED_HEADER_PROBES = {
         "agent_task_channel_abi.h",
         "sizeof(struct agent_task_channel_enter_result)",
     ),
+    "workspace-mutation": (
+        "agent_workspace_mutation_abi.h",
+        "sizeof(struct agent_workspace_mutation_request)",
+    ),
 }
 
 
@@ -314,7 +318,8 @@ def validate_feature_abi_constants(root):
             "AGENT_ARTIFACT_MESSAGE": 5,
             "AGENT_ARTIFACT_TASK": 6,
             "AGENT_ARTIFACT_OPAQUE_HANDLE": 7,
-            "AGENT_ARTIFACT_TYPE_COUNT": 8,
+            "AGENT_ARTIFACT_WORKSPACE_MUTATION": 8,
+            "AGENT_ARTIFACT_TYPE_COUNT": 9,
             "AGENT_EXECUTION_REASON_NONE": 0,
             "AGENT_EXECUTION_REASON_CONTRACT_REQUIRED": 1,
             "AGENT_EXECUTION_REASON_STALE_LIFECYCLE": 2,
@@ -369,7 +374,7 @@ def validate_feature_abi_constants(root):
             "AGENT_TASK_CHANNEL_SCHEMA_SIZE": 32,
             "AGENT_TASK_RESOURCE_UTF8_MAX": 63,
             "AGENT_TASK_DELEGATE_VERSION": 1,
-            "AGENT_TASK_DELEGATE_DESCRIPTOR_VERSION": 1,
+            "AGENT_TASK_DELEGATE_DESCRIPTOR_VERSION": 2,
             "AGENT_TASK_DELEGATE_F_NONE": 0,
             "AGENT_TASK_DELEGATE_STATE_NONE": 0,
             "AGENT_TASK_DELEGATE_STATE_QUEUED": 1,
@@ -531,6 +536,8 @@ def validate_feature_abi_constants(root):
     for path in (root / "os" / "agent.h", root / "user" / "include" / "agent.h"):
         public = path.read_text(encoding="utf-8")
         require_shift_define(public, "AGENT_CAP_TASK_ACCEPT", 13, str(path))
+        require_shift_define(public, "AGENT_CAP_WORKSPACE_WRITE", 14, str(path))
+        require_shift_define(public, "AGENT_CAP_PREFETCH", 15, str(path))
         require_shift_define(public, "AGENT_IPC_ROUTE_TASK", 63, str(path))
         if not re.search(
             r"^#define\s+AGENT_IPC_ROUTE_MASK\s+"
@@ -543,6 +550,7 @@ def validate_feature_abi_constants(root):
             "agent_execution_contract_abi.h",
             "agent_file_publish_abi.h",
             "agent_provenance_abi.h",
+            "agent_workspace_mutation_abi.h",
         ):
             if header not in public:
                 raise LayoutError(f"{path} does not expose shared ABI {header}")
@@ -568,6 +576,10 @@ def validate_agent_syscall_numbers(root):
         "agent_file_publish": 566,
         "agent_task_delegate_claim": 567,
         "agent_task_delegate_complete": 568,
+        "agent_file_meta_set_batch": 569,
+        "agent_runtime_control": 570,
+        "agent_context_artifact": 571,
+        "agent_context_prefetch": 572,
     }
     paths = (
         root / "os" / "syscall_ids.h",
@@ -599,6 +611,12 @@ def validate_agent_syscall_numbers(root):
                 )
     for path in (root / "os" / "agent.h", root / "user" / "include" / "agent.h"):
         source = path.read_text(encoding="utf-8")
+        require_numeric_define(
+            source, "AGENT_FILE_META_BATCH_MAX", 16, str(path)
+        )
+        require_numeric_define(
+            source, "AGENT_FILE_META_BATCH_F_NONE", 0, str(path)
+        )
         for label, header in (
             ("Task Channel", "agent_task_channel_abi.h"),
             ("file publish", "agent_file_publish_abi.h"),
@@ -702,7 +720,12 @@ def validate_tool_protocol_schema(root):
     if len(set(names)) != len(names):
         raise LayoutError("Agent tool registry contains duplicate names")
     for tool_id, flags, name, description in tool_entries:
-        if flags not in {"AGENT_TOOL_F_CALLABLE", "AGENT_TOOL_F_SYSCALL_ONLY"}:
+        if flags not in {
+            "AGENT_TOOL_F_CALLABLE",
+            "AGENT_TOOL_F_SYSCALL_ONLY",
+            "AGENT_TOOL_F_DEPRECATED",
+            "AGENT_TOOL_F_BROKERED",
+        }:
             raise LayoutError(f"Agent tool {tool_id} has an invalid flag")
         if not name or len(name.encode("ascii")) + 1 > name_size:
             raise LayoutError(f"Agent tool {tool_id} name exceeds its wire field")
@@ -934,6 +957,7 @@ def main():
     parser.add_argument("--cc", required=True)
     parser.add_argument("--nm", required=True)
     parser.add_argument("--golden", default="ci/agent-uapi-layout.json")
+    parser.add_argument("--update-golden", action="store_true")
     args = parser.parse_args()
     root = Path(args.root).resolve()
     validate_compatibility_tombstones(root)
@@ -950,7 +974,18 @@ def main():
     kernel = symbols(args.nm, kernel_obj, root)
     user = symbols(args.nm, user_obj, root)
     compare(kernel, user)
-    golden = load_golden((root / args.golden).resolve())
+    golden_path = (root / args.golden).resolve()
+    if args.update_golden:
+        golden_path.write_text(
+            json.dumps(
+                {"version": 1, "symbols": dict(sorted(kernel.items()))},
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    golden = load_golden(golden_path)
     compare_golden(kernel, golden)
     print(
         f"[agent-uapi] {len(kernel)} kernel/user/frozen size/offset "

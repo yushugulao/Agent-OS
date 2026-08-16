@@ -449,6 +449,8 @@ void agent_core_init(void)
 	agent_identity_lease_init();
 	agent_observe_init();
 	agent_metadata_objects_init();
+	agent_context_artifact_init();
+	agent_context_prefetch_init();
 	agent_background_request();
 }
 
@@ -473,6 +475,7 @@ agent_background_maintain(void)
 		return;
 	(void)fs_deferred_reclaim_maintain();
 	agent_metadata_background_maintain();
+	agent_context_prefetch_background_maintain(p);
 	agent_observe_recording_suppress_end(p);
 }
 
@@ -551,6 +554,8 @@ void agent_core_clear_metadata(struct proc *p)
 		agent_context_proc_reset(p);
 		agent_observe_proc_reset(p);
 	}
+	agent_context_artifact_proc_reset(p);
+	agent_context_prefetch_proc_reset(p);
 	agent_ipc_proc_teardown(p);
 	agent_identity_proc_reset(p, 0);
 	if (!inactive)
@@ -623,12 +628,10 @@ int agent_core_exec_public_commit(struct proc *p)
 static uint64 agent_cap_for_action(char *action)
 {
 	if (strncmp(action, "action_commit", AGENT_OP_PAYLOAD_SIZE) == 0 ||
-	    strncmp(action, "state_update", AGENT_OP_PAYLOAD_SIZE) == 0 ||
-	    strncmp(action, "rerun_stage", AGENT_OP_PAYLOAD_SIZE) == 0)
+	    strncmp(action, "state_update", AGENT_OP_PAYLOAD_SIZE) == 0)
 		return AGENT_CAP_ACTION_WRITE;
 	if (strncmp(action, "artifact_update", AGENT_OP_PAYLOAD_SIZE) == 0 ||
-	    strncmp(action, "record_result", AGENT_OP_PAYLOAD_SIZE) == 0 ||
-	    strncmp(action, "write_report", AGENT_OP_PAYLOAD_SIZE) == 0)
+	    strncmp(action, "record_result", AGENT_OP_PAYLOAD_SIZE) == 0)
 		return AGENT_CAP_ARTIFACT_WRITE;
 	if (strncmp(action, "llm_response", AGENT_OP_PAYLOAD_SIZE) == 0 ||
 	    strncmp(action, "llm_relay", AGENT_OP_PAYLOAD_SIZE) == 0)
@@ -974,6 +977,11 @@ int agent_make_role(struct proc *p, int role)
 	p->agent_meta_txn_wait_count = 0;
 	p->agent_capability_mask = policy->capability_mask;
 	p->agent_role_grant_mask = policy->role_grant_mask;
+	p->agent_tool_grant_mask = AGENT_TOOL_GRANT_ALL(AGENT_TOOL_COUNT);
+	p->agent_artifact_count_limit = 32;
+	p->agent_artifact_bytes_limit = 256U * 1024U;
+	p->agent_artifact_read_limit = 1024U * 1024U;
+	p->agent_summary_high_watermark = 96;
 	vfs_proc_limit_capabilities(p, policy->capability_mask);
 	agent_observe_proc_init(p, policy->sched_weight, agent_ticks());
 	if (agent_context_init(p) < 0)
@@ -1065,6 +1073,17 @@ static void agent_result_text(struct agent_result *res, char *text)
 	safestrcpy(res->result, text, sizeof(res->result));
 }
 
+static void
+agent_context_status_result(struct proc *p, struct agent_result *res)
+{
+	res->value0 = p->context_path_count < p->context_path_capacity ?
+			      p->context_path_count + 1 :
+			      p->context_path_capacity;
+	res->value1 = p->context_path_capacity;
+	res->value2 = p->agent_call_count;
+	agent_result_text(res, "context_status");
+}
+
 static void agent_result_init(struct agent_result *res, struct agent_op *op)
 {
 	memset(res, 0, sizeof(*res));
@@ -1146,12 +1165,6 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		res->value2 = p->is_agent;
 		agent_result_text(res, "pid_info");
 		break;
-	case AGENT_TOOL_CTX_STAT:
-		res->value0 = p->agent_ctx_base;
-		res->value1 = p->agent_ctx_base == 0 ? 0 : AGENT_CONTEXT_SIZE;
-		res->value2 = p->agent_call_count;
-		agent_result_text(res, "ctx_stat");
-		break;
 	case AGENT_TOOL_QUERY_PROCESS:
 		if (!agent_identity_has_cap(p, AGENT_CAP_PROCESS_READ)) {
 			res->status = AGENT_STATUS_DENIED;
@@ -1178,16 +1191,8 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		res->value2 = agent_ticks();
 		agent_result_text(res, "system_status");
 		break;
-	case AGENT_TOOL_READ_CONTEXT:
-		res->value0 = p->context_path_count < p->context_path_capacity ?
-				      p->context_path_count + 1 :
-				      p->context_path_capacity;
-		res->value1 = p->context_path_capacity ?
-				      (p->context_path_head + 1) %
-					      p->context_path_capacity :
-				      0;
-		res->value2 = p->agent_call_count;
-		agent_result_text(res, "read_context");
+	case AGENT_TOOL_CONTEXT_STATUS:
+		agent_context_status_result(p, res);
 		break;
 	case AGENT_TOOL_SEND_MESSAGE:
 		if (!agent_identity_has_cap(p, AGENT_CAP_MESSAGE_SEND)) {
@@ -1323,9 +1328,13 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 			agent_result_text(res, "denied");
 			break;
 		}
-		if (op->arg0 > AGENT_EVENT_MAX) {
+		if (op->arg0 > AGENT_EVENT_MAX ||
+		    op->arg0 == AGENT_EVENT_FILE_QUERY) {
 			res->status = AGENT_STATUS_BAD_PARAM;
-			agent_result_text(res, "bad_event_type");
+			agent_result_text(
+				res, op->arg0 == AGENT_EVENT_FILE_QUERY ?
+					     "use_agent_live_watch" :
+					     "bad_event_type");
 			break;
 		}
 		if (agent_ipc_watch_set(p, op->arg0, op->payload) < 0) {
@@ -1336,7 +1345,7 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		res->value0 = op->arg0;
 		agent_result_text(res, "watch");
 		break;
-	case AGENT_TOOL_AGENT_HEARTBEAT:
+	case AGENT_TOOL_HEARTBEAT_CONFIGURE:
 		if (agent_ipc_heartbeat_configure(p, op->arg0,
 						  &configured_tick) != AGENT_STATUS_OK) {
 			res->status = AGENT_STATUS_BAD_PARAM;
@@ -1345,7 +1354,7 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		}
 		res->value0 = op->arg0;
 		res->value1 = configured_tick;
-		agent_result_text(res, "heartbeat");
+		agent_result_text(res, "heartbeat_configured");
 		break;
 	case AGENT_TOOL_AGENT_WAIT:
 		res->status = AGENT_STATUS_BAD_PARAM;
@@ -1363,12 +1372,10 @@ out:
 static uint64 agent_tool_effect_capability(int tool_id)
 {
 	switch (tool_id) {
-	case AGENT_TOOL_FILE_META_INIT:
+	case AGENT_TOOL_METADATA_INIT:
 		return AGENT_CAP_META_WRITE;
-	case AGENT_TOOL_RERUN_STAGE:
 	case AGENT_TOOL_ACTION_COMMIT:
 		return AGENT_CAP_ACTION_WRITE;
-	case AGENT_TOOL_WRITE_REPORT:
 	case AGENT_TOOL_ARTIFACT_UPDATE:
 		return AGENT_CAP_ARTIFACT_WRITE;
 	case AGENT_TOOL_LLM_RESPONSE:
@@ -1421,11 +1428,11 @@ agent_execution_publish_policy_denial(
 	    res->status != AGENT_STATUS_DENIED || res->sequence == 0 ||
 	    claim->decision_reason !=
 		    AGENT_EXECUTION_REASON_CAPABILITY_MISSING ||
-	    op->tool_id != AGENT_TOOL_RERUN_STAGE)
+	    op->tool_id != AGENT_TOOL_ACTION_COMMIT)
 		return;
 	(void)agent_ipc_deliver_watchers(
 		p, AGENT_EVENT_POLICY_DENIED, op->request_id, res->sequence,
-		"action=action_commit;compat=rerun_stage");
+		"action=action_commit");
 }
 
 static void
@@ -2600,6 +2607,134 @@ int sys_agent_worker_create(uint64 pathaddr, uint64 requested_caps)
 			proc_discard_fd_delegations();
 		return result;
 	}
+}
+
+static int
+agent_runtime_config_valid(struct proc *p,
+			   const struct agent_runtime_config *config)
+{
+	uint64 known_tools = AGENT_TOOL_GRANT_ALL(AGENT_TOOL_COUNT);
+
+	if (p == 0 || config == 0 ||
+	    config->version != AGENT_RUNTIME_CONFIG_VERSION ||
+	    config->size != sizeof(*config) ||
+	    config->flags != AGENT_RUNTIME_F_NONE || config->reserved != 0 ||
+	    config->reserved_tail[0] != 0 || config->reserved_tail[1] != 0 ||
+	    config->reserved_tail[2] != 0 ||
+	    (config->capabilities & ~AGENT_CAP_KNOWN_ALL) != 0 ||
+	    config->capabilities == 0 ||
+	    (config->allowed_tools & ~known_tools) != 0 ||
+	    (config->capabilities & p->agent_capability_mask) !=
+		config->capabilities ||
+	    (config->allowed_tools & p->agent_tool_grant_mask) !=
+		config->allowed_tools ||
+	    config->resource_budget > AGENT_SCHED_BUDGET_MAX ||
+	    config->artifact_count_limit > 64U ||
+	    config->artifact_bytes_limit > 4U * 1024U * 1024U ||
+	    config->artifact_read_limit > 16U * 1024U * 1024U ||
+	    config->summary_high_watermark > AGENT_CONTEXT_MAX_RECORDS)
+		return 0;
+	for (uint tool_id = 1; tool_id <= AGENT_TOOL_COUNT; tool_id++) {
+		struct agent_tool_manifest manifest;
+
+		if ((config->allowed_tools & AGENT_TOOL_GRANT_BIT(tool_id)) == 0)
+			continue;
+		if (agent_tool_protocol_manifest_query((int)tool_id, &manifest) !=
+			    AGENT_STATUS_OK ||
+		    (manifest.provenance.required_capabilities &
+		     config->capabilities) !=
+			    manifest.provenance.required_capabilities)
+			return 0;
+	}
+	return 1;
+}
+
+static void
+agent_runtime_result_fill(const struct proc *p, int status, int pid,
+			  struct agent_runtime_config_result *result)
+{
+	memset(result, 0, sizeof(*result));
+	result->version = AGENT_RUNTIME_CONFIG_VERSION;
+	result->size = sizeof(*result);
+	result->status = status;
+	result->pid = pid;
+	if (p == 0)
+		return;
+	result->agent_id = p->agent_id;
+	result->control_id = p->agent_control_id;
+	result->capabilities = p->agent_capability_mask;
+	result->allowed_tools = p->agent_tool_grant_mask;
+	result->prompt_artifact_handle = p->agent_prompt_artifact_handle;
+	result->resource_budget = (uint)p->agent_sched_budget;
+	result->artifact_count_limit = p->agent_artifact_count_limit;
+	result->artifact_bytes_limit = p->agent_artifact_bytes_limit;
+	result->artifact_read_limit = p->agent_artifact_read_limit;
+	result->summary_high_watermark = p->agent_summary_high_watermark;
+}
+
+int sys_agent_runtime_control(uint64 configaddr, uint64 resultaddr)
+{
+	struct agent_runtime_config config;
+	struct agent_runtime_config_result result;
+	struct proc *p = curr_proc();
+	struct proc *created = 0;
+	int pid = -1;
+	int status = AGENT_STATUS_BAD_PARAM;
+
+	if (p == 0 || configaddr == 0 || resultaddr == 0 ||
+	    user_range_check(p->pagetable, configaddr, sizeof(config), PTE_R) < 0 ||
+	    user_range_check(p->pagetable, resultaddr, sizeof(result), PTE_W) < 0 ||
+	    copyin(p->pagetable, (char *)&config, configaddr, sizeof(config)) < 0)
+		return -1;
+	if (config.version != AGENT_RUNTIME_CONFIG_VERSION ||
+	    config.size != sizeof(config))
+		goto out;
+	if (config.operation == AGENT_RUNTIME_CONTROL_QUERY_SELF) {
+		if (config.flags != 0 || !p->is_agent) {
+			status = AGENT_STATUS_DENIED;
+			goto out;
+		}
+		status = AGENT_STATUS_OK;
+		created = p;
+		pid = p->pid;
+		goto out;
+	}
+	if (config.operation != AGENT_RUNTIME_CONTROL_SPAWN ||
+	    !agent_identity_has_cap(p, AGENT_CAP_ORCHESTRATE)) {
+		status = AGENT_STATUS_DENIED;
+		goto out;
+	}
+	if (!agent_runtime_config_valid(p, &config))
+		goto out;
+	pid = agent_runtime_create_proc(&config);
+	if (pid < 0) {
+		status = AGENT_STATUS_RETRY;
+		goto out;
+	}
+	status = AGENT_STATUS_OK;
+	{
+		int enabled = intr_save();
+		for (struct proc *candidate = pool; candidate < &pool[NPROC];
+		     candidate++)
+			if (candidate->state != P_UNUSED && candidate->pid == pid) {
+				created = candidate;
+				break;
+			}
+		agent_runtime_result_fill(created, status, pid, &result);
+		intr_restore(enabled);
+	}
+	if (created == 0)
+		status = AGENT_STATUS_INDETERMINATE;
+	if (status == AGENT_STATUS_OK)
+		goto copy;
+out:
+	agent_runtime_result_fill(created, status, pid, &result);
+copy:
+	if (copyout(p->pagetable, resultaddr, (char *)&result,
+		    sizeof(result)) < 0)
+		return -1;
+	return config.operation == AGENT_RUNTIME_CONTROL_SPAWN &&
+	       status == AGENT_STATUS_OK ? pid : status;
 }
 
 int sys_agent_info(uint64 addr, int launch_identity)

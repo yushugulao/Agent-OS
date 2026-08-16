@@ -50,7 +50,8 @@
 #define AGENT_ARTIFACT_MESSAGE       5U
 #define AGENT_ARTIFACT_TASK          6U
 #define AGENT_ARTIFACT_OPAQUE_HANDLE 7U
-#define AGENT_ARTIFACT_TYPE_COUNT    8U
+#define AGENT_ARTIFACT_WORKSPACE_MUTATION 8U
+#define AGENT_ARTIFACT_TYPE_COUNT    9U
 
 /* Stable structural decision reasons, suitable for Context/Evidence records. */
 #define AGENT_EXECUTION_REASON_NONE                 0U

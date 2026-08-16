@@ -112,6 +112,8 @@ ABI_VALUE(AGENT_ARTIFACT_FILE, artifact_file);
 ABI_VALUE(AGENT_ARTIFACT_MESSAGE, artifact_message);
 ABI_VALUE(AGENT_ARTIFACT_TASK, artifact_task);
 ABI_VALUE(AGENT_ARTIFACT_OPAQUE_HANDLE, artifact_opaque_handle);
+ABI_VALUE(AGENT_ARTIFACT_WORKSPACE_MUTATION,
+	  artifact_workspace_mutation);
 ABI_VALUE(AGENT_ARTIFACT_TYPE_COUNT, artifact_type_count);
 ABI_VALUE(AGENT_EXECUTION_REASON_DEPENDENCY_FAILED,
 	  execution_reason_dependency_failed);
@@ -291,6 +293,9 @@ ABI_VALUE(AGENT_TASK_CHANNEL_RESOURCE_SYSCALL, task_channel_resource_syscall);
 ABI_VALUE(AGENT_TASK_DELEGATE_CLAIM_SYSCALL, task_delegate_claim_syscall);
 ABI_VALUE(AGENT_TASK_DELEGATE_COMPLETE_SYSCALL,
 	  task_delegate_complete_syscall);
+ABI_VALUE(AGENT_RUNTIME_CONTROL_SYSCALL, runtime_control_syscall);
+ABI_VALUE(AGENT_CONTEXT_ARTIFACT_SYSCALL, context_artifact_syscall);
+ABI_VALUE(AGENT_CONTEXT_PREFETCH_SYSCALL, context_prefetch_syscall);
 ABI_VALUE(AGENT_TASK_CHANNEL_VERSION, task_channel_version);
 ABI_VALUE(AGENT_TASK_CHANNEL_ENTRY_VERSION, task_channel_entry_version);
 ABI_VALUE(AGENT_TASK_CHANNEL_CAPACITY, task_channel_capacity);
@@ -512,7 +517,7 @@ ABI_OFFSET(struct agent_task_channel_resource_result, generation,
 ABI_OFFSET(struct agent_task_channel_resource_result, references,
 	   task_channel_resource_result);
 ABI_RECORD(struct agent_task_delegate_descriptor, task_delegate_descriptor,
-	   version, reserved);
+	   version, deadline_tick);
 ABI_OFFSET(struct agent_task_delegate_descriptor, size,
 	   task_delegate_descriptor);
 ABI_OFFSET(struct agent_task_delegate_descriptor, target_pid,
@@ -531,8 +536,65 @@ ABI_OFFSET(struct agent_task_delegate_descriptor, parent_task_id,
 	   task_delegate_descriptor);
 ABI_OFFSET(struct agent_task_delegate_descriptor, capsule_handle,
 	   task_delegate_descriptor);
-ABI_OFFSET(struct agent_task_delegate_descriptor, flags,
+ABI_OFFSET(struct agent_task_delegate_descriptor, input_artifact_handle,
 	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, result_artifact_handle,
+	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, expected_result_type,
+	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, required_capabilities,
+	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, allowed_tools,
+	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, workspace_revision_sha256,
+	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, resource_budget,
+	   task_delegate_descriptor);
+ABI_OFFSET(struct agent_task_delegate_descriptor, read_budget,
+	   task_delegate_descriptor);
+
+ABI_RECORD(struct agent_runtime_config, runtime_config, version, reserved_tail);
+ABI_OFFSET(struct agent_runtime_config, operation, runtime_config);
+ABI_OFFSET(struct agent_runtime_config, capabilities, runtime_config);
+ABI_OFFSET(struct agent_runtime_config, allowed_tools, runtime_config);
+ABI_OFFSET(struct agent_runtime_config, prompt_artifact_handle, runtime_config);
+ABI_RECORD(struct agent_runtime_config_result, runtime_config_result,
+	   version, reserved_final);
+ABI_OFFSET(struct agent_runtime_config_result, status, runtime_config_result);
+ABI_OFFSET(struct agent_runtime_config_result, capabilities,
+	   runtime_config_result);
+ABI_OFFSET(struct agent_runtime_config_result, allowed_tools,
+	   runtime_config_result);
+
+ABI_RECORD(struct agent_context_artifact_control, context_artifact_control,
+	   version, reserved_tail);
+ABI_OFFSET(struct agent_context_artifact_control, operation,
+	   context_artifact_control);
+ABI_OFFSET(struct agent_context_artifact_control, handle,
+	   context_artifact_control);
+ABI_OFFSET(struct agent_context_artifact_control, content_sha256,
+	   context_artifact_control);
+ABI_RECORD(struct agent_context_artifact_result, context_artifact_result,
+	   version, content_sha256);
+ABI_OFFSET(struct agent_context_artifact_result, status,
+	   context_artifact_result);
+ABI_OFFSET(struct agent_context_artifact_result, lifecycle,
+	   context_artifact_result);
+
+ABI_RECORD(struct agent_context_prefetch_control, context_prefetch_control,
+	   version, reserved_tail);
+ABI_OFFSET(struct agent_context_prefetch_control, operation,
+	   context_prefetch_control);
+ABI_OFFSET(struct agent_context_prefetch_control, context_sequence,
+	   context_prefetch_control);
+ABI_OFFSET(struct agent_context_prefetch_control, query_fingerprint,
+	   context_prefetch_control);
+ABI_RECORD(struct agent_context_prefetch_result, context_prefetch_result,
+	   version, reserved_tail);
+ABI_OFFSET(struct agent_context_prefetch_result, status,
+	   context_prefetch_result);
+ABI_OFFSET(struct agent_context_prefetch_result, target_query_fingerprint,
+	   context_prefetch_result);
 ABI_RECORD(struct agent_task_delegate_claim, task_delegate_claim,
 	   version, reserved_tail);
 ABI_OFFSET(struct agent_task_delegate_claim, size, task_delegate_claim);
@@ -701,6 +763,43 @@ ABI_OFFSET(struct agent_tool_desc_v2, flags, tool_desc_v2);
 ABI_OFFSET(struct agent_tool_desc_v2, name, tool_desc_v2);
 ABI_OFFSET(struct agent_tool_desc_v2, params, tool_desc_v2);
 
+ABI_VALUE(AGENT_WORKSPACE_MUTATION_VERSION,
+	  workspace_mutation_version);
+ABI_VALUE(AGENT_WORKSPACE_MUTATION_APPLY_PATCH,
+	  workspace_mutation_apply_patch);
+ABI_VALUE(AGENT_WORKSPACE_MUTATION_WRITE_FILE,
+	  workspace_mutation_write_file);
+ABI_VALUE(AGENT_WORKSPACE_PATH_SIZE, workspace_path_size);
+ABI_VALUE(AGENT_WORKSPACE_SHA256_SIZE, workspace_sha256_size);
+ABI_RECORD(struct agent_workspace_mutation_request,
+	   workspace_mutation_request, version, path);
+ABI_OFFSET(struct agent_workspace_mutation_request, operation,
+	   workspace_mutation_request);
+ABI_OFFSET(struct agent_workspace_mutation_request, request_id,
+	   workspace_mutation_request);
+ABI_OFFSET(struct agent_workspace_mutation_request, lifecycle,
+	   workspace_mutation_request);
+ABI_OFFSET(struct agent_workspace_mutation_request, object_id,
+	   workspace_mutation_request);
+ABI_OFFSET(struct agent_workspace_mutation_request, expected_revision,
+	   workspace_mutation_request);
+ABI_OFFSET(struct agent_workspace_mutation_request, content_artifact_handle,
+	   workspace_mutation_request);
+ABI_OFFSET(struct agent_workspace_mutation_request, content_sha256,
+	   workspace_mutation_request);
+ABI_RECORD(struct agent_workspace_mutation_receipt,
+	   workspace_mutation_receipt, version, content_sha256);
+ABI_OFFSET(struct agent_workspace_mutation_receipt, status,
+	   workspace_mutation_receipt);
+ABI_OFFSET(struct agent_workspace_mutation_receipt, request_id,
+	   workspace_mutation_receipt);
+ABI_OFFSET(struct agent_workspace_mutation_receipt, previous_revision,
+	   workspace_mutation_receipt);
+ABI_OFFSET(struct agent_workspace_mutation_receipt, new_revision,
+	   workspace_mutation_receipt);
+ABI_OFFSET(struct agent_workspace_mutation_receipt, written_size,
+	   workspace_mutation_receipt);
+
 ABI_RECORD(struct agent_info, info, is_agent, file_scan_failures);
 ABI_OFFSET(struct agent_info, filesystem_capability_mask, info);
 ABI_OFFSET(struct agent_info, legacy_mailbox_allocated, info);
@@ -832,5 +931,6 @@ ABI_OFFSET(struct agent_context_record, record_hash, context_record);
 ABI_OFFSET(struct agent_context_record, path_parent_sequence,
 	   context_record);
 ABI_OFFSET(struct agent_file_meta, dependency_mask, file_meta);
+ABI_VALUE(AGENT_FILE_META_BATCH_MAX, file_meta_batch_max);
 ABI_OFFSET(struct agent_file_query_result, fs_generation, file_query_result);
 ABI_OFFSET(struct agent_file_query_result, index_rebuild_records, file_query_result);

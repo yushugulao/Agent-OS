@@ -64,7 +64,7 @@ static void run_queue_source(int target_pid, int attributed, int gate_fd,
 		for (int i = 0; i < AGENT_EVENT_SOURCE_LIMIT; i++) {
 			memset(&op, 0, sizeof(op));
 			op.version = AGENT_CALL_VERSION;
-			op.tool_id = AGENT_TOOL_RERUN_STAGE;
+			op.tool_id = AGENT_TOOL_ACTION_COMMIT;
 			op.request_id = 300 + i;
 			strcpy(op.payload, "queue-reserve-denied");
 			check(agent_run(&op, &res, 1, 0) == 1,
@@ -100,7 +100,7 @@ static void run_external_probe(int gate_fd, int report_fd)
 		      "wait external probe gate");
 		memset(&op, 0, sizeof(op));
 		op.version = AGENT_CALL_VERSION;
-		op.tool_id = AGENT_TOOL_RERUN_STAGE;
+		op.tool_id = AGENT_TOOL_ACTION_COMMIT;
 		op.request_id = 380 + i;
 		strcpy(op.payload, "external-limit-probe");
 		check(agent_run(&op, &res, 1, 0) == 1,
@@ -183,7 +183,7 @@ static void check_queue_reservations(void)
 		      info.event_queue_count == AGENT_EVENT_EXTERNAL_LIMIT,
 	      "external limit rejects another source");
 
-	check(agent_heartbeat_set(1) == 0, "reserved kernel heartbeat set");
+	check(agent_heartbeat_configure(1) == 0, "reserved kernel heartbeat set");
 	check(agent_info(&info) == 0, "info before kernel reserve");
 	deadline = info.current_tick + 50;
 	do {
@@ -201,7 +201,7 @@ static void check_queue_reservations(void)
 	} while (info.current_tick < deadline);
 	check(info.event_queue_count == AGENT_EVENT_EXTERNAL_LIMIT + 1,
 	      "pending heartbeat is coalesced");
-	check(agent_heartbeat_stop() == 0, "reserved kernel heartbeat stop");
+	check(agent_heartbeat_configure(0) == 0, "reserved kernel heartbeat stop");
 	check(agent_info(&info) == 0, "info after kernel reserve");
 	kernel_events = (int)info.event_queue_count - AGENT_EVENT_EXTERNAL_LIMIT;
 	check(kernel_events == 1, "coalesced kernel event count");
@@ -215,8 +215,7 @@ static void check_queue_reservations(void)
 			      "directed fill payload");
 			directed++;
 		} else if (event.type == AGENT_EVENT_POLICY_DENIED) {
-			check(strcmp(event.payload,
-				     "action=action_commit;compat=rerun_stage") == 0,
+			check(strcmp(event.payload, "action=action_commit") == 0,
 			      "attributed fill payload");
 			attributed++;
 		} else {
@@ -243,8 +242,7 @@ static void check_queue_reservations(void)
 	      "receive reclaimed attributed event");
 	check(event.type == AGENT_EVENT_POLICY_DENIED &&
 		      event.source_pid == pids[3] && event.corr_id == 381 &&
-		      strcmp(event.payload,
-			     "action=action_commit;compat=rerun_stage") == 0,
+		      strcmp(event.payload, "action=action_commit") == 0,
 	      "reclaimed attributed event source");
 	check(agent_info(&info) == 0 && info.event_queue_count == 0,
 	      "private event counters reclaimed");
@@ -366,8 +364,7 @@ static void run_later_watcher(int ready_fd, int report_fd)
 	      "later watcher receives broadcast");
 	check(event.type == AGENT_EVENT_POLICY_DENIED,
 	      "later watcher event type");
-	check(strcmp(event.payload,
-		     "action=action_commit;compat=rerun_stage") == 0,
+	check(strcmp(event.payload, "action=action_commit") == 0,
 	      "later watcher event payload");
 	phase = 'B';
 	check(write(report_fd, &phase, 1) == 1,
@@ -385,7 +382,7 @@ static void run_broadcast_source(int gate_fd)
 	      "release broadcast source");
 	memset(&op, 0, sizeof(op));
 	op.version = AGENT_CALL_VERSION;
-	op.tool_id = AGENT_TOOL_RERUN_STAGE;
+	op.tool_id = AGENT_TOOL_ACTION_COMMIT;
 	op.request_id = 390;
 	strcpy(op.payload, "broadcast-isolation");
 	check(agent_run(&op, &res, 1, 0) == 1,
@@ -566,10 +563,10 @@ static void run_agent(void)
 	      "heartbeat payload");
 	check(event.span_id != 0, "heartbeat span");
 
-	check(agent_heartbeat_set(AGENT_HEARTBEAT_MAX_TICKS) == 0,
+	check(agent_heartbeat_configure(AGENT_HEARTBEAT_MAX_TICKS) == 0,
 	      "heartbeat slow frequency");
 	sched_yield();
-	check(agent_heartbeat_set(1) == 0, "heartbeat dynamic frequency");
+	check(agent_heartbeat_configure(1) == 0, "heartbeat dynamic frequency");
 	memset(&event, 0, sizeof(event));
 	check(agent_wait(&event, 6) == AGENT_STATUS_OK,
 	      "adjusted heartbeat wakes promptly");
@@ -577,7 +574,7 @@ static void run_agent(void)
 		      strcmp(event.payload, "timer=heartbeat") == 0,
 	      "adjusted heartbeat event");
 
-	check(agent_heartbeat_set(1) == 0, "heartbeat coalesce set");
+	check(agent_heartbeat_configure(1) == 0, "heartbeat coalesce set");
 	check(agent_info(&after) == 0, "heartbeat coalesce info start");
 	{
 		uint64 deadline = after.current_tick + 8;
@@ -596,13 +593,13 @@ static void run_agent(void)
 	check(agent_wait(&event, 3) == AGENT_STATUS_TIMEOUT,
 	      "heartbeat stopped timeout");
 
-	check(agent_heartbeat_set(AGENT_HEARTBEAT_MAX_TICKS) == 0,
+	check(agent_heartbeat_configure(AGENT_HEARTBEAT_MAX_TICKS) == 0,
 	      "heartbeat maximum accepted");
-	check(agent_heartbeat_stop() == 0, "stop maximum heartbeat");
-	check(agent_heartbeat_set(AGENT_HEARTBEAT_MAX_TICKS + 1ULL) ==
+	check(agent_heartbeat_configure(0) == 0, "stop maximum heartbeat");
+	check(agent_heartbeat_configure(AGENT_HEARTBEAT_MAX_TICKS + 1ULL) ==
 		      AGENT_STATUS_BAD_PARAM,
 	      "heartbeat above maximum rejected");
-	check(agent_heartbeat_set(~(uint64)0) == AGENT_STATUS_BAD_PARAM,
+	check(agent_heartbeat_configure(~(uint64)0) == AGENT_STATUS_BAD_PARAM,
 	      "heartbeat uint64 overflow rejected");
 	check(agent_heartbeat(-1) == AGENT_STATUS_BAD_PARAM,
 	      "legacy negative heartbeat rejected");
@@ -612,7 +609,7 @@ static void run_agent(void)
 
 		memset(&heartbeat_op, 0, sizeof(heartbeat_op));
 		heartbeat_op.version = AGENT_CALL_VERSION;
-		heartbeat_op.tool_id = AGENT_TOOL_AGENT_HEARTBEAT;
+		heartbeat_op.tool_id = AGENT_TOOL_HEARTBEAT_CONFIGURE;
 		heartbeat_op.request_id = 391;
 		heartbeat_op.arg0 = AGENT_HEARTBEAT_MAX_TICKS + 1ULL;
 		check(agent_run(&heartbeat_op, &heartbeat_res, 1, 0) == 1,

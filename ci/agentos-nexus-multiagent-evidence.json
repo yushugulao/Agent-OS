@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "generic_nexus_development_harness",
+  "provider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "task_policy": {
+    "task_specific_runtime_state": false,
+    "root_agent_selected_single_agent_execution": true,
+    "tools": [
+      "search_files",
+      "read_file",
+      "write_file",
+      "apply_patch",
+      "build_ucore_program",
+      "run_ucore_program"
+    ]
+  },
+  "result": {
+    "status": "ok",
+    "agents": 1,
+    "tasks": 1,
+    "model_rounds": 21,
+    "tool_calls": 20,
+    "source_path": "user/src/nexus_calc_ucore.c",
+    "source_revision": "77c4cd1b3ff9ce77969e8d4bb8a9cb84ce3ccf811470c39572ac6f83e598c4f9",
+    "tested_build_id": "a88b281e53b24635285054e8220f14893eba699d0ebfa09b1f67800e850d72ad",
+    "build_diagnostic_artifact_sha256": "44253fff58f7c67bb80b0ecd2ff553319dcb3047496df087b325aa5b1d6e9533",
+    "final_artifact_sha256": "eae44500a4d9742ad4473f70ecbe46f31f88698e6f7819466777b03b218d0fc0",
+    "workflow_summary_artifact_sha256": "cc3025706d69302161bb92cc7566edf99c6846b9eef42e52a126272f777a2f7c",
+    "revision_conflicts_observed": 1
+  },
+  "guest_cases": [
+    {
+      "kind": "normal",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "output_match": true,
+      "output_sha256": "5dc4ecc910068157b8517900d5c2d936ab4fce702ddb2ac520d8aafd1e8b3e3d",
+      "log_sha256": "0ea86eff1efb1aea32b9d880479d880f8e444fa599faf67a247546515f22dadb",
+      "artifact_sha256": "d630b0f0dff0c9186c8101ff696cd6e5b706eaaa1682c3eaf99251739f640637"
+    },
+    {
+      "kind": "invalid",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "output_match": true,
+      "output_sha256": "3052d164405ac49db9cf00ee9ee7c0f421f17e04887cabec9aaa9a6096701d76",
+      "log_sha256": "8b8153cec69d862d6230341b64dd7f7f79ef4c7d6297e87065ef0a231908ffbb",
+      "artifact_sha256": "36590da6705164773e9062424c57f2daa356e694449ae655fb0a8378f7b23d4c"
+    },
+    {
+      "kind": "failure",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "output_match": true,
+      "output_sha256": "34ed63a94dc808dd2dabb66e72023eedaf8119f2a347bff792abe750d5aecc68",
+      "log_sha256": "c4a967a3062e510ff110694a67cc1275e76b1e4448d9cea15e794ab46490e4ae",
+      "artifact_sha256": "c79866c11b24563894c3ca1f43bea72a606cabcb3f039dba3c7b546832898bc3"
+    }
+  ],
+  "guest_markers": [
+    "NEXUS_PROGRAM_START",
+    "NEXUS_PROGRAM_EXIT status=0"
+  ],
+  "run_files": {
+    "result_sha256": "665ee38ee64afc30213f6e451a98fa7d4bc172e9d2bb7cb0456e43c6a70c28b1",
+    "trace_sha256": "a68fea10fe197cab17e931af7f2e6e6f1ab399e3356cc49df8a8a97d2a9634ee"
+  }
+}

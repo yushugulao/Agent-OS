@@ -2650,7 +2650,9 @@ static uint64 functional_catalog_load(int *callable_count,
 			      desc->size == sizeof(*desc) && desc->tool_id > 0 &&
 			      desc->param_count <= AGENT_TOOL_PARAM_MAX &&
 			      (desc->flags == AGENT_TOOL_F_CALLABLE ||
-			       desc->flags == AGENT_TOOL_F_SYSCALL_ONLY) &&
+			       desc->flags == AGENT_TOOL_F_SYSCALL_ONLY ||
+			       desc->flags == AGENT_TOOL_F_DEPRECATED ||
+			       desc->flags == AGENT_TOOL_F_BROKERED) &&
 			      name_length > 0 && params_length > 0 &&
 			      description_length > 0 &&
 			      functional_schema_param_count(desc->params) ==
@@ -3583,7 +3585,7 @@ static void run_functional_task5(void)
 	      "task5 info before heartbeats");
 	heartbeat_sleep_before = functional_info_after.wait_sleep_count;
 	heartbeat_wake_before = functional_info_after.wait_wakeup_count;
-	check(agent_heartbeat_set(2) == AGENT_STATUS_OK,
+	check(agent_heartbeat_configure(2) == AGENT_STATUS_OK,
 	      "task5 heartbeat interval two");
 	memset(&functional_event, 0, sizeof(functional_event));
 	check(agent_wait(&functional_event, 50) == AGENT_STATUS_OK &&
@@ -3591,7 +3593,7 @@ static void run_functional_task5(void)
 		      strcmp(functional_event.payload, "timer=heartbeat") == 0,
 	      "task5 first heartbeat");
 	values[11] = functional_event.tick;
-	check(agent_heartbeat_set(1) == AGENT_STATUS_OK,
+	check(agent_heartbeat_configure(1) == AGENT_STATUS_OK,
 	      "task5 dynamic heartbeat interval one");
 	memset(&functional_event, 0, sizeof(functional_event));
 	check(agent_wait(&functional_event, 50) == AGENT_STATUS_OK &&
@@ -3607,7 +3609,7 @@ static void run_functional_task5(void)
 		      functional_info_after.wait_wakeup_count >
 			      heartbeat_wake_before,
 	      "task5 heartbeat sleep and wake counters");
-	check(agent_heartbeat_stop() == AGENT_STATUS_OK,
+	check(agent_heartbeat_configure(0) == AGENT_STATUS_OK,
 	      "task5 heartbeat stop");
 	for (int pending = 0; pending < AGENT_EVENT_QUEUE_CAP; pending++) {
 		check(agent_info(&eval_info) == AGENT_STATUS_OK,
@@ -3666,7 +3668,7 @@ static void run_evaluation(void)
 		       AGENT_CAP_ORCHESTRATE),
 	      "evaluation capabilities");
 	check(context_clear() == 0, "clear evaluation context");
-	check(agent_file_meta_init() == 0, "initialize evaluation metadata");
+	check(agent_metadata_init() == 0, "initialize evaluation metadata");
 
 	run_file_query_experiment();
 	run_tool_batch_experiment();

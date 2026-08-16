@@ -17,7 +17,7 @@
 <a id="显式文件目录"></a>
 ## Metadata Catalog
 
-`agent_file_meta_set()` 把业务信息登记到真实 inode 上。每条记录同时保存业务字段和文件身份：
+`agent_file_meta_set()` 和 `agent_file_meta_set_batch()` 把业务信息登记到真实 inode 上。每条记录同时保存业务字段和文件身份：
 
 | 业务字段 | 文件身份与版本 |
 | --- | --- |
@@ -32,17 +32,12 @@ Metadata Catalog 最多保存 512 条记录，一次查询最多返回 8 项。�
 <a id="从登记到索引"></a>
 ## 登记与索引更新
 
-用户态的 `agent_file_meta_set()` 通过 [`user/lib/syscall.c`](../../user/lib/syscall.c) 进入 `SYS_agent_file_meta_set`。随后，[`os/agent_metadata_objects.c`](../../os/agent_metadata_objects.c) 检查权限并复制用户参数。Metadata Catalog 在同一次元数据事务中解析选择条件、绑定 inode、写入主记录和索引，最后比较 Typed Watch 的结果集是否发生变化。
+用户态的标量与批量接口通过 [`user/lib/syscall.c`](../../user/lib/syscall.c) 进入 `SYS_agent_file_meta_set` 或系统调用 569。随后，[`os/agent_metadata_objects.c`](../../os/agent_metadata_objects.c) 检查权限并复制用户参数。每个条目都要解析选择条件、绑定 inode、写入主记录和索引，最后比较 Typed Watch 的结果集是否发生变化。
 
 ```text
-agent_file_meta_set()
-    -> sys_agent_file_meta_set()
-    -> agent_file_meta_set_execute()
-    -> agent_metadata_catalog_bind_volatile()
-    -> 绑定 dev、inum 和 incarnation
-    -> 更新 status、stage 和 kind 索引
-    -> 增加 fs_generation
-    -> 发布 Typed Watch 的集合变化事件
+Scalar Set -> Validate -> Bind Inode -> Update Index
+Batch Set  -> Shared Lifecycle + Transaction -> Ordered Item Commit
+Item Commit -> New Generation -> Watch Event -> Audit Record
 ```
 
 [`user/src/agentscan_ucore.c`](../../user/src/agentscan_ucore.c) 中的实际用法如下：
@@ -61,7 +56,9 @@ meta.update_mask = 0;          /* 首次登记填写完整记录。 */
 agent_file_meta_set(&meta);
 ```
 
-目录修改和查询快照共用同一份元数据事务。查询开始时，内核记下生命周期和 `fs_generation`，复制命中项后再检查一次。若这段时间内目录或可见文件的 generation 发生变化，本轮结果作废并在内核中重试。重试次数用完后返回 `RETRY`，避免把两个时刻的数据拼成一份结果。
+批量接口一次最多接收 16 项，`flags` 只能为零。内核在 VM 快照期间复制全部输入，并在首项提交前确认状态数组可写；输入数组和状态数组不得重叠。一个批次共用生命周期操作和 Metadata transaction，各项仍按顺序独立提交。返回值表示已经写回状态的连续前缀长度，普通条目错误不会阻止后续项，致命错误与 `INDETERMINATE` 会停止处理。前面已经提交的条目保持有效，每个已提交项分别推进 generation、发布 Watch 变化并写入审计记录。
+
+目录修改和查询快照共用 Metadata transaction。查询开始时，内核记下生命周期和 `fs_generation`，复制命中项后再检查一次。若这段时间内目录或可见文件的 generation 发生变化，本轮结果作废并在内核中重试。重试次数用完后返回 `RETRY`，避免把两个时刻的数据拼成一份结果。
 
 <a id="查询规划器"></a>
 ## 查询方法
@@ -118,6 +115,8 @@ agent_live_watch(&watch);
 | 属于结果集 | 不再属于结果集，或文件已经删除 | `LEAVE` |
 
 事件的 `corr_id` 是文件 `fid`，`cause_sequence` 记录可见的更新序号，事件数据中还以紧凑的十六进制字段给出生命周期键。文件查询事件使用专门的 `FILE_QUERY` 类型，不再按旧接口的字符串包含关系过滤。Agent 通过 `agent_wait()` 读取事件，结束订阅时把原 `watch_id` 交给 `agent_live_unwatch()`。
+
+内核用关中断保护的进程存在表和全局计数记录当前文件订阅。计数为零时，文件状态迁移直接返回，不再遍历进程表。`FILE_QUERY` 只能通过 `agent_live_watch()` 安装；通用 `AGENT_TOOL_AGENT_WATCH` 会返回 `BAD_PARAM` 和 `use_agent_live_watch`，通用 clear-all 也会保留 Typed Watch，订阅条件、重新同步状态和 `watch_id` 因而始终同步。
 
 <a id="generation-resync"></a>
 ## generation 缺口与重新同步
@@ -184,11 +183,21 @@ int agent_file_edit_abort(uint64 lease_id);
 
 `begin` 返回当前的 `base_version`。`commit` 和 `abort` 可以由租约所有者调用，也可以由同一工作流、同一文件访问范围内拥有 `AGENT_CAP_ORCHESTRATE` 的 Agent 调用。租约过期后会先被清理，再次提交或放弃时返回 `NOT_FOUND`；`incarnation` 或 `expected_version` 不符时返回 `STALE`。具有相应能力的 Agent 可以用 `ORCHESTRATOR_BREAK` 强制释放冲突租约。当前实现中，`BREAK_EXPIRED` 和未知标志不会改变处理结果。
 
+## Context 查询预测与预取
+
+成功的只读文件查询或读取可以通过 syscall 572 提交机器可读签名。签名包含操作类型、tool id、`dev + inum + incarnation`、文件 revision、workspace object id、workspace revision、查询指纹、offset、length、Context/cause sequence、tick、branch generation 和 Agent/lifecycle identity。内核只从当前 Agent active path 接受已经成功结算的记录，失败、取消、超时、拒绝和回滚分支不进入训练。
+
+每个 Agent 拥有私有的 16 项固定转移表。提交 B 时，内核找到当前路径上的此前查询 A，并更新 `A -> B` 的观察数与成功数；再次执行 A 时，观察数和置信度达到配置阈值才产生低优先级预取。Guest VFS 目标进入异步队列，提前载入 inode、目录项或数据块；Host workspace 目标产生带 object id、revision 和 range 的 `PREFETCH_HINT`。默认单次不超过 4 KiB，同时最多 2 项。
+
+workflow 共享预测只接收明确标记为共享、已经成功结算且所有目标 Agent 都有读取权限的签名。即使数据已经进入 buffer cache，正式读取仍重新执行 capability、文件访问范围、workspace root、revision 和 lifecycle 检查。rollback、Context clear、Agent 退出、lifecycle 变化，以及 inode incarnation、文件 revision 或 workspace generation 改变时，相关状态立即失效。预测失败、配额拒绝或缓存回收后，调用方继续使用普通读取路径。
+
 ## 性能结果
 
-在同一份包含 96 条记录的数据上，我们进行了 16 组扫描查询与索引查询配对测试。扫描查询每次检查 97 条记录，索引查询只检查 2 条。16 组中索引查询的核心阶段全部更快，中位耗时由 34,712.5 微秒降至 13,293.5 微秒，中位加速比为 3.118 倍。候选对象从 97 条降到 2 条，说明 `status/stage/kind` 位图索引确实缩短了内核查询的主要路径。
+在早期开发中，索引路径会为 96 条记录逐项调用标量登记接口，并在一次查询后清理 Catalog。那时索引核心查询已经能够减少候选项，完整流程仍只有 3/16 组更快，中位差值为 `+13.452 毫秒`。分段计数显示，重复路径解析、事务进入、Watch 扫描和一次性 Catalog 准备抵消了核心查询收益。
 
-参数测试覆盖 24、64、96 三种目录规模，以及 1、2、4、8 四种命中数。12 组参数下，中位加速比为 1.164 至 2.808 倍；三个目录规模下，状态索引的单次查询中位耗时约为 98.3、100.5 和 108.3 微秒。完整流程中，索引路径只有 3/16 组配对更快，中位差值为 `+13.452 毫秒`。核心阶段与完整流程采用不同计时范围：索引改善核心查询，完整流程还包含外围聚合开销，因此两者分别报告。详细图表见[性能测试](../performance.md#3-实时查询的核心阶段)。
+当前实现根据预计查询次数选择路径。`K=1` 直接遍历目录；`K=2/4/8` 将 96 条记录分成 6 个批次登记，并让同一生命周期内验证通过的 Catalog 继续服务后续查询。索引条件与遍历条件同时核对 project、workflow、run、stage、kind、status、summary 中的 reason 和恢复结果，最终结果摘要保持一致。
+
+最终 `K=4` 测试采用 16 次独立 QEMU 启动，并以 8 次 AB、8 次 BA 平衡执行顺序。索引复用路径的核心耗时中位数为 19,499.5 微秒，遍历路径为 121,206 微秒，核心加速比为 6.216；16/16 组均更快，配对中位差为 `-105.668 毫秒`。完整流程的中位数由 786,683.5 微秒降至 697,806.5 微秒，加速比为 1.127，同样 16/16 组更快，配对中位差为 `-89.782 毫秒`。Catalog 只构建一次，5 次查询中有 4 次复用，冷构建耗时中位数为 11,171.5 微秒，5 次查询的聚合耗时中位数为 3,495 微秒，其中复用查询合计 515 微秒。检查记录数由 385 条降至 5 条；两条路径都恢复到 `recovered`，结果摘要为 `1457873431608088591`。原始串口记录、逐样本数据与摘要见 [`one_shot_metrics/data/20260815_catalog_batch`](../../one_shot_metrics/data/20260815_catalog_batch/)，完整图表见[性能测试](../performance.md)。
 
 ## 测试与实现索引
 
@@ -196,9 +205,11 @@ int agent_file_edit_abort(uint64 lease_id);
 | --- | --- |
 | [`scripts/check-agent-live-query-fs.py`](../../scripts/check-agent-live-query-fs.py) | 显式登记、快照生命周期、完整查询条件、增量事件和重新同步调用 |
 | [`scripts/test-agent-live-query-fs.py`](../../scripts/test-agent-live-query-fs.py) | 针对源码约束构造的错误输入与回归检查 |
-| [`user/src/agentfs_ucore.c`](../../user/src/agentfs_ucore.c) | 部分更新、过期文件身份、同名文件重建、扫描与索引等价、截断和删除 |
-| [`user/src/agentscan_ucore.c`](../../user/src/agentscan_ucore.c) | 普通文件不进入目录、`ENTER`、`UPDATE`、`LEAVE`、索引结果中的文件身份 |
+| [`user/src/agentfs_ucore.c`](../../user/src/agentfs_ucore.c) | 部分更新、批量有序状态、失败后继续、无跨项撤销、同生命周期复用、参数预检查、扫描与索引等价 |
+| [`user/src/agentscan_ucore.c`](../../user/src/agentscan_ucore.c) | 单批次触发 `ENTER`、`UPDATE`、`LEAVE`，通用 clear 保留 Typed Watch，通用 `FILE_QUERY` 入口被拒绝 |
 | [`user/src/agentbench_ucore.c`](../../user/src/agentbench_ucore.c) | 扫描与索引工作量、查询耗时和不同规模数据 |
+| [`user/src/labdemo_ucore.c`](../../user/src/labdemo_ucore.c) | `K=1` 遍历与 `K=2/4/8` 批量登记复用、相同恢复结果及端到端配对计时 |
+| [`user/src/agentmulti_ucore.c`](../../user/src/agentmulti_ucore.c) | 两次 `A -> B` 观察、预测生成、Host hint 事件和 hit 计数 |
 
 ```bash
 python3 -B scripts/check-agent-live-query-fs.py
@@ -216,5 +227,6 @@ AGENT_TEST_CASE=agentbench_ucore make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 | Typed Watch 与重新同步 | [`os/agent_live_query_events.c`](../../os/agent_live_query_events.c)、[`os/agent_ipc.c`](../../os/agent_ipc.c) |
 | 文件大小、摘要、租约和更新序号 | [`os/agent_file_state.c`](../../os/agent_file_state.c) |
 | VFS 调用点与 inode 分配 | [`os/file.c`](../../os/file.c)、[`os/fs.c`](../../os/fs.c) |
+| 查询签名与有界转移预测 | [`os/agent_context_prefetch.c`](../../os/agent_context_prefetch.c)、[`include/agent_context_prefetch_abi.h`](../../include/agent_context_prefetch_abi.h) |
 
 公开查询字段和返回状态见 [API](../api.md)，事件等待与工作流关闭过程见[工作流运行时](workflow-runtime.md)。

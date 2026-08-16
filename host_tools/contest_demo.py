@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 KIND = "agentos-contest-demo-results"
 UINT = r"(?:0|[1-9][0-9]*)"
 UINT64_MAX = (1 << 64) - 1
@@ -59,6 +59,15 @@ METRIC_PATTERN = re.compile(
     rf"end_to_end_finished_us=({UINT}) workload_syscalls=({UINT}) "
     rf"records_examined=({UINT}) bytes_read=({UINT}) "
     rf"result_items=({UINT}) outcome_hash=({UINT})$"
+)
+CATALOG_PATTERN = re.compile(
+    rf"^agentos:demo schema=2 nonce=({UINT}) kind=catalog mode=native "
+    rf"expected_discovery_queries=({UINT}) selected_path=(indexed|traversal) "
+    rf"query_state=(ready|cold|building|dirty) discovery_query_count=({UINT}) "
+    rf"validation_query_count=({UINT}) total_query_count=({UINT}) "
+    rf"build_count=({UINT}) batch_calls=({UINT}) registered_items=({UINT}) "
+    rf"reuse_hits=({UINT}) cold_build_us=({UINT}) "
+    rf"aggregate_query_us=({UINT}) warm_query_us=({UINT})$"
 )
 
 FENCE_PERFORMANCE_COUNTERS = (
@@ -309,6 +318,33 @@ def _parse_metric(match: re.Match[str]) -> dict[str, Any]:
         "result_items": _uint(match.group(11), "metric results"),
         "outcome_hash": _uint(match.group(12), "metric outcome hash"),
     }
+
+
+def _parse_catalog(match: re.Match[str]) -> dict[str, Any]:
+    names = (
+        "expected_discovery_queries",
+        "discovery_query_count",
+        "validation_query_count",
+        "total_query_count",
+        "build_count",
+        "batch_calls",
+        "registered_items",
+        "reuse_hits",
+        "cold_build_us",
+        "aggregate_query_us",
+        "warm_query_us",
+    )
+    result: dict[str, Any] = {
+        "nonce": _uint(match.group(1), "catalog nonce"),
+        "mode": "native",
+        "selected_path": match.group(3),
+        "query_state": match.group(4),
+    }
+    for name, group in zip(
+        names, (2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14)
+    ):
+        result[name] = _uint(match.group(group), f"catalog {name}")
+    return result
 
 
 def _parse_fence(match: re.Match[str]) -> dict[str, Any]:
@@ -600,6 +636,7 @@ def verify_showcase(
     trace: list[dict[str, Any]] = []
     runtime: dict[str, Any] | None = None
     oracle: dict[str, Any] | None = None
+    catalog: dict[str, Any] | None = None
     run_record: dict[str, Any] | None = None
     mechanisms: dict[tuple[str, str], dict[str, Any]] = {}
     for line in lines:
@@ -617,6 +654,10 @@ def verify_showcase(
             if metric["mode"] in metrics:
                 raise ContestDemoError("showcase metric is duplicated")
             metrics[metric["mode"]] = metric
+        elif match := CATALOG_PATTERN.fullmatch(line):
+            if catalog is not None:
+                raise ContestDemoError("catalog telemetry is duplicated")
+            catalog = _parse_catalog(match)
         elif match := FENCE_PATTERN.fullmatch(line):
             fence = _parse_fence(match)
             fences[fence["mode"]].append(fence)
@@ -660,6 +701,7 @@ def verify_showcase(
         *(item["nonce"] for rows in fences.values() for item in rows),
         *(item["nonce"] for item in trace),
         *(item["nonce"] for item in mechanisms.values()),
+        *((catalog["nonce"],) if catalog is not None else ()),
         runtime["nonce"],
         oracle["nonce"],
     }
@@ -726,15 +768,68 @@ def verify_showcase(
 
     compat = metrics["compat"]
     native = metrics["native"]
-    if compat["actor_pid"] == 0 or compat["actor_pid"] != native["actor_pid"]:
+    if (
+        compat["actor_pid"] == 0
+        or compat["actor_pid"] != native["actor_pid"]
+        or native["workload_syscalls"] == 0
+    ):
         raise ContestDemoError("compat/native lanes did not run in one actor")
+    discovery_queries = (
+        catalog["expected_discovery_queries"] if catalog is not None else 1
+    )
     if (
         compat["workload_syscalls"] == 0
-        or compat["records_examined"] != CORPUS_SIZE + 1
+        or compat["records_examined"] != CORPUS_SIZE * discovery_queries + 1
         or compat["bytes_read"] == 0
     ):
         raise ContestDemoError("compat lane did not traverse the complete corpus")
-    if (
+    if catalog is not None:
+        batch_count = (CORPUS_SIZE + 15) // 16
+        if (
+            catalog["expected_discovery_queries"] not in {1, 2, 4, 8}
+            or catalog["discovery_query_count"]
+            != catalog["expected_discovery_queries"]
+            or catalog["validation_query_count"] != 1
+            or catalog["total_query_count"]
+            != catalog["expected_discovery_queries"] + 1
+            or catalog["aggregate_query_us"] < catalog["warm_query_us"]
+        ):
+            raise ContestDemoError("catalog build or lifecycle reuse is invalid")
+        if catalog["selected_path"] == "indexed":
+            if (
+                catalog["expected_discovery_queries"] < 2
+                or catalog["query_state"] != "ready"
+                or catalog["build_count"] != 1
+                or catalog["batch_calls"] < batch_count
+                or catalog["batch_calls"] > CORPUS_SIZE
+                or catalog["registered_items"] != CORPUS_SIZE
+                or catalog["reuse_hits"] + 1
+                != catalog["total_query_count"]
+                or catalog["cold_build_us"] == 0
+                or native["records_examined"] == 0
+                or native["records_examined"] >= compat["records_examined"]
+                or native["bytes_read"] != 0
+            ):
+                raise ContestDemoError("native lane did not reuse the indexed path")
+        elif (
+            catalog["expected_discovery_queries"] != 1
+            or catalog["query_state"] != "cold"
+            or any(
+                catalog[field] != 0
+                for field in (
+                    "build_count",
+                    "batch_calls",
+                    "registered_items",
+                    "reuse_hits",
+                    "cold_build_us",
+                    "warm_query_us",
+                )
+            )
+            or native["records_examined"] != compat["records_examined"]
+            or native["bytes_read"] == 0
+        ):
+            raise ContestDemoError("single-use traversal selection is invalid")
+    elif (
         native["workload_syscalls"] == 0
         or native["records_examined"] == 0
         or native["records_examined"] >= compat["records_examined"]
@@ -906,7 +1001,7 @@ def verify_showcase(
         }
         nested_mechanisms.setdefault(mode, {})[scope] = clean
     clean_runtime = {key: value for key, value in runtime.items() if key != "nonce"}
-    return {
+    result = {
         "guest_nonce": guest_nonce,
         "sample": {
             "id": run_record["id"],
@@ -929,6 +1024,13 @@ def verify_showcase(
             "equal": True,
         },
     }
+    if catalog is not None:
+        result["catalog"] = {
+            key: value
+            for key, value in catalog.items()
+            if key not in {"nonce", "mode"}
+        }
+    return result
 
 
 def _median(values: list[int | float]) -> int | float:
@@ -974,19 +1076,33 @@ def campaign_aggregates(samples: list[dict[str, Any]]) -> dict[str, Any]:
     outcome = samples[0]["outcome"]
     if any(sample["outcome"] != outcome for sample in samples[1:]):
         raise ContestDemoError("campaign outcomes differ between QEMU boots")
+    catalog_rows = [sample.get("catalog") for sample in samples]
+    if any(item is None for item in catalog_rows) and not all(
+        item is None for item in catalog_rows
+    ):
+        raise ContestDemoError("campaign catalog telemetry is incomplete")
+    selected_path = "indexed"
+    if all(item is not None for item in catalog_rows):
+        selected_paths = {
+            item["selected_path"] for item in catalog_rows if item is not None
+        }
+        if len(selected_paths) != 1:
+            raise ContestDemoError("campaign adaptive selection changed between boots")
+        selected_path = next(iter(selected_paths))
 
     rows: list[dict[str, Any]] = []
     for sample in samples:
         traversal = _path_measurement(sample, "traversal")
         indexed = _path_measurement(sample, "indexed")
-        rows.append(
-            {
+        row = {
                 "sample_id": sample["sample"]["id"],
                 "order": sample["sample"]["order"],
                 "traversal": traversal,
                 "indexed": indexed,
             }
-        )
+        if "catalog" in sample:
+            row["catalog"] = sample["catalog"]
+        rows.append(row)
     medians = {
         path_name: {
             field: _median([row[path_name][field] for row in rows])
@@ -1001,23 +1117,51 @@ def campaign_aggregates(samples: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     indexed_wins = sum(delta < 0 for delta in core_deltas)
     paired_median_delta = _median(core_deltas)
-    if indexed_wins <= len(rows) // 2 or paired_median_delta >= 0:
+    if selected_path == "indexed" and (
+        indexed_wins <= len(rows) // 2 or paired_median_delta >= 0
+    ):
         raise ContestDemoError(
             "indexed query did not beat traversal in a majority of paired boots"
         )
-    if any(
+    end_to_end_deltas = [
+        row["indexed"]["end_to_end_duration_us"]
+        - row["traversal"]["end_to_end_duration_us"]
+        for row in rows
+    ]
+    end_to_end_wins = sum(delta < 0 for delta in end_to_end_deltas)
+    paired_end_to_end_median_delta = _median(end_to_end_deltas)
+    if selected_path == "indexed" and (
+        end_to_end_wins <= len(rows) // 2
+        or paired_end_to_end_median_delta >= 0
+    ):
+        raise ContestDemoError(
+            "indexed end-to-end path did not beat traversal in a majority of paired boots"
+        )
+    reduced_records_in_all_samples = all(
         row["indexed"]["records_examined"]
-        >= row["traversal"]["records_examined"]
+        < row["traversal"]["records_examined"]
+        for row in rows
+    )
+    if selected_path == "indexed" and not reduced_records_in_all_samples:
+        raise ContestDemoError("indexed query did not reduce examined records")
+    if selected_path == "traversal" and any(
+        row["indexed"]["records_examined"]
+        != row["traversal"]["records_examined"]
         for row in rows
     ):
-        raise ContestDemoError("indexed query did not reduce examined records")
-    return {
+        raise ContestDemoError("adaptive traversal did not match reference work")
+    result = {
         "comparison": {
-            "workload": "same_kernel_same_guest_same_file_query",
+            "workload": "same_kernel_same_guest_same_repeated_file_query",
             "paths": {
                 "traversal": "directory_traversal",
-                "indexed": "indexed_control_path",
+                "indexed": (
+                    "indexed_reused_path"
+                    if selected_path == "indexed"
+                    else "adaptive_directory_traversal"
+                ),
             },
+            "adaptive_selection": selected_path,
             "corpus_records": CORPUS_SIZE,
             "order_balance": order_counts,
             "medians": medians,
@@ -1038,9 +1182,18 @@ def campaign_aggregates(samples: list[dict[str, Any]]) -> dict[str, Any]:
             "paired_regression": {
                 "sample_count": len(rows),
                 "indexed_faster_samples": indexed_wins,
-                "indexed_faster_majority": True,
+                "indexed_faster_majority": indexed_wins > len(rows) // 2,
                 "median_indexed_minus_traversal_core_us": paired_median_delta,
-                "indexed_reduced_records_in_all_samples": True,
+                "indexed_end_to_end_faster_samples": end_to_end_wins,
+                "indexed_end_to_end_faster_majority": (
+                    end_to_end_wins > len(rows) // 2
+                ),
+                "median_indexed_minus_traversal_end_to_end_us": (
+                    paired_end_to_end_median_delta
+                ),
+                "indexed_reduced_records_in_all_samples": (
+                    reduced_records_in_all_samples
+                ),
             },
         },
         "samples": rows,
@@ -1059,6 +1212,37 @@ def campaign_aggregates(samples: list[dict[str, Any]]) -> dict[str, Any]:
         },
         "outcome": outcome,
     }
+    if all(item is not None for item in catalog_rows):
+        typed_catalog_rows = [item for item in catalog_rows if item is not None]
+        stable_fields = (
+            "expected_discovery_queries",
+            "selected_path",
+            "query_state",
+            "discovery_query_count",
+            "validation_query_count",
+            "total_query_count",
+            "build_count",
+            "batch_calls",
+            "registered_items",
+            "reuse_hits",
+        )
+        if any(
+            any(item[field] != typed_catalog_rows[0][field] for field in stable_fields)
+            for item in typed_catalog_rows[1:]
+        ):
+            raise ContestDemoError("campaign catalog strategy changed between boots")
+        result["catalog_reuse"] = {
+            **{field: typed_catalog_rows[0][field] for field in stable_fields},
+            "medians": {
+                field: _median([item[field] for item in typed_catalog_rows])
+                for field in (
+                    "cold_build_us",
+                    "aggregate_query_us",
+                    "warm_query_us",
+                )
+            },
+        }
+    return result
 
 
 def build_report(lab_logs: list[Path], elapsed_seconds: float) -> dict[str, Any]:
@@ -1101,9 +1285,25 @@ def render_csv(report: dict[str, Any]) -> str:
     fields.extend(
         (
             "indexed_minus_traversal_core_us",
+            "indexed_minus_traversal_end_to_end_us",
             "traversal_over_indexed_core_ratio",
         )
     )
+    catalog_fields = (
+        "expected_discovery_queries",
+        "discovery_query_count",
+        "validation_query_count",
+        "total_query_count",
+        "build_count",
+        "batch_calls",
+        "registered_items",
+        "reuse_hits",
+        "cold_build_us",
+        "aggregate_query_us",
+        "warm_query_us",
+    )
+    if "catalog_reuse" in report:
+        fields.extend(f"catalog_{name}" for name in catalog_fields)
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=fields, lineterminator="\n")
     writer.writeheader()
@@ -1119,10 +1319,17 @@ def render_csv(report: dict[str, Any]) -> str:
             sample["indexed"]["core_duration_us"]
             - sample["traversal"]["core_duration_us"]
         )
+        row["indexed_minus_traversal_end_to_end_us"] = (
+            sample["indexed"]["end_to_end_duration_us"]
+            - sample["traversal"]["end_to_end_duration_us"]
+        )
         row["traversal_over_indexed_core_ratio"] = _ratio(
             sample["traversal"]["core_duration_us"],
             sample["indexed"]["core_duration_us"],
         )
+        if "catalog" in sample:
+            for name in catalog_fields:
+                row[f"catalog_{name}"] = sample["catalog"][name]
         writer.writerow(row)
     return output.getvalue()
 
@@ -1132,11 +1339,14 @@ def render_markdown(report: dict[str, Any]) -> str:
     medians = comparison["medians"]
     traversal = medians["traversal"]
     indexed = medians["indexed"]
+    selected_index = comparison["adaptive_selection"] == "indexed"
+    adaptive_label = "indexed/reused path" if selected_index else "adaptive traversal"
+    adaptive_header = "Indexed/reused" if selected_index else "Adaptive traversal"
     lines = [
         "# AgentOS file-query measurements",
         "",
         f"{report['campaign']['qemu_boots']} real QEMU boots, balanced AB/BA order. "
-        "Each boot runs a directory traversal and the indexed control path against "
+        f"Each boot runs a reference directory traversal and the {adaptive_label} against "
         f"the same {comparison['corpus_records']}-record corpus.",
         "",
         "## Median comparison",
@@ -1152,7 +1362,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             traversal["directory_block_probes"],
             traversal["directory_entries_examined"],
         ),
-        "| indexed | {} | {} | {} | {} | {} | {} |".format(
+        "| {} | {} | {} | {} | {} | {} | {} |".format(
+            adaptive_label,
             indexed["core_duration_us"],
             indexed["end_to_end_duration_us"],
             indexed["records_examined"],
@@ -1161,30 +1372,73 @@ def render_markdown(report: dict[str, Any]) -> str:
             indexed["directory_entries_examined"],
         ),
         "",
-        "Traversal/indexed core ratio: `{}`. Traversal/indexed records ratio: `{}`.".format(
+        "Reference/adaptive core ratio: `{}`. Reference/adaptive records ratio: `{}`.".format(
             comparison["ratios"]["traversal_over_indexed_core_duration"],
             comparison["ratios"]["traversal_over_indexed_records_examined"],
         ),
-        "Indexed was faster in `{}/{}` paired boots; the paired median "
-        "indexed-minus-traversal core delta was `{} us`.".format(
+        "The adaptive path was faster in `{}/{}` paired boots; the paired median "
+        "adaptive-minus-reference core delta was `{} us`.".format(
             comparison["paired_regression"]["indexed_faster_samples"],
             comparison["paired_regression"]["sample_count"],
             comparison["paired_regression"][
                 "median_indexed_minus_traversal_core_us"
             ],
         ),
-        "",
-        "## Raw paired measurements",
-        "",
-        "| Boot | Order | Traversal core (us) | Indexed core (us) | "
-        "Traversal records | Indexed records | Traversal bytes | Indexed bytes |",
-        "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "The complete adaptive workflow was faster in `{}/{}` paired boots; "
+        "the paired median end-to-end delta was `{} us`.".format(
+            comparison["paired_regression"]["indexed_end_to_end_faster_samples"],
+            comparison["paired_regression"]["sample_count"],
+            comparison["paired_regression"][
+                "median_indexed_minus_traversal_end_to_end_us"
+            ],
+        ),
     ]
+    if "catalog_reuse" in report:
+        catalog = report["catalog_reuse"]
+        lines.extend(("", "## Catalog build and reuse", ""))
+        if catalog["selected_path"] == "indexed":
+            lines.extend(
+                (
+                    "The adaptive lane registered `{}` records in `{}` batch calls, "
+                    "built the Catalog once, and reused it for `{}` of `{}` total queries.".format(
+                        catalog["registered_items"],
+                        catalog["batch_calls"],
+                        catalog["reuse_hits"],
+                        catalog["total_query_count"],
+                    ),
+                    "Median cold build time was `{} us`; median aggregate query time "
+                    "was `{} us`, including `{} us` in reused queries.".format(
+                        catalog["medians"]["cold_build_us"],
+                        catalog["medians"]["aggregate_query_us"],
+                        catalog["medians"]["warm_query_us"],
+                    ),
+                )
+            )
+        else:
+            lines.append(
+                "The single-use workload kept the Catalog cold and selected directory "
+                "traversal without issuing a metadata batch."
+            )
+    lines.extend(
+        (
+            "",
+            "## Raw paired measurements",
+            "",
+            "| Boot | Order | Traversal core (us) | {} core (us) | "
+            "Traversal records | {} records | Traversal bytes | {} bytes |".format(
+                adaptive_header, adaptive_header, adaptive_header
+            ),
+            "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        )
+    )
     for sample in report["samples"]:
+        order_label = sample["order"].replace(
+            "indexed", "indexed_reused" if selected_index else "adaptive_traversal"
+        )
         lines.append(
             "| {} | {} | {} | {} | {} | {} | {} | {} |".format(
                 sample["sample_id"],
-                sample["order"],
+                order_label,
                 sample["traversal"]["core_duration_us"],
                 sample["indexed"]["core_duration_us"],
                 sample["traversal"]["records_examined"],
@@ -1235,14 +1489,15 @@ def main(argv: list[str] | None = None) -> int:
     medians = report["comparison"]["medians"]
     ratios = report["comparison"]["ratios"]
     print(
-        "[contest-demo] traversal_core={}us indexed_core={}us ratio={}".format(
+        "[contest-demo] traversal_core={}us adaptive_core={}us selection={} ratio={}".format(
             medians["traversal"]["core_duration_us"],
             medians["indexed"]["core_duration_us"],
+            report["comparison"]["adaptive_selection"],
             ratios["traversal_over_indexed_core_duration"],
         )
     )
     print(
-        "[contest-demo] records traversal={} indexed={} outcome_hash={}".format(
+        "[contest-demo] records traversal={} adaptive={} outcome_hash={}".format(
             medians["traversal"]["records_examined"],
             medians["indexed"]["records_examined"],
             report["outcome"]["outcome_hash"],

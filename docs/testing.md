@@ -20,12 +20,12 @@
 | --- | --- | --- | --- |
 | `ABI` 一致性 | RISC-V 探针、静态断言、固定的布局清单 | 内核态和用户态共用的结构、系统调用号和清单摘要一致 | `make agent-uapi-check` |
 | 模块调用关系 | 检查源码归属、调用关系和 workflow fence | Context、Live Query、workflow fence 等代码仍在实际调用链中 | `make agent-module-check` |
-| Host 控制程序 | 测试 Python 和 Shell 协议处理程序 | Console、Nexus 通用合约、Host 工作区 broker、Task ledger、Execution Contract 和资源账户能正确处理输入 | `make local-host-selftests` |
+| Host 控制程序 | 测试 Python 和 Shell 协议处理程序 | Console、Nexus 通用合约、动态 Agent/Task、Context Artifact Store、Host broker、Execution Contract 和资源账户能正确处理输入 | `make local-host-selftests` |
 | Guest 功能 | 每个场景独立启动 QEMU，并执行真实的 RISC-V 系统调用 | Agent 身份、工具、Context、VFS、调度和 Task Channel 完成整个生命周期 | `make agentos-test` |
 | 权限与恢复 | 越权输入、容量耗尽、故障注入和重启 | 非法请求被拒绝；恢复后状态一致，资源能够回收 | 各专项 Guest 测试和故障测试 |
-| 交互会话 | controller、observer、固定回复或在线 Provider 配合运行 | Console 的工具/审批路径与 Nexus 的自主决策、工作区读取、多 Agent Task 和关闭顺序正确；在线自由演示能形成自然合理的回答 | Console replay、Nexus replay、Nexus 自由演示 |
+| 交互会话 | controller、observer、固定回复或在线 Provider 配合运行 | Console 的工具/审批路径与 Nexus 的自主决策、动态 Task、Artifact、受控开发和关闭顺序正确；在线开发取得真实 Guest 证据 | Console replay、Nexus replay、通用 Harness |
 | 业务结果 | 两套镜像使用同一输入和同一结果判定程序 | 普通 uCore 与 AgentOS-uCore 得到相同结果 | `make dual-platform-run` |
-| 性能测试 | 多次独立启动；在同一次 QEMU 启动内配对；遍历参数组合 | 保存每个样本的用时、I/O、唤醒等待和公平性 | `one_shot_metrics/data/20260811` |
+| 性能测试 | 多次独立启动；在同一次 QEMU 启动内配对；遍历参数组合 | 保存每个样本的用时、I/O、唤醒等待和公平性 | `one_shot_metrics/data/20260815_catalog_batch`、`one_shot_metrics/data/20260811` |
 
 普通 Guest 测试由 [`scripts/agent_test_runner.py`](../scripts/agent_test_runner.py) 监视。程序会检查完成标志、退出状态、`panic`、意外错误、输出大小、空闲时间和总超时。每个测试场景还会核对指定的标志行，确认相关内核代码确实执行。Console 和 Nexus 的固定 replay 则由各自的 Make 命令启动 Host daemon、QEMU 和检查程序。
 
@@ -40,7 +40,7 @@ make agent-uapi-check TOOLPREFIX=riscv64-linux-gnu-
 make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-`agent-uapi-check` 会编译 [`scripts/probes/agent-uapi-layout.c`](../scripts/probes/agent-uapi-layout.c)，读取各个结构的大小和字段偏移，再与 [`ci/agent-uapi-layout.json`](../ci/agent-uapi-layout.json) 对照。检查内容包括 lifecycle、Execution Contract、provenance、Task Channel、tool、workflow fence、性能计数和资源管理 `ABI`。
+`agent-uapi-check` 会编译 [`scripts/probes/agent-uapi-layout.c`](../scripts/probes/agent-uapi-layout.c)，读取各个结构的大小和字段偏移，再与 [`ci/agent-uapi-layout.json`](../ci/agent-uapi-layout.json) 对照。当前 710 项合约覆盖 lifecycle、Execution Contract、provenance、Task Channel、33 项 Tool Registry、workflow fence、workspace mutation、通用 Agent runtime、Context Artifact、查询预测、批量 Metadata 登记、性能计数和资源管理 `ABI`。
 
 `kernel-stack-check` 读取 GCC 生成的 `.ci` 调用图，从系统调用和中断入口计算最深调用路径，并计入中断帧、保护区和预留空间。这样可以在链接前发现 AgentOS 调用链的栈空间变化。
 
@@ -64,11 +64,12 @@ make local-host-selftests
 | --- | --- |
 | Execution Contract | DAG 前驱关系、attempt、deadline、retry、effect 和 provenance 字段 |
 | Context 与 provenance | 原子 commit、active path、snapshot 读取、provenance sequence，以及系统调用的来源记录 |
-| Live Query | lifecycle generation、inode incarnation、索引调用、mutation barrier，以及 traversal/indexed 结果是否一致 |
-| Task Channel | `SQ/CQ` 协议、single issuer、cancel、backpressure、resync、TASK route、claim/complete、终态 offer 确认和唯一 CQE |
+| Live Query | lifecycle generation、inode incarnation、批量登记前缀、零订阅快速路径、typed `FILE_QUERY` 入口、mutation barrier，以及 traversal/indexed 结果是否一致 |
+| Task Channel | `SQ/CQ` 协议、cancel、backpressure、resync、128 字节动态描述符、父子授权包含关系、任务图环路拒绝、多子任务、claim/complete、终态 offer 和唯一 CQE |
 | 工作流调度 | 资源账户、scheduler model、阻塞唤醒和资源记账 |
-| Console 与 Nexus | 串口消息、本地 socket、controller/observer、任意用户任务、三工具自主选择、Task Channel 委派、Guest artifact、工作区结果与运行记录协议 |
-| Nexus Host 工作区 | 显式 root、版本化 manifest、候选对象约束、stale 重启、有界搜索与分段读取，以及在线/replay 使用相同 Guest 工具历史 |
+| Console 与 Nexus | 串口消息、本地 socket、任意用户任务、7 项 brokered 工具、动态 Agent 配置、Task/Artifact、结构化摘要、工作区结果与真实 Guest 开发证据 |
+| Context Artifact 与预测 | seal/bind/share/release、数量/字节/读取额度、父任务接纳校验、private/team summary、16 项转移表、Host hint 和 hit/miss/cancel/denied 计数 |
+| Nexus Host 工作区 | 显式 root、版本化 manifest、第一次请求空 generation、稳定窗口复用键、`BUILDING/READY/STALE`、stale 重启、有界搜索与分段读取，以及在线/replay 使用相同 Guest 工具历史 |
 | 双平台工具 | 普通 uCore 与 AgentOS-uCore 的状态提取、结果比较和来源清单 |
 
 每项自测都会自行构造输入。测试失败时会直接列出缺失字段、错误的状态变化或有问题的源码调用点。
@@ -81,7 +82,7 @@ make local-host-selftests
 make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-完整测试先把 22 个 Guest 程序编入用户镜像。随后，每个场景都会重新构建内核并独立启动 QEMU。全部通过后输出：
+完整测试先把当前 Agent Guest 程序编入用户镜像。随后，每个场景都会重新构建内核并独立启动 QEMU。全部通过后输出：
 
 ```text
 [agent-tests] all Agent-OS uCore checks passed
@@ -94,15 +95,18 @@ make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 | Agent 身份与 lifecycle | `agentsecurity_ucore`、`agenttrust_ucore`、`agentscope_ucore` | 可信映像、角色创建、能力逐级收紧、文件访问范围隔离、lifecycle generation 和退出清理 |
 | Context 与 provenance | `agentfinal_ucore` | commit lane、snapshot/detail、active path、rollback、FIFO 淘汰、timeline 和 provenance graph |
 | Tool 与 Execution Contract | `agenttoolabi_ucore`、`agentcontract_ucore`、`agentllm_ucore` | schema、`V1/V2/V3 ABI`、DAG 前驱、attempt、deadline、retry、effect 和 `LLM` envelope |
-| Live Query | `agentfs_ucore`、`agentscan_ucore`、`agentbench_ucore` | inode incarnation、metadata mutation、traversal/indexed 结果一致、typed watch 和 workload 计数 |
+| Live Query | `agentfs_ucore`、`agentscan_ucore`、`agentbench_ucore` | inode incarnation、批量 Metadata 状态与权限、metadata mutation、traversal/indexed 结果一致、typed watch、零订阅快速路径和 workload 计数 |
 | Event Loop | `agentloop_ucore`、`blocking_semantics_ucore` | wait publication 原子性、heartbeat、广播隔离、cancel 和定点唤醒 |
 | 工作流调度 | `agentsched_ucore`、`agent_eevdf_ucore`、`agentconflict_ucore` | 多个工作流并行推进、`EEVDF` 服务量、唤醒探针和冲突处理 |
-| Task Channel | `agenttask_ucore` | Batch、Scalar V3、`SQ/CQ`、terminal `CQE`、backpressure、resync、UTF-8 快照导入、OWNED/BORROWED 生命周期、fd transaction pin、重复 `cancel` 和 hard deadline |
+| Task Channel | `agenttask_ucore` | Batch、Scalar V3、`SQ/CQ`、128 字节动态描述符、多子任务图、terminal `CQE`、backpressure、resync、快照导入、重复 `cancel` 和 hard deadline |
+| 通用 Agent、Artifact 与预测 | `agentmulti_ucore` | runtime capability/tool 子集、Artifact seal/bind/share/SHA-256、两次观察后预测、Host hint 与 hit 计数 |
 | VFS、结果发布与资源 | `agentvfs_ucore`、`agentpublish_ucore`、`iobudget_ucore`、`usersafety_ucore` | `fstat` 后重新授权、I/O 来源、结果文件原子接入、同名不覆盖、非法发布零副作用和资源回收 |
 | 综合运行 | `labdemo_ucore`、`ch8_cow_ucore` | 三个 Agent 协作、元数据、Context、时间线和基础 `COW` 行为 |
 | 赛题五项综合测试 | `agenteval_ucore` | 在同一 Guest 中依次走过 Agent 创建与 Context、结构化工具、上下文路径、文件查询和 Agent Loop，并由 Host 确认挑战值与预期输出 |
 
 以 `agentfinal_ucore` 为例，测试必须同时看到 `context_commit_lane=1 sequence=1..3 hash=1`、rollback、active path、FIFO 和只读映射等标志行。`agentcontract_ucore` 还要检查 DAG、provenance、planned effect、deadline 和资源归零标志。完成行只表明进程已经收尾，前面的标志行才表明待测功能已经运行。
+
+批量 Metadata 回归在 `agentfs_ucore` 中提交 `OK、BAD_PARAM、OK、CONFLICT、NOT_FOUND、OK` 六项，核对有序状态、失败后继续、已提交项不撤销、状态数组守卫、参数预检查、内存区重叠拒绝和同生命周期索引复用。`agentscan_ucore` 验证单批次产生 `ENTER -> UPDATE -> LEAVE`，并检查通用 clear 保留 Typed Watch、通用 `FILE_QUERY` 工具入口被拒绝以及 typed 订阅可以移除后重装。`agentsecurity_ucore` 还确认 Sentinel 与普通进程无法借批量接口取得 Metadata 写权限，拒绝路径不会改动状态数组。
 
 ### 4.2 单独运行一个场景
 
@@ -198,23 +202,25 @@ make agentos-nexus-replay TOOLPREFIX=riscv64-linux-gnu-
 
 Console replay 检查脚本化多轮会话中 `query_file`、`echo` 和 `send_message` 的工具结果，以及审批记录、本次启动的内核时间线和正常关闭。
 
-Nexus replay 是固定的协议交互回归。它接受“不用工具直接回答”和“模型自行选择工具”两类路径；对后者逐轮检查模型只返回一个工具调用或最终答案，不把回放数据中的顺序、调用次数或业务结论当成 runtime 策略。公开表面只包含 `search_files`、`read_file` 和 `inspect_system` 三个通用只读工具，也不要求在同一次回归中巡游全部工具。
+Nexus replay 是固定的协议交互回归。它接受“不用工具直接回答”和“模型自行选择工具”两类路径；对后者逐轮检查模型只返回一个工具调用或最终答案，不把回放数据中的顺序、调用次数或业务结论写入 runtime 策略。Tool Registry 当前包含 33 项，其中 7 项 brokered 工具覆盖搜索、读取、Guest 状态、写入、补丁、构建和运行；普通内核 V2/V3 对这些条目返回 `BROKER_REQUIRED`。
 
-child Task 由 Coordinator 通过真正的内核 Task Channel `delegate_task` 交给 Research 或 System。回归检查 56 字节 descriptor、`AGENT_ARTIFACT_TASK` resource、目标 claim/complete、结果 artifact 和唯一 terminal CQE，也确认 self delegation 与让同一活动端点同时成为 owner/target 的组合被拒绝。任务在 claim 后遇到 cancel、deadline、owner 退出或生命周期关闭时，测试覆盖 `RETRY/CLAIMED` offer、清理预绑定结果、`ACK_TERMINAL` 准确回传，以及更高 generation 的 `TIMEOUT` offer 不会重跑业务。
+开发回放读取 [`ci/agentos-nexus-dev-replay.jsonl`](../ci/agentos-nexus-dev-replay.jsonl)，依次重放写入、失败编译、修补、成功构建以及 `normal/invalid/failure` 三类 Guest 结果。检查器确认失败构建不能产生有效 build id，修补会清空旧运行证据，三类结果必须绑定同一个最新 source revision 与 build id，并且 fixture 被完整消费。真实 DeepSeek 计算器任务还启动了 3 个独立 Guest：`12 + 5` 得到 `17/exit 0`，`12 + x` 得到语法错误/exit 1，`12 / 0` 得到除零错误/exit 1；证据索引保存在 [`ci/agentos-nexus-dev-evidence.json`](../ci/agentos-nexus-dev-evidence.json)。
+
+原生 Task Channel 回归检查 128 字节 descriptor、`AGENT_ARTIFACT_TASK` resource、目标 claim/complete、结果 Artifact 和唯一 terminal CQE。描述符覆盖 parent task、目标/输入 Artifact、所需 capability、允许工具、workspace revision、预算、deadline 和结果类型；测试确认父子授权必须满足包含关系，self delegation 与任务图环路被拒绝，多个互不依赖的子任务可以并行。任务在 claim 后遇到 cancel、deadline、owner 退出或生命周期关闭时，测试覆盖 `RETRY/CLAIMED` offer、清理预绑定结果、`ACK_TERMINAL` 准确回传，以及更高 generation 的 `TIMEOUT` offer 不会重跑业务。
 
 controller 取消回归使用 syscall 568 的 `REQUEST_CANCEL`，检查同一生命周期、`ORCHESTRATE`/`WAIT_CANCEL`、caller 到 owner 的 TASK route 和 owner/channel/request/slot/task/correlation 完整绑定；`OK` 只代表控制请求线性化。QUEUED 由 owner lane 终结，CLAIMED 仍需 provider cleanup ACK，PREPARING/CLAIMING 返回 `RETRY`，READY 的先到结果不被迟到取消覆盖，同一绑定可恢复丢失的 copyout。任务正文不经 `MESSAGE` 传递；Task descriptor 绑定目标身份、task type、task/correlation/parent 编号和 capsule handle。当前实现让每个 issuer 同时只保留一个未结算委派，也不承诺永久无响应的已 claim 执行者会自动收敛。
 
-Nexus 还检查 Contract `RETIRE` 从 `RETRY/RETIRING` 到 `OK/RECLAIMED` 的两阶段收敛：只有直接调用与运行引用归零后，Coordinator 才恢复 observer/Host event 输出、读取结果 artifact 并发布任务投影。CREATE 发布时会为普通 inode 操作固定引用，但不会计入阻塞的 pipe/device 控制读取；活动 Contract 中的普通 pipe write 仍须通过 IPC 副作用检查。System/Sentinel 和 Research/Investigator 的结果发布同时要求 `AGENT_CAP_ARTIFACT_WRITE`、artifact manifest permission、VFS 文件访问范围与 delegated effect lease。
+Nexus 还检查 Contract `RETIRE` 从 `RETRY/RETIRING` 到 `OK/RECLAIMED` 的两阶段收敛：只有直接调用与运行引用归零后，调用 Agent 才读取结果 Artifact 并发布任务投影。CREATE 发布时会为普通 inode 操作固定引用，但不会计入阻塞的 pipe/device 控制读取；活动 Contract 中的普通 pipe write 仍须通过 IPC 副作用检查。Artifact 发布还要同时满足 `AGENT_CAP_ARTIFACT_WRITE`、manifest permission、VFS 文件访问范围与 delegated effect lease。
 
-工作区回归从 Host 的版本化 manifest 开始：Guest 用 1 个 control inode 和最多 32 个 data-stub inode 建立 Metadata Catalog 窗口，按 4 个 stage 执行返回不截断的 Live Query，并在有界运行时内存中再次核对完整路径。control stub 的 Typed Watch 必须收到 generation `UPDATE`，旧窗口才会失效并从 cursor 0 重建。Host 搜索只能接收 Guest Catalog 选出的候选，读取必须绑定 object/path/revision；stale 结果要清空累积并重试。真实正文回到 Guest 后依次成为 Research 输入 artifact、Research 结果 artifact、TOOL Context 和模型历史。回归还覆盖 Host 对路径跳转、链接逃逸、二进制文件、缺失文件和输出上限的处理。
+工作区回归从 Host 的版本化 manifest 开始：每个工具 correlation 的第一次 MANIFEST 请求必须携带空 generation，后续请求使用本次校验的 generation。Guest 每次重新解析并摘要页面，复用键核对 lifecycle id/generation、cursor、entry count、EOF、workspace generation 和有序对象摘要。键一致且 control stub 为 `READY` 时复用现有 Catalog；重建过程必须先发布 `BUILDING` 并使旧页失效，全部批次成功后才发布 `READY`，失败则进入 `STALE` 并 reset。Host 搜索只能接收已核验候选，读取必须绑定 object/path/revision；真实正文封存为 FILE/SEARCH Artifact 后进入 TOOL Context。回归还覆盖路径跳转、链接逃逸、二进制文件、缺失文件和输出上限。
 
 跨轮测试以 Relay Agent 的 Context active path 为主线：USER、已结算 TOOL 和成功 FINAL 必须形成短 Context 节点；4 KiB 用户缓存只为仍在 active path 上的成功 USER/FINAL 对补充完整正文。测试分别覆盖映射页 direct active query、syscall 回退、缓存容量不足时按整轮淘汰、失败或取消后的路径回滚，以及 `/reset` 同时清空 Relay Context、缓存和工作区 Catalog/watch 状态。Host 测试确认中继不私建、补写或替换 Provider 请求中的对话与工具结果；在线 Provider 和固定 Replay 都直接接收 Guest 构造的消息及真实工具 artifact 投影。
 
 会话协商的上限为每轮 16 个模型决策与 32 次可重试 provider 错误。Nexus 生成请求必须保持 `max_tokens=114514`；DeepSeek V4 还要求 `thinking.type=enabled` 和 `reasoning_effort=max`。测试确认工具轮次间的 provider-private `reasoning_content` 只原样回传给 provider，不出现在 Guest、controller 或 telemetry。生成预算与公开输出界限分开：Guest 返回的最终正文仍不得超过 2048 个 UTF-8 字节。
 
-两项 replay 都会真正启动 QEMU Guest。固定数据只替换在线 provider 回复；工具执行、Context sequence、Task Channel、Metadata Catalog、Typed Watch、artifact、运行记录、controller/observer 投影和会话关闭都由本次运行产生。Nexus 的跨轮消息仍由本次 Guest 的 Context active path 和 4 KiB 用户缓存重建，Host 不额外补写历史正文或工具结果。具体操作见[运行方法](usage.md)。
+两项 replay 都会真正启动 QEMU Guest。固定数据只替换在线 provider 回复；工具执行、Context sequence、Task Channel、Metadata Catalog、Typed Watch、Artifact、运行记录和会话关闭都由本次运行产生。新的通用 Harness 测试另行检查 Agent policy 子集、动态 Task、Context Artifact Store、private/team summary 和开发完成门；`agentmulti_ucore` 在真实 Guest 中检查 runtime config、seal/bind/share 和预测 hint/hit。具体操作见[运行方法](usage.md)。
 
-Nexus 自由演示也属于交互会话测试，但目的不同。它连接在线 DeepSeek，先用 AgentOS 改进问题作为一类示例观察模型能否自己选择通用工具、读到相关实现并给出自然、有道理的结论，再用一轮基于 active Context 的追问观察跨轮延续。这里不要求答案的每个细节完全一致，也不检查预设的工具顺序；如果回答持续偏离问题，应优先调整通用 system policy、工作区读取或消息协作能力，而不是增加只服务该题目的专用模块。
+Nexus 自由演示也属于交互会话测试，但目的不同。研究任务观察模型能否自己选择通用工具、读到相关实现并延续前轮结论；开发任务观察模型能否根据编译诊断修补源码，并为具体程序制定正常输入、异常输入和关键失败路径。DeepSeek 计算器验收由模型选择单 Agent 方案，共 21 个模型轮次、20 次工具调用和一次 revision 冲突恢复，最新 build 在三个独立 Guest 中通过对应用例。答案正文不要求逐字一致，开发完成条件由构建与 Guest 证据直接决定；完整 hash 记录见 [`ci/agentos-nexus-multiagent-evidence.json`](../ci/agentos-nexus-multiagent-evidence.json)。
 
 ```bash
 make agentos-nexus-demo TOOLPREFIX=riscv64-linux-gnu-
@@ -238,15 +244,24 @@ make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 
 ## 8. 专项性能结果与数据
 
-本节汇总 Live Query、Task Channel 和 Agent Loop 三类机制的测量结果与数据入口。性能数据来自 30 次 QEMU 独立启动，串口原始输出、逐样本表、数据清单和检查结果保存在 [`one_shot_metrics/data/20260811`](../one_shot_metrics/data/20260811/)。
+本节汇总 Live Query、Task Channel 和 Agent Loop 三类机制的测量结果与数据入口。Live Query 的批量登记与复用结果来自 16 次独立 QEMU 启动，数据保存在 [`one_shot_metrics/data/20260815_catalog_batch`](../one_shot_metrics/data/20260815_catalog_batch/)；Task Channel、Agent Loop 和参数扫描数据继续保存在 [`one_shot_metrics/data/20260811`](../one_shot_metrics/data/20260811/)。
 
 | 对应机制 | 主要结果 | 对系统设计的评价 |
 | --- | --- | --- |
-| Live Query | 96 条记录上，索引核心阶段 16/16 次更快，中位加速 3.118 倍；完整流程仅 3/16 次更快，中位差值 `+13.452 毫秒` | 位图索引确实减少了核心查询的候选项，但核心窗口之外的聚合路径抵消了这部分收益；现有计时尚不能定位具体环节，需要补充分段计时 |
+| Live Query | `K=4`、96 条记录上，索引复用路径的核心阶段与完整流程均为 16/16 次更快；配对中位差分别为 `-105.668 毫秒` 和 `-89.782 毫秒` | 6 次批量调用完成一次 Catalog 构建，5 次查询中复用 4 次；检查记录数由 385 降至 5，两个路径得到相同恢复状态和结果摘要 |
 | Agent Task | 16 个同步 `ECHO` 的中位耗时：Batch `561.0 微秒`、`SQ/CQ` `1,620.5 微秒`、Scalar V3 `2,051.0 微秒` | 短同构调用优先使用 Batch；`SQ/CQ` 的设计目标是长期队列、backpressure、cancel 和唯一 terminal CQE，不是压低这组短调用的最低延迟 |
 | 工作流 EEVDF | 504 次唤醒均为 0–1 tick，1 至 4 个并发工作流的 Jain 指数中位数均不低于 0.99998 | 事件等待能够让 Agent 休眠后及时恢复，工作流级记账基本抑制线程放大；0 tick 只表示短于 10 ms 粒度，不能解释成零开销 |
 
-已有数据可以重新检查：
+数据清单、AB/BA 顺序和逐样本字段可以重新检查：
+
+```bash
+python3 docs/figures/performance/make_doc_figures.py \
+  --campaign-dir one_shot_metrics/data/20260815_catalog_batch \
+  --baseline-campaign-dir one_shot_metrics/data/20260811 \
+  --dry-run
+```
+
+旧参数扫描与 Task Channel、Agent Loop 数据仍可使用原验证器：
 
 ```bash
 python3 one_shot_metrics/validate.py \
@@ -254,7 +269,7 @@ python3 one_shot_metrics/validate.py \
   --output ../agentos-validation.json
 ```
 
-`manifest.json` 记录了 19 个 CSV 文件，共 7,498 条数据记录。`validation.json` 检查 10 类绘图输入，包括字段格式、`AB/BA` 顺序是否平衡、配对指纹、参数组合、逐操作数据是否齐全、唤醒采样和 I/O 计数范围。采集方法、统计单位和七张图表见[性能测试](performance.md)。
+当前 Live Query 清单记录 19 份采集文件及其字节数和 SHA-256，包括 16 份串口日志、逐样本 CSV、报告和摘要。`K=4` 采用 8 次 traversal-first 与 8 次 indexed-first；96 条记录由 6 个批次登记一次，总查询数为 5，复用命中 4 次。索引复用路径的核心耗时中位数为 19,499.5 微秒，遍历路径为 121,206 微秒；完整流程中位数分别为 697,806.5 与 786,683.5 微秒。采集方法、统计单位和七张图表见[性能测试](performance.md)。
 
 ## 9. 运行全部检查
 

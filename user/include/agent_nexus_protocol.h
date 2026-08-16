@@ -4,11 +4,11 @@
 #include <agent.h>
 
 /* Stable, task-independent autonomous-model request contract. */
-#define AGENT_NEXUS_AUTONOMY_CONTRACT_VERSION 4U
+#define AGENT_NEXUS_AUTONOMY_CONTRACT_VERSION 5U
 #define AGENT_NEXUS_SYSTEM_POLICY_SHA256 \
-	"395eb2871e978672c6a6a8d1485327310545e02132f39a24c5f1dec6a808d6c8"
+	"e301e096afa1d2ce83ba7bb720e84ab5b60dc6e81057fa660f4740925adb473a"
 #define AGENT_NEXUS_TOOL_CATALOG_SHA256 \
-	"b59a831f6b1337393319c2d3e2af0d3b463ffac50447c11351226dd2989c999b"
+	"d010cc337253d16fbc76e5fa3d58371dd770d8f8e1a6504a7cc4345c14f95a9f"
 
 #define AGENT_NEXUS_TASK_MAX_DEADLINE_DELTA 12000U
 
@@ -17,9 +17,12 @@ enum agent_nexus_task_type {
 	AGENT_NEXUS_TASK_INSPECT_SYSTEM = 1001,
 	AGENT_NEXUS_TASK_SEARCH_FILES = 1002,
 	AGENT_NEXUS_TASK_READ_FILE = 1003,
-	AGENT_NEXUS_TASK_RESERVED_1004 = 1004,
+	AGENT_NEXUS_TASK_WRITE_FILE = 1004,
 	AGENT_NEXUS_TASK_INSPECT_PROCESSES = 1005,
 	AGENT_NEXUS_TASK_INSPECT_CONTEXT = 1006,
+	AGENT_NEXUS_TASK_APPLY_PATCH = 1007,
+	AGENT_NEXUS_TASK_BUILD_UCORE_PROGRAM = 1008,
+	AGENT_NEXUS_TASK_RUN_UCORE_PROGRAM = 1009,
 	AGENT_NEXUS_TASK_USER_TURN = 2001,
 	AGENT_NEXUS_TASK_MODEL_REQUEST = 2002,
 	AGENT_NEXUS_TASK_APPROVAL = 2003,
@@ -168,8 +171,9 @@ struct agent_nexus_task_capsule {
 _Static_assert(sizeof(unsigned char) == 1 && sizeof(unsigned short) == 2 &&
 	       sizeof(unsigned int) == 4 && sizeof(unsigned long long) == 8,
 	       "Nexus protocol scalar widths");
-_Static_assert(AGENT_NEXUS_TASK_RESERVED_1004 == 1004,
-	       "Nexus task ABI reserved value");
+_Static_assert(AGENT_NEXUS_TASK_WRITE_FILE == 1004 &&
+	       AGENT_NEXUS_TASK_RUN_UCORE_PROGRAM == 1009,
+	       "Nexus development task ABI values");
 _Static_assert(AGENT_NEXUS_ROLE_RESERVED_4 == 4,
 	       "Nexus product role ABI reserved value");
 _Static_assert(AGENT_NEXUS_ARTIFACT_READ_RESERVED_3 == (1ULL << 3),

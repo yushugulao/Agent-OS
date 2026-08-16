@@ -361,3 +361,7 @@
 #define __NR_agent_file_publish 566
 #define __NR_agent_task_delegate_claim 567
 #define __NR_agent_task_delegate_complete 568
+#define __NR_agent_file_meta_set_batch 569
+#define __NR_agent_runtime_control 570
+#define __NR_agent_context_artifact 571
+#define __NR_agent_context_prefetch 572
