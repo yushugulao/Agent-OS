@@ -171,6 +171,7 @@
 #define SYS_adjtimex 171
 #define SYS_getpid 172
 #define SYS_getppid 173
+/* ABI vNext keeps retired syscall numbers 401, 402, 503, 504 and 512 unused. */
 #define SYS_getuid 174
 #define SYS_geteuid 175
 #define SYS_getgid 176
@@ -279,8 +280,6 @@
 #define SYS_kexec_file_load 294
 #define SYS_riscv_flush_icache 244 + 15
 #define SYS_spawn 400
-#define SYS_mailread 401
-#define SYS_mailwrite 402
 #define SYS_trace 410
 #define SYS_thread_create 460
 #define SYS_waittid 462
@@ -297,8 +296,6 @@
 #define SYS_agent_create 500
 #define SYS_agent_info 501
 #define SYS_agent_run 502
-#define SYS_agent_call 503
-#define SYS_agent_tool_list 504
 #define SYS_context_push 505
 #define SYS_context_query 506
 #define SYS_context_snapshot 507
@@ -306,7 +303,6 @@
 #define SYS_context_clear 509
 #define SYS_agent_watch 510
 #define SYS_agent_wait 511
-#define SYS_agent_heartbeat 512
 #define SYS_agent_wake 513
 #define SYS_agent_file_meta_init 514
 #define SYS_agent_file_meta_set 515

@@ -19,7 +19,6 @@ MARKERS = (
     "agentpublish_ucore: invalid_requests=1 bad_pointer=1 bad_path=1 bad_size=1 bad_abi=1 zero_namespace_side_effect=1",
     "agentpublish_ucore: publish_image=1 header=32 payload=96 eof=1",
     "agentpublish_ucore: same_scope_race=1 ok=1 duplicate=1 no_overwrite=1",
-    "agentpublish_ucore: nexus_duplicate=1 exact_readback=1 mismatch_rejected=1",
     "agentpublish_ucore: resources=1 invalid_no_leak=1 duplicate_no_leak=1 unlink_reclaimed=1",
 )
 
@@ -77,7 +76,6 @@ class AgentFilePublishGuestTests(unittest.TestCase):
         ordered = (
             "exercise_invalid_requests();",
             "exercise_same_name_race();",
-            "exercise_nexus_convergence();",
             'unlink(race_path) == 0',
             'printf("agentpublish_ucore: parent passed\\n")',
         )
@@ -90,10 +88,7 @@ class AgentFilePublishGuestTests(unittest.TestCase):
         self.assertIn("AGENT_STATUS_BAD_VERSION", self.source)
         self.assertIn("AGENT_STATUS_BAD_PARAM", self.source)
         self.assertIn("AGENT_STATUS_DUPLICATE", self.source)
-        self.assertEqual(
-            self.source.count("agent_nexus_artifact_publish_owned("), 3
-        )
-        self.assertIn("agent_nexus_artifact_read_verify(", self.source)
+        self.assertNotIn("agent_nexus", self.source)
         self.assertNotIn("powercut=1", self.source)
 
 

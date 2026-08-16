@@ -41,11 +41,6 @@ class AgentLiveQueryMutationTests(unittest.TestCase):
         with self.assertRaises(CONTRACT.ContractError):
             CONTRACT.validate_sources(mutated)
 
-    def test_autoscan_cannot_enter_resident_index(self) -> None:
-        self.rejected(
-            "catalog", "(meta->flags&AGENT_FILE_META_F_AUTOSCAN)==0", "1"
-        )
-
     def test_query_must_intersect_live_bitmap(self) -> None:
         self.rejected("catalog", "agent_catalog_live_query_bits[word]&visible", "visible")
 

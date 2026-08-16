@@ -45,7 +45,7 @@ static void make_op(struct agent_op *op, int tool, uint64 request_id,
 		    uint64 arg0, const char *payload)
 {
 	memset(op, 0, sizeof(*op));
-	op->version = AGENT_CALL_VERSION;
+	op->version = AGENT_OP_VERSION;
 	op->tool_id = tool;
 	op->request_id = request_id;
 	op->arg0 = arg0;

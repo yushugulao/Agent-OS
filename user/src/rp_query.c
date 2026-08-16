@@ -57,7 +57,7 @@ static int run_kernel_query(void)
 	}
 
 	memset(&kernel_query_op, 0, sizeof(kernel_query_op));
-	kernel_query_op.version = AGENT_CALL_VERSION;
+	kernel_query_op.version = AGENT_OP_VERSION;
 	kernel_query_op.tool_id = AGENT_TOOL_QUERY_FILE;
 	kernel_query_op.request_id = 4301;
 	strcpy(kernel_query_op.payload,

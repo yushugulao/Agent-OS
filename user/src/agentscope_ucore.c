@@ -1001,7 +1001,7 @@ run_scoped_action(int receive_own_event)
 	struct agent_result result;
 
 	memset(&op, 0, sizeof(op));
-	op.version = AGENT_CALL_VERSION;
+	op.version = AGENT_OP_VERSION;
 	op.tool_id = AGENT_TOOL_ACTION_COMMIT;
 	op.request_id = COMMON_ACTION_REQUEST;
 	strcpy(op.payload,

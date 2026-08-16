@@ -192,8 +192,6 @@ check_case_contract() {
 		require_exact_case_marker "${log_file}" \
 			"agentpublish_ucore: same_scope_race=1 ok=1 duplicate=1 no_overwrite=1"
 		require_exact_case_marker "${log_file}" \
-			"agentpublish_ucore: nexus_duplicate=1 exact_readback=1 mismatch_rejected=1"
-		require_exact_case_marker "${log_file}" \
 			"agentpublish_ucore: resources=1 invalid_no_leak=1 duplicate_no_leak=1 unlink_reclaimed=1"
 		;;
 	agentfinal_ucore)
@@ -254,19 +252,15 @@ check_case_contract() {
 		require_exact_case_marker "${log_file}" \
 			"agenttoolabi_ucore: optional_schema=1 heartbeat_unified=1"
 		require_exact_case_marker "${log_file}" \
-			"agenttoolabi_ucore: schema_generated=1 validated=28"
-		require_exact_case_marker "${log_file}" \
-			"agenttoolabi_ucore: v1_compatible=1"
+			"agenttoolabi_ucore: schema_generated=1 validated=33"
 		require_exact_case_marker "${log_file}" \
 			"agenttoolabi_ucore: v2_typed_reordered=1"
 		require_exact_case_marker "${log_file}" \
-			"agenttoolabi_ucore: key_capacity=1 llm_response_v1_v2=1 buffer_sentinel=1"
+			"agenttoolabi_ucore: key_capacity=1 llm_response_v2=1 buffer_sentinel=1"
 		require_exact_case_marker "${log_file}" \
 			"agenttoolabi_ucore: strict_negative_matrix=1"
 		;;
 	agentsecurity_ucore)
-		require_exact_case_marker "${log_file}" \
-			"agentsecurity_ucore: legacy_mail_fail_closed=1"
 		require_exact_case_marker "${log_file}" \
 			"agentsecurity_ucore: message_route_lifecycle=1"
 		require_exact_case_marker "${log_file}" \

@@ -31,9 +31,6 @@ int munmap(void *start, unsigned long long len);
 int wait(int *);
 int spawn(const char *file);
 int pipe(void *p);
-/* 退役兼容 ABI，两个调用恒返回 -1。 */
-int mailread(void *buf, int len);
-int mailwrite(int pid, void *buf, int len);
 int fstat(int fd, Stat *st);
 int sys_linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath,
 	       unsigned int flags);

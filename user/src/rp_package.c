@@ -63,7 +63,7 @@ static int run_kernel_package_stage(void)
 	}
 
 	memset(&package_kernel_op, 0, sizeof(package_kernel_op));
-	package_kernel_op.version = AGENT_CALL_VERSION;
+	package_kernel_op.version = AGENT_OP_VERSION;
 	package_kernel_op.tool_id = AGENT_TOOL_ECHO;
 	package_kernel_op.request_id = 4701;
 	strcpy(package_kernel_op.payload, "package-provenance");

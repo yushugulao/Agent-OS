@@ -35,7 +35,7 @@ static int collab_waiter(int parent_pid, int gate_fd)
 		return 1;
 	}
 	memset(&collab_op, 0, sizeof(collab_op));
-	collab_op.version = AGENT_CALL_VERSION;
+	collab_op.version = AGENT_OP_VERSION;
 	collab_op.tool_id = AGENT_TOOL_ACTION_COMMIT;
 	collab_op.request_id = 2100;
 	strcpy(collab_op.payload,
@@ -139,7 +139,7 @@ static int run_kernel_collaboration(void)
 		return -1;
 
 	memset(&collab_op, 0, sizeof(collab_op));
-	collab_op.version = AGENT_CALL_VERSION;
+	collab_op.version = AGENT_OP_VERSION;
 	collab_op.tool_id = AGENT_TOOL_CAPABILITY_CHECK;
 	collab_op.request_id = 2102;
 	strcpy(collab_op.payload, "action_commit");

@@ -575,10 +575,16 @@ def validate_execution_contract(sources: dict[str, str]) -> None:
         (
             "p->resource_slot_reserved ?",
             "RESOURCE_CHARGE_RESERVED : RESOURCE_CHARGE_ORDINARY",
+            "delegated_task_node =",
             "!envelope_nonzero",
             "node->charge_class != expected_class",
         ),
         "class/envelope checks are no longer part of node validation",
+    )
+    require(
+        build,
+        "(!envelope_nonzero && !delegated_task_node)",
+        "only native delegated Task nodes may omit the static phase envelope",
     )
 
     predecessors = function_body(
@@ -1023,7 +1029,6 @@ def validate_execution_contract(sources: dict[str, str]) -> None:
     for syscall_id in (
         "SYS_write",
         "SYS_openat",
-        "SYS_mailwrite",
         "SYS_pipe2",
         "SYS_clone",
         "SYS_execve",

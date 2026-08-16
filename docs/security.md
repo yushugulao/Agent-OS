@@ -225,7 +225,7 @@ SQE 可以用 BORROWED 别名引用同一 `{slot, type, generation}`。BORROWED 
 
 claim 后的 delegated effect lease 不是 workflow 级绕过。它精确绑定执行者 PID/Agent/`control_id`、主线程 identity generation 和 channel/request/slot 代次；Contract 允许的 helper 也必须匹配内核登记的 TID 与 identity generation。每次直接作用只能申请 Contract manifest side-effect mask 的子集，并在调用期间持有 lease 引用。正常 complete、最新终态 offer 的 cleanup ACK，或目标进程完成 quiescence 后，内核会等活动引用全部归零再撤销 lease；该机制不承诺强制终止永久无响应的执行者。
 
-目标通常以 `flags == 0` 调用 `agent_task_delegate_complete()`。如果 claim 之后的截止时间、取消、owner 退出或生命周期关闭先取得终态优先级，内核返回 `RETRY`、`CLAIMED` 及带 generation 的终态 offer。目标必须先使预绑定输出失效，再以相同业务状态、`ACK_TERMINAL` 和准确的 offer 字段确认；若 offer 升级为更高 generation 的 `TIMEOUT`，就再次清理并确认。内核只在确认最新 offer 后把任务置为 `READY`，再由 owner 的 Task Channel 发布唯一 terminal CQE。V1 依赖执行者协作，不会强制终止 claim 后永久无响应的 provider。
+目标通常以 `flags == 0` 调用 `agent_task_delegate_complete()`。如果 claim 之后的截止时间、取消、owner 退出或生命周期关闭先取得终态优先级，内核返回 `RETRY`、`CLAIMED` 及带 generation 的终态 offer。目标必须先使预绑定输出失效，再以相同业务状态、`ACK_TERMINAL` 和准确的 offer 字段确认；若 offer 升级为更高 generation 的 `TIMEOUT`，就再次清理并确认。内核只在确认最新 offer 后把任务置为 `READY`，再由 owner 的 Task Channel 发布唯一 terminal CQE。当前委派协议依赖执行者协作，不会强制终止 claim 后永久无响应的 provider。
 
 同一生命周期的 controller 可以在 syscall 568 上设置 `REQUEST_CANCEL`。它必须准确持有 owner/channel/request/slot/task/correlation 绑定，同时具备 `ORCHESTRATE`、`WAIT_CANCEL` 和 caller 到 owner 的 TASK route。`OK` 只确认取消控制已经线性化；QUEUED 由 owner lane 终结，CLAIMED 仍要由执行者处理终态 offer 并完成 cleanup ACK。PREPARING/CLAIMING 返回 `RETRY`，已经 READY 或终结的请求返回 `STALE`，先到的结果不会被迟到取消覆盖；同一绑定可重试丢失的结果 copyout。
 

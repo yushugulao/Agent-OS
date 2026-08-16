@@ -276,8 +276,6 @@
 #define AGENT_CAP_WORKSPACE_WRITE (1ULL << 14)
 #define AGENT_CAP_PREFETCH        (1ULL << 15)
 #define AGENT_CAP_KNOWN_ALL ((1ULL << 16) - 1ULL)
-#define AGENT_CAP_RECOVER_STAGE AGENT_CAP_ACTION_WRITE
-#define AGENT_CAP_REPORT_WRITE  AGENT_CAP_ARTIFACT_WRITE
 #define AGENT_CAP_DEPENDENCY_UPDATE AGENT_CAP_META_WRITE
 #define AGENT_DEP_SLOT(n) (1ULL << ((n) & 63))
 
@@ -371,10 +369,6 @@ struct agent_info {
 	uint64 timeline_wait_timeout_count;
 	uint64 filesystem_domain;
 	uint64 filesystem_capability_mask;
-	/* 退役 ABI 字段，内核恒填零。 */
-	uint64 legacy_mailbox_allocated;
-	uint64 legacy_mailbox_pages;
-	uint64 legacy_mailbox_queue_count;
 	uint64 file_scan_deferred;
 	uint64 file_scan_failures;
 };
@@ -800,8 +794,6 @@ int agent_ledger_snapshot(struct agent_ledger_summary *summary);
 int agent_run(struct agent_op *ops, struct agent_result *results, int count, uint64 flags);
 int agent_workflow_fence(const struct agent_workflow_fence_request *request,
 			 struct agent_workflow_fence_receipt *receipt);
-int agent_call(struct agent_request *req, struct agent_response *resp);
-int agent_tool_list(struct agent_tool_desc *out, int max);
 int sys_tool_call(struct agent_request_v2 *req, struct agent_response_v2 *resp);
 int tool_call_v3(struct agent_request_v3 *req, struct agent_response_v3 *resp);
 int sys_tool_list(struct agent_tool_desc_v2 *out, int max);
@@ -827,12 +819,7 @@ int agent_live_watch(struct agent_file_live_watch *watch);
 int agent_live_unwatch(struct agent_file_live_watch *watch);
 int agent_wait(struct agent_event *event, int timeout_ticks);
 int agent_wait_cancel(int pid, const char *reason);
-int agent_heartbeat(int interval_ticks);
 int agent_heartbeat_configure(uint64 interval_ticks);
-int sys_agent_heartbeat_set(uint64 interval_ticks);
-int sys_agent_heartbeat_stop(void);
-int agent_heartbeat_set(uint64 interval_ticks);
-int agent_heartbeat_stop(void);
 #ifdef WAIT_ATOMIC_TEST_PROFILE
 int wait_atomic_test_arm(uint operation);
 struct wait_atomic_test_receipt;
@@ -844,7 +831,6 @@ int wait_atomic_test_deadline_observe(
 #endif
 int agent_wake(int pid, struct agent_event *event);
 int agent_metadata_init(void);
-int agent_file_meta_init(void);
 int agent_file_meta_set(struct agent_file_meta *meta);
 int agent_file_meta_set_batch(struct agent_file_meta *items, int *statuses,
 			      int count, uint64 flags);

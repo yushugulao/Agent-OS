@@ -50,8 +50,6 @@ static struct agent_context_record final_manual;
 static struct agent_file_query final_query;
 static struct agent_file_query_result final_query_result;
 static struct agent_event final_event;
-static struct agent_request final_req;
-static struct agent_response final_resp;
 static volatile int context_lane_slow_ready;
 static volatile int context_lane_slow_done;
 static struct agent_result context_lane_slow_result;
@@ -62,18 +60,6 @@ static void check(int ok, const char *msg)
 		printf("agentfinal_ucore: check failed: %s\n", msg);
 		exit(1);
 	}
-}
-
-static int text_contains(const char *text, const char *needle)
-{
-	int n = strlen(needle);
-
-	if (n == 0)
-		return 1;
-	for (int i = 0; text[i]; i++)
-		if (strncmp(text + i, needle, n) == 0)
-			return 1;
-	return 0;
 }
 
 #ifdef AGENT_CONTEXT_SYNC_TEST_PROFILE
@@ -600,7 +586,7 @@ static int timeline_after_cursor(struct agent_timeline_record *record,
 static void make_echo(struct agent_op *op, uint64 id, const char *text)
 {
 	memset(op, 0, sizeof(*op));
-	op->version = AGENT_CALL_VERSION;
+	op->version = AGENT_OP_VERSION;
 	op->tool_id = AGENT_TOOL_ECHO;
 	op->request_id = id;
 	op->arg0 = id;
@@ -661,7 +647,7 @@ static void context_lane_slow_worker(void *unused)
 	context_lane_slow_ready = 1;
 	__sync_synchronize();
 	memset(&op, 0, sizeof(op));
-	op.version = AGENT_CALL_VERSION;
+	op.version = AGENT_OP_VERSION;
 	op.tool_id = AGENT_TOOL_ACTION_COMMIT;
 	op.request_id = 7202;
 	strcpy(op.payload, "align");
@@ -1042,97 +1028,11 @@ static void check_context_sync_failure_atomicity(void)
 }
 #endif
 
-static void check_legacy_name_protocol(void)
-{
-	struct agent_request *req = &final_req;
-	struct agent_response *resp = &final_resp;
-
-	memset(req, 0, sizeof(*req));
-	memset(resp, 0, sizeof(*resp));
-	req->version = AGENT_CALL_VERSION;
-	req->request_id = 7101;
-	strcpy(req->tool_name, "echo");
-	strcpy(req->payload_key, "payload");
-	req->payload_type = AGENT_PARAM_STRING;
-	strcpy(req->arg0_key, "arg0");
-	req->arg0_type = AGENT_PARAM_UINT64;
-	strcpy(req->arg1_key, "arg1");
-	req->arg1_type = AGENT_PARAM_UINT64;
-	req->arg0 = 21;
-	req->arg1 = 22;
-	strcpy(req->payload, "legacy-name");
-	check(agent_call(req, resp) == 0, "legacy name echo");
-	check(resp->status == AGENT_STATUS_OK, "legacy echo status");
-	check(strcmp(resp->result, "legacy-name") == 0, "legacy echo text");
-
-	memset(req, 0, sizeof(*req));
-	memset(resp, 0, sizeof(*resp));
-	req->version = AGENT_CALL_VERSION;
-	req->request_id = 7102;
-	strcpy(req->tool_name, "pid_info");
-	check(agent_call(req, resp) == 0, "legacy name pid");
-	check(resp->status == AGENT_STATUS_OK, "legacy pid status");
-	check(resp->value2 == 1, "legacy pid agent");
-
-	memset(req, 0, sizeof(*req));
-	memset(resp, 0, sizeof(*resp));
-	req->version = AGENT_CALL_VERSION;
-	req->request_id = 7103;
-	strcpy(req->tool_name, "query_file");
-	strcpy(req->payload_key, "path");
-	req->payload_type = AGENT_PARAM_STRING;
-	strcpy(req->payload, "r42align");
-	check(agent_call(req, resp) == 0, "legacy name query_file");
-	check(resp->status == AGENT_STATUS_OK, "legacy query_file status");
-	check(resp->value1 != 0, "legacy query_file inum");
-
-	memset(req, 0, sizeof(*req));
-	memset(resp, 0, sizeof(*resp));
-	req->version = AGENT_CALL_VERSION;
-	req->request_id = 7104;
-	strcpy(req->tool_name, "read_file_digest");
-	strcpy(req->payload_key, "selector");
-	req->payload_type = AGENT_PARAM_STRING;
-	strcpy(req->payload, "r42align");
-	check(agent_call(req, resp) == 0, "legacy name digest");
-	check(resp->status == AGENT_STATUS_OK, "legacy digest status");
-	check(resp->value0 >= resp->value1, "legacy digest size");
-
-	memset(req, 0, sizeof(*req));
-	memset(resp, 0, sizeof(*resp));
-	req->version = AGENT_CALL_VERSION;
-	req->request_id = 7105;
-	strcpy(req->tool_name, "dependency_update");
-	strcpy(req->payload_key, "selector");
-	req->payload_type = AGENT_PARAM_STRING;
-	strcpy(req->payload,
-	       "source=report;target=align;namespace=lab-gene-x;run_id=RUN-042");
-	check(agent_call(req, resp) == 0, "legacy dependency update");
-	check(resp->status == AGENT_STATUS_OK, "legacy dependency status");
-	check(strcmp(resp->result, "dependency_updated") == 0,
-	      "legacy dependency text");
-
-	memset(req, 0, sizeof(*req));
-	memset(resp, 0, sizeof(*resp));
-	req->version = AGENT_CALL_VERSION;
-	req->request_id = 7106;
-	strcpy(req->tool_name, "dependency_query");
-	strcpy(req->payload_key, "label");
-	req->payload_type = AGENT_PARAM_STRING;
-	strcpy(req->payload,
-	       "label=report;namespace=lab-gene-x;run_id=RUN-042");
-	check(agent_call(req, resp) == 0, "legacy dependency query");
-	check(resp->status == AGENT_STATUS_OK, "legacy dependency query status");
-	check(text_contains(resp->result, "align"),
-	      "legacy dependency query result");
-	printf("agentfinal_ucore: legacy_name_protocol=1\n");
-}
-
 static void make_generic_op(struct agent_op *op, int tool_id, uint64 id,
 			    uint64 arg0, const char *payload)
 {
 	memset(op, 0, sizeof(*op));
-	op->version = AGENT_CALL_VERSION;
+	op->version = AGENT_OP_VERSION;
 	op->tool_id = tool_id;
 	op->request_id = id;
 	op->arg0 = arg0;
@@ -1523,7 +1423,7 @@ static void check_timeline_wait(void)
 
 	check(agent_watch(AGENT_EVENT_TIMER, "heartbeat") == 0,
 	      "timeline wait timer watch");
-	check(agent_heartbeat(1) == 0, "timeline wait heartbeat");
+	check(agent_heartbeat_configure(1) == 0, "timeline wait heartbeat");
 	set_timeline_wait_future_filter(AGENT_TIMELINE_SOURCE_MASK_CONTEXT,
 					0);
 	check(agent_info(&final_info) == 0,
@@ -1560,7 +1460,7 @@ static void check_timeline_wait(void)
 	}
 	check(consumed == AGENT_STATUS_TIMEOUT, "timeline wait gate drain");
 
-	check(agent_heartbeat(8) == 0, "timeline wait heartbeat restart");
+	check(agent_heartbeat_configure(8) == 0, "timeline wait heartbeat restart");
 	set_timeline_wait_future_filter(AGENT_TIMELINE_SOURCE_MASK_AUDIT,
 					AGENT_EVENT_TIMER);
 	check(agent_info(&final_info) == 0,
@@ -1594,7 +1494,7 @@ static void check_timeline_wait(void)
 	check(consumed == AGENT_STATUS_TIMEOUT,
 	      "timeline wait drain before read");
 
-	check(agent_heartbeat(8) == 0, "timeline read heartbeat restart");
+	check(agent_heartbeat_configure(8) == 0, "timeline read heartbeat restart");
 	set_timeline_wait_future_filter(AGENT_TIMELINE_SOURCE_MASK_AUDIT,
 					AGENT_EVENT_TIMER);
 	check(agent_info(&final_info) == 0,
@@ -1845,7 +1745,6 @@ static void run_agent_child(void)
 	      "dependency target metadata");
 	printf("agentfinal_ucore: metadata_dependency_query=1 source=align target=analyze transitive=report stage_index=1\n");
 	check_generic_action_and_llm();
-	check_legacy_name_protocol();
 
 	check(agent_watch(AGENT_EVENT_MESSAGE, "self") == 0, "watch");
 	memset(event, 0, sizeof(*event));

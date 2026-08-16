@@ -91,15 +91,11 @@ def validate_sources(sources: dict[str, str]) -> None:
     user_h = sources["user_h"]
     user_syscall = sources["user_syscall"]
     file_state = sources["file_state"]
-    # Only explicitly registered, flags==0 records enter the resident index.
+    # Only explicitly registered records enter the resident index; retired
+    # persistence/autoscan bits are rejected before the Catalog is reached.
     require(catalog, "agent_catalog_live_query_bits", "missing resident live-query bitmap")
     derived_add = function(catalog, "agent_catalog_derived_add")
     derived_remove = function(catalog, "agent_catalog_derived_remove")
-    require(
-        derived_add,
-        "(meta->flags&AGENT_FILE_META_F_AUTOSCAN)==0",
-        "autoscan rows can enter the live-query index",
-    )
     require(
         derived_add,
         "agent_catalog_bitmap_set(agent_catalog_live_query_bits,slot)",

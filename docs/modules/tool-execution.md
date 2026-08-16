@@ -39,7 +39,7 @@ static const struct param_rule rules[] = {
 
 系统启动时会自检这张表，包括工具编号是否连续、名称是否重复、参数写入位置是否重叠，以及 provenance 和副作用位是否合法。随后，内核以 `agentos.tool.manifest.v1` 作为摘要域，对工具编号、标志、能力位、provenance 规则、副作用、名称和 schema 计算内容摘要，生成 `schema_digest`。Execution Contract 通过这份摘要确认工具语义没有发生变化。`delegate_task` 是 syscall-only 条目：它参与 Registry、Contract 和 Task Channel 结算，但不能通过普通 V2/V3 调用直接执行。
 
-接口清理保留了旧编号，避免工具清单发生错位。`rerun_stage`、`write_report` 与 `ctx_stat` 标记为 `AGENT_TOOL_F_DEPRECATED`，调用时返回 `AGENT_STATUS_DEPRECATED`。现有功能分别由 `action_commit`、`artifact_update` 与 `context_status` 承担。Context 状态读取、Heartbeat 配置和 Metadata 初始化使用 `context_status`、`heartbeat_configure`、`metadata_init` 三个规范名称；旧 C 包装函数只负责兼容已有程序。
+接口清理保留了旧工具编号，避免工具清单发生错位。`rerun_stage`、`write_report` 与 `ctx_stat` 标记为 `AGENT_TOOL_F_DEPRECATED`，调用时返回 `AGENT_STATUS_DEPRECATED`。现有功能分别由 `action_commit`、`artifact_update` 与 `context_status` 承担。Context 状态读取、Heartbeat 配置和 Metadata 初始化使用 `context_status`、`heartbeat_configure`、`metadata_init` 三个规范名称。ABI vNext 已删除旧 C 包装、恒零 mailbox 字段以及 V1 请求结构；退役系统调用号保留空位，不进入分派。
 
 `apply_patch` 与 `write_file` 是两个独立的 `AGENT_TOOL_F_BROKERED` 条目。它们要求 `AGENT_CAP_WORKSPACE_WRITE`，声明文件副作用，并采用 `artifact_handle:uint64,expected_rev:uint64,path:string` schema。共享的 [`agent_workspace_mutation_request`](../../include/agent_workspace_mutation_abi.h) 进一步绑定 workflow lifecycle、Host manifest object、预期 revision、内容 artifact、内容长度与 SHA-256。普通 V2/V3 执行返回 `AGENT_STATUS_BROKER_REQUIRED`；Nexus 将同名能力放入模型可见目录，再由 Host 开发 broker 核对会话 root、固定路径模式、SHA-256 revision 和内容上限。写入使用同目录临时文件、数据同步、原子替换与目录同步，receipt 返回旧 revision、新 revision、字节数和提交状态。
 
@@ -51,7 +51,6 @@ AgentOS 保留三代工具接口：
 
 | 接口 | 请求布局 | 用途 |
 | --- | --- | --- |
-| V1 `agent_call()` | 192 字节固定结构 | 兼容已有用户程序 |
 | V2 `tool_call()` | 72 字节请求头，后接带类型信息的键值参数 | 在运行时选择工具和参数 |
 | V3 `tool_call_v3()` | V2 前缀，后接 Execution Contract 绑定信息 | 执行已经登记的依赖节点 |
 
@@ -161,7 +160,7 @@ agent_execution_append_terminal(p, op, res, tick, status, ...);
 
 最后一步在 Context commit lane 记录序号、工具状态和结果。受 Execution Contract 约束的调用还会得到工作流记录票号，并更新对应节点。若取消请求在副作用检查之前到达，节点可以进入 `CANCELLED`；工具已经开始修改系统状态后，则按实际 terminal state 结算。
 
-Nexus 的 artifact 由 Guest Runtime 组织，再通过 `agent_file_publish()` 把 header 与 payload 一次交给内核。VFS 在未命名 inode 中写完全部字节并完成第一阶段 checkpoint，随后只做一次正式目录接入，再以 attach-only checkpoint 固定目录项。这样，正式路径要么不存在，要么能够读到完整内容；同名发布不会覆盖先到的文件。对于 `DUPLICATE` 和 `INDETERMINATE`，Nexus 回读正式路径，只有 header、payload 和 EOF 都与本次请求严格一致时才按幂等成功处理。Context、metadata 与 Workflow Fence 继续用 artifact handle、lifecycle generation 和 terminal record 对齐。
+Guest Runtime 通过 `agent_file_publish()` 把 header 与 payload 一次交给内核。VFS 在未命名 inode 中写完全部字节并完成第一阶段 checkpoint，随后只做一次正式目录接入，再以 attach-only checkpoint 固定目录项。正式路径要么不存在，要么能够读到完整内容；同名发布不会覆盖先到的文件。调用者根据 `DUPLICATE` 或 `INDETERMINATE` 处理重复和不确定结果。Context、metadata 与 Workflow Fence 继续用 artifact handle、lifecycle generation 和 terminal record 对齐。
 
 ## 三种调用方式
 
@@ -211,7 +210,7 @@ SQE 可以把同一句柄作为 BORROWED 输入。ECHO Task Bridge 会把 UTF-8 
 
 effect-start 同时建立一项仅供本委派使用的 delegated effect lease。它绑定执行者 PID/Agent/`control_id`、主线程 identity generation 以及 channel/request/slot 代次；只有 Contract 明确允许 PROCESS 作用时，内核才会登记一个同样带 TID/generation 的 helper。直接作用的 mask 必须是 Contract manifest side-effect mask 的子集，每个进行中的调用还会固定当前委派代次。活动引用归零后，正常 complete、终态 cleanup ACK 或目标 quiescence 才结束 lease；它不能把一个 delegated task 扩张成 workflow 范围的作用权限。
 
-正常完成时，complete 使用 `flags == 0`，两个确认字段为零。若任务已经 claim，而截止时间、取消、owner 退出或生命周期关闭先取得终态优先级，内核返回 `RETRY`、`CLAIMED` 和一个 `(terminal_status, terminal_generation)` offer。执行者要先使预绑定的结果失效，再以相同业务状态、`AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL` 及原样回传的 offer 再次调用。offer 只会升级到更高 generation 的 `TIMEOUT`；出现升级时继续清理并确认，不重新运行任务。只有最新 offer 被准确确认后才返回 `OK`、`READY`，随后由 owner 的 `enter()` 产生唯一 terminal CQE。V1 不会强制终止已经 claim 后永久无响应的 provider，因此这种情况下不保证自动收敛。
+正常完成时，complete 使用 `flags == 0`，两个确认字段为零。若任务已经 claim，而截止时间、取消、owner 退出或生命周期关闭先取得终态优先级，内核返回 `RETRY`、`CLAIMED` 和一个 `(terminal_status, terminal_generation)` offer。执行者要先使预绑定的结果失效，再以相同业务状态、`AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL` 及原样回传的 offer 再次调用。offer 只会升级到更高 generation 的 `TIMEOUT`；出现升级时继续清理并确认，不重新运行任务。只有最新 offer 被准确确认后才返回 `OK`、`READY`，随后由 owner 的 `enter()` 产生唯一 terminal CQE。当前委派协议不会强制终止已经 claim 后永久无响应的 provider，因此这种情况下不保证自动收敛。
 
 同一生命周期的 controller 也可以在 complete syscall 上设置 `AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL`，以 `CANCELLED` 和零 ACK 字段提交 owner/channel/request/slot/task/correlation 的准确绑定。调用者还必须具有 `AGENT_CAP_ORCHESTRATE`、`AGENT_CAP_WAIT_CANCEL` 和 caller 到 owner 的 TASK route。`OK` 仅确认取消请求已经线性化；QUEUED 任务交给 owner lane 终结，CLAIMED 任务仍向执行者返回 `CANCELLED` 或优先级更高的 `TIMEOUT` offer，并在 cleanup ACK 后生成唯一 CQE。PREPARING/CLAIMING 返回 `RETRY`；READY 或已经终结的绑定返回 `STALE`，不改写既有 winner。相同的准确绑定可以重试一次丢失的结果 copyout。
 
@@ -222,11 +221,11 @@ terminal Context 把实际执行者写入结果字段：`value0 = (agent_id << 3
 
 | 用例 | 检查内容 | 成功标记 |
 | --- | --- | --- |
-| [`agenttoolabi_ucore.c`](../../user/src/agenttoolabi_ucore.c) | V1 与 V2 目录一致性、参数换序、未知键、重复键、类型和长度错误 | `strict_negative_matrix=1` |
+| [`agenttoolabi_ucore.c`](../../user/src/agenttoolabi_ucore.c) | V2 目录、参数换序、未知键、重复键、类型和长度错误，以及 V1 退役空号 | `strict_negative_matrix=1` |
 | [`agentcontract_ucore.c`](../../user/src/agentcontract_ucore.c) | 24 节点依赖图、schema、能力位、前驱 provenance、截止时间、重试和 Phase Lease | `replay=1 retry=1 deadline=1 phase_zero_leak=1` |
 | [`agenttask_ucore.c`](../../user/src/agenttask_ucore.c) | 队列页权限、SQ/CQ 满载、重新同步、幂等取消、截止时间、UTF-8 快照、OWNED/BORROWED 生命周期和 fd transaction pin | `resource_utf8_snapshot=1 borrowed_live=1 owned_consumed=1 release_stale=1 generation_aba=1` |
 | [`test-agent-task-channel.py`](../../scripts/test-agent-task-channel.py) | TASK descriptor、route/capability、pending/claim/complete、终态 offer 确认、唯一 CQE 和执行者归属 | `unittest: OK` |
-| [`agentpublish_ucore.c`](../../user/src/agentpublish_ucore.c) | 完整 header/payload/EOF、同名竞争、不覆盖、Nexus 幂等回读、非法请求零副作用和资源回收 | `same_scope_race=1 ok=1 duplicate=1 no_overwrite=1` |
+| [`agentpublish_ucore.c`](../../user/src/agentpublish_ucore.c) | 完整 header/payload/EOF、同名竞争、不覆盖、非法请求零副作用和资源回收 | `same_scope_race=1 ok=1 duplicate=1 no_overwrite=1` |
 
 ```bash
 make agent-uapi-check
@@ -243,14 +242,14 @@ AGENT_TEST_CASE=agentpublish_ucore make agentos-test TOOLPREFIX=riscv64-linux-gn
 
 Agent Task 性能测试使用 16 个等价 `ECHO` 操作。Batch 中位耗时为 `561.0 微秒`，Scalar V3 为 `2,051.0 微秒`，`SQ/CQ` 为 `1,620.5 微秒`。这组短同步调用中，Batch 通过一次 syscall 合并提交，适合追求最低批量延迟；`SQ/CQ` 没有在该负载上胜过 Batch，它的作用是保留长期队列、backpressure、cancel 和唯一 terminal CQE，不能把两者按单个延迟指标简单替代。
 
-`agentpublish_ucore` 用两个同 scope 进程同时发布同名文件，结果恰好是一个 `OK`、一个 `DUPLICATE`，胜出文件保持完整且后续提交不能覆盖。32 字节 header 与 96 字节 payload 后紧接 EOF；错误的 pointer、path、size、version 和保留字段都没有留下正式文件名。Nexus 对相同字节能够通过正式路径回读收敛，内容不同则拒绝；删除测试文件后 inode 与 block 计数回到基线。这些结果说明结果文件的正式名字只指向完整内容，并发和失败请求也没有留下额外资源。
+`agentpublish_ucore` 用两个同 scope 进程同时发布同名文件，结果恰好是一个 `OK`、一个 `DUPLICATE`，胜出文件保持完整且后续提交不能覆盖。32 字节 header 与 96 字节 payload 后紧接 EOF；错误的 pointer、path、size、version 和保留字段都没有留下正式文件名。删除测试文件并执行同步后，inode 与 block 计数回到基线。这些结果说明结果文件的正式名字只指向完整内容，并发和失败请求也没有留下额外资源。
 
 ## 实现索引
 
 | 代码职责 | 源码 |
 | --- | --- |
 | UAPI 与用户态封装 | [`include/agent_tool_abi.h`](../../include/agent_tool_abi.h)、[`user/include/agent.h`](../../user/include/agent.h)、[`user/lib/syscall.c`](../../user/lib/syscall.c) |
-| Nexus artifact 发布 | [`include/agent_file_publish_abi.h`](../../include/agent_file_publish_abi.h)、[`os/agent_file_state.c`](../../os/agent_file_state.c)、[`os/fs.c`](../../os/fs.c)、[`user/include/agent_nexus.h`](../../user/include/agent_nexus.h)、[`user/lib/agent_nexus.c`](../../user/lib/agent_nexus.c) |
+| 结果文件原子发布 | [`include/agent_file_publish_abi.h`](../../include/agent_file_publish_abi.h)、[`os/agent_file_state.c`](../../os/agent_file_state.c)、[`os/fs.c`](../../os/fs.c)、[`user/src/agentpublish_ucore.c`](../../user/src/agentpublish_ucore.c) |
 | Tool Registry 与 schema | [`os/agent_tool_protocol.c`](../../os/agent_tool_protocol.c) |
 | 工具分派与 Context commit | [`os/agent_core.c`](../../os/agent_core.c)、[`os/agent_context.c`](../../os/agent_context.c) |
 | Execution Contract | [`include/agent_execution_contract_abi.h`](../../include/agent_execution_contract_abi.h)、[`os/agent_execution_contract.c`](../../os/agent_execution_contract.c) |

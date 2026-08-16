@@ -43,7 +43,7 @@ AgentOS-uCore 按职责分为五部分。uCore 基础内核提供进程、VFS、
 
 | 层次 | 主要组成 | 作用 |
 | --- | --- | --- |
-| Agent 应用 | `agentlive_ucore`、`agentnexus_ucore`、科研工作流 | 拆分目标、安排角色、调用工具并汇总结果 |
+| Agent 应用 | `agentlive_ucore`、`agentharness_ucore`、科研工作流 | 拆分目标、配置通用 Agent、调用工具并汇总结果 |
 | Guest Runtime | Guest UAPI、Task Channel（SQ/CQ）、有界串口帧 | 把应用动作编码成内核请求，并在 Guest 内收发模型消息 |
 | Host Relay | 串口中继、TLS、Provider、Replay 与工作区 broker | 连接外部模型服务，并在显式配置的工作区 root 范围内提供 manifest 与指定版本字节，不决定文件候选或业务任务 |
 | AgentOS 内核模块 | Agent identity、生命周期、Context、Execution Contract、Live Query、事件、Workflow Credit Domain、EEVDF、Workflow Fence | 检查工作流操作，保存状态，负责等待唤醒，并生成 terminal record |
@@ -112,7 +112,7 @@ static inline int key_equal(struct workflow_lifecycle_key a,
 
 ### 5.2 Agent-OS 内核结构化交互接口与工具调用协议
 
-工具调用协议用工具编号、typed 参数、状态码和结构化结果表达一次交互，不让内核解释自然语言。公开接口包括 V1、带类型信息的 V2、ENFORCE V3、批处理和 16 槽 Task Channel（SQ/CQ）。V2 按 Tool Registry 的参数 schema 检查请求；V3 继续绑定冻结的 DAG、前驱、尝试次数、截止时间、输入指纹和资源上限。入口先核对 Agent identity 与生命周期，再解析工具和 schema。登记普通操作后，内核继续检查能力位、Execution Contract、provenance 和 Phase Lease。文件写入在 VFS 路径真正执行时还会再查一次当前文件访问范围。
+工具调用协议用工具编号、typed 参数、状态码和结构化结果表达一次交互，不让内核解释自然语言。ABI vNext 的公开接口从带类型信息的 V2 起步，并提供 ENFORCE V3、批处理和 16 槽 Task Channel（SQ/CQ）；V1 固定结构和旧 C 包装已经移除。V2 按 Tool Registry 的参数 schema 检查请求；V3 继续绑定冻结的 DAG、前驱、尝试次数、截止时间、输入指纹和资源上限。入口先核对 Agent identity 与生命周期，再解析工具和 schema。登记普通操作后，内核继续检查能力位、Execution Contract、provenance 和 Phase Lease。文件写入在 VFS 路径真正执行时还会再查一次当前文件访问范围。
 
 Task Channel 的 `delegate_task` 把 128 字节动态描述符作为 `AGENT_ARTIFACT_TASK` 输入，进入同一 Execution Contract 后停留在内核 pending 队列。取得 TASK route 且具有 `AGENT_CAP_TASK_ACCEPT` 的目标 Agent 通过 claim/complete 接口领取和完成；任务完成结算时，发起者从 CQ 至多取得一条 terminal CQE。描述符绑定目标 identity、parent task、目标与输入 Artifact、所需 capability、允许工具、workspace revision、资源预算、deadline 和预期结果类型。内核检查父子授权包含关系，拒绝 self delegation 和任务图中的环路，并允许多个独立子任务并行。取消、截止时间、目标退出和迟到完成由内核按同一个 Task Channel 状态处理；同一生命周期 controller 可用 syscall 568 的 `REQUEST_CANCEL` 和完整任务绑定请求取消。若任务已被 claim，执行者仍要清理预绑定输出并确认内核选定的最新终态；当前实现不会强制终止永久无响应的执行者。Task CQE 结算后，Contract 还要从 `RETIRING` 收敛到 `RECLAIMED`，普通作用和下一代 Contract 才恢复。
 
@@ -173,7 +173,7 @@ Guest 提交请求
 
 内核 ABI 只传递结构化状态和系统操作，具体 Provider 协议由 Host 处理。`agentlive_ucore` 通过串口帧发送模型请求、接收工具调用，并把 terminal state 写入 Context。[`host_tools/agentos_relayd.py`](../host_tools/agentos_relayd.py) 负责 TLS、Provider JSON 和本地运行目录。更换模型 Provider 时无需修改内核 ABI。
 
-早期 `agentnexus_ucore` 路径保留用于固定 Replay；[`agentos_nexus_multiagent.py`](../host_tools/agentos_nexus_multiagent.py) 提供新的通用多 Agent Harness。CLI 只接收目标、工作区、workflow policy、资源限制、允许工具和可选 Agent 配置。所有 Agent 运行同一套 Loop，行为由 capability、工具集合、提示词和额度决定。拥有 `ORCHESTRATE` capability 的 Agent 可以动态拆分任务，子 Agent 从同一运行时领取 Task、封存结果 Artifact 并提交终态。Coordinator 只是当前承担编排职责的 Agent，不对应特殊内核进程类型。
+[`agentos_nexus_multiagent.py`](../host_tools/agentos_nexus_multiagent.py) 与 [`agentharness_ucore.c`](../user/src/agentharness_ucore.c) 组成通用多 Agent Harness。CLI 只接收目标、工作区、workflow policy、资源限制、允许工具和可选 Agent 配置。所有 Agent 运行同一套 Loop，行为由 capability、工具集合、提示词和额度决定。拥有 `ORCHESTRATE` capability 的 Agent 可以动态拆分任务，子 Agent 在同一个长期运行 Guest 中通过原生 Task Channel 领取 Task、封存结果 Artifact 并提交终态。Host 中的每个 Agent 都对应一个由 `agent_runtime_control(SPAWN)` 创建的 Guest Agent；固定 Relay、Coordinator、System、Research 角色不再进入产品路径，名称只用于观测与日志。
 
 Host workspace broker 只在显式配置的 root 内返回版本化 manifest 页面，并为 Guest 已通过 Metadata Catalog/Live Query 选定的候选执行正文匹配或返回 revision 绑定的分段字节。每个工具 correlation 的第一次 MANIFEST 请求使用空 generation，后续请求携带本次已经校验的 generation。Guest 每次仍重新获取、解析、摘要和校验 manifest；只有生命周期键、cursor、entry count、EOF、workspace generation 与有序对象摘要完全匹配，control stub 也处于 `READY` 时，1 个 control inode 和最多 32 个 data-stub inode 组成的 Catalog 窗口才会复用。
 

@@ -301,7 +301,7 @@ struct agent_task_delegate_descriptor {
 	unsigned long long task_id;
 	unsigned long long correlation_id;
 	unsigned long long parent_task_id;
-	/* The objective Artifact may contain the task capsule used by V1 clients. */
+	/* The objective Artifact contains the sealed task description. */
 	unsigned int capsule_handle;
 	unsigned int input_artifact_handle;
 	unsigned int result_artifact_handle;

@@ -397,7 +397,7 @@ static void make_agentos_surface_op(struct agent_op *op, int tool_id,
 				    uint64 request_id, const char *payload)
 {
 	memset(op, 0, sizeof(*op));
-	op->version = AGENT_CALL_VERSION;
+	op->version = AGENT_OP_VERSION;
 	op->tool_id = tool_id;
 	op->request_id = request_id;
 	op->arg0 = request_id;

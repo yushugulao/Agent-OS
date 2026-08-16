@@ -13,7 +13,6 @@ static struct {
 	uint64 after;
 } response_buffer;
 static struct agent_tool_desc_v2 tools_v2[AGENT_TOOL_COUNT];
-static struct agent_tool_desc tools_v1[AGENT_TOOL_COUNT];
 
 #define USER_BUFFER_SENTINEL 0xd1a65afe8badf00dULL
 
@@ -134,20 +133,12 @@ static void check_lists(void)
 {
 	int count;
 
-	memset(tools_v1, 0, sizeof(tools_v1));
-	count = agent_tool_list(tools_v1, AGENT_TOOL_COUNT);
-	check(count == AGENT_TOOL_COUNT, "legacy tool count");
 	memset(tools_v2, 0, sizeof(tools_v2));
 	count = sys_tool_list(tools_v2, AGENT_TOOL_COUNT);
 	check(count == AGENT_TOOL_COUNT, "v2 tool count");
 	for (uint i = 0; i < AGENT_TOOL_COUNT; i++) {
 		const struct expected_tool_schema *expected = &expected_tools[i];
 
-		check(tools_v1[i].tool_id == expected->tool_id &&
-		      tools_v1[i].flags == expected->flags &&
-		      strcmp(tools_v1[i].name, expected->name) == 0 &&
-		      strcmp(tools_v1[i].params, expected->params) == 0,
-		      "legacy full schema table");
 		check(tools_v2[i].version == AGENT_CALL_VERSION_V2 &&
 		      tools_v2[i].size == sizeof(tools_v2[i]) &&
 		      tools_v2[i].tool_id == expected->tool_id &&
@@ -168,67 +159,17 @@ static void check_lists(void)
 	      "tool list descriptor size rejected");
 	check(syscall(SYS_tool_list, tools_v2, 1,
 		      sizeof(struct agent_tool_desc_v2),
-		      AGENT_CALL_VERSION_V1) == AGENT_STATUS_BAD_VERSION,
+		      AGENT_OP_VERSION) == AGENT_STATUS_BAD_VERSION,
 	      "tool list version rejected");
 	check(syscall(SYS_tool_list, tools_v2, -1,
 		      sizeof(struct agent_tool_desc_v2),
 		      AGENT_CALL_VERSION_V2) == AGENT_STATUS_BAD_PARAM,
 	      "tool list negative count rejected");
-	printf("agenttoolabi_ucore: tool_list_v1_v2=1 count=%d\n", count);
+	printf("agenttoolabi_ucore: tool_list_v2=1 count=%d\n", count);
 	printf("agenttoolabi_ucore: tool_list_contract=1\n");
 	printf("agenttoolabi_ucore: optional_schema=1 heartbeat_unified=1\n");
 	printf("agenttoolabi_ucore: schema_generated=1 validated=%d\n",
 	       AGENT_TOOL_COUNT);
-}
-
-static void check_v1_compatibility(void)
-{
-	struct agent_request legacy;
-	struct agent_response legacy_response;
-
-	check(agent_watch(AGENT_EVENT_LLM_DONE, "") == 0,
-	      "watch self llm responses");
-	memset(&legacy, 0, sizeof(legacy));
-	memset(&legacy_response, 0, sizeof(legacy_response));
-	legacy.version = AGENT_CALL_VERSION_V1;
-	legacy.tool_id = AGENT_TOOL_ECHO;
-	legacy.request_id = 9101;
-	legacy.arg0 = 11;
-	legacy.arg1 = 12;
-	legacy.arg0_type = AGENT_PARAM_UINT64;
-	legacy.arg1_type = AGENT_PARAM_UINT64;
-	legacy.payload_type = AGENT_PARAM_STRING;
-	strcpy(legacy.arg0_key, "arg0");
-	strcpy(legacy.arg1_key, "arg1");
-	strcpy(legacy.payload_key, "payload");
-	strcpy(legacy.payload, "v1-compatible");
-	check(agent_call(&legacy, &legacy_response) == 0,
-	      "legacy call return");
-	check(legacy_response.status == AGENT_STATUS_OK &&
-	      strcmp(legacy_response.result, "v1-compatible") == 0,
-	      "legacy call result");
-	legacy.tool_id = AGENT_TOOL_COUNT + 1;
-	check(agent_call(&legacy, &legacy_response) == 0 &&
-	      legacy_response.status == AGENT_STATUS_UNKNOWN_TOOL,
-	      "legacy invalid id not masked by name");
-	memset(&legacy, 0, sizeof(legacy));
-	legacy.version = AGENT_CALL_VERSION_V1;
-	legacy.tool_id = AGENT_TOOL_PID_INFO;
-	legacy.arg0 = 7;
-	legacy.arg0_type = AGENT_PARAM_UINT64;
-	strcpy(legacy.arg0_key, "noise");
-	check(agent_call(&legacy, &legacy_response) == 0 &&
-	      legacy_response.status == AGENT_STATUS_BAD_PARAM,
-	      "legacy unexpected parameter rejected");
-	memset(&legacy, 0, sizeof(legacy));
-	legacy.version = AGENT_CALL_VERSION_V1;
-	legacy.tool_id = AGENT_TOOL_PID_INFO;
-	legacy.arg0 = 7;
-	check(agent_call(&legacy, &legacy_response) == 0 &&
-	      legacy_response.status == AGENT_STATUS_BAD_PARAM &&
-	      strcmp(legacy_response.result, "untyped_param_value") == 0,
-	      "legacy untyped value rejected");
-	printf("agenttoolabi_ucore: v1_compatible=1\n");
 }
 
 static void check_v2_success(void)
@@ -253,58 +194,12 @@ static void check_v2_success(void)
 
 static void check_key_capacity_and_llm_response(void)
 {
-	struct agent_request legacy;
 	struct agent_event event;
-	struct {
-		uint64 before;
-		struct agent_response value;
-		uint64 after;
-	} legacy_response;
 
-	memset(&legacy, 0, sizeof(legacy));
-	memset(&legacy_response, 0, sizeof(legacy_response));
-	legacy_response.before = USER_BUFFER_SENTINEL;
-	legacy_response.after = USER_BUFFER_SENTINEL;
+	check(agent_watch(AGENT_EVENT_LLM_DONE, "") == 0,
+	      "watch self llm responses");
 	check(agent_watch(AGENT_EVENT_MESSAGE, "request") == 0,
 	      "watch llm requests");
-	legacy.version = AGENT_CALL_VERSION_V1;
-	legacy.tool_id = AGENT_TOOL_LLM_REQUEST;
-	legacy.request_id = 9191;
-	legacy.arg0 = getpid();
-	legacy.arg0_type = AGENT_PARAM_UINT64;
-	legacy.payload_type = AGENT_PARAM_STRING;
-	strcpy(legacy.arg0_key, "target_pid");
-	strcpy(legacy.payload_key, "prompt_summary");
-	strcpy(legacy.payload, "v1-request");
-	check(agent_call(&legacy, &legacy_response.value) == 0 &&
-	      legacy_response.value.status == AGENT_STATUS_OK &&
-	      legacy_response.value.value2 == 1,
-	      "legacy llm request key");
-	memset(&event, 0, sizeof(event));
-	check(agent_wait(&event, 20) == AGENT_STATUS_OK &&
-	      event.type == AGENT_EVENT_MESSAGE && event.corr_id == 9191,
-	      "consume legacy llm request");
-	memset(&legacy, 0, sizeof(legacy));
-	legacy.version = AGENT_CALL_VERSION_V1;
-	legacy.tool_id = AGENT_TOOL_LLM_RESPONSE;
-	legacy.request_id = 9191;
-	legacy.arg0 = getpid();
-	legacy.arg0_type = AGENT_PARAM_UINT64;
-	legacy.payload_type = AGENT_PARAM_STRING;
-	strcpy(legacy.arg0_key, "target_pid");
-	strcpy(legacy.payload_key, "reply_summary");
-	strcpy(legacy.payload, "v1-reply");
-	check(agent_call(&legacy, &legacy_response.value) == 0 &&
-	      legacy_response.value.status == AGENT_STATUS_OK &&
-	      strcmp(legacy_response.value.result, "llm_response") == 0,
-	      "legacy llm response key");
-	check(legacy_response.before == USER_BUFFER_SENTINEL &&
-	      legacy_response.after == USER_BUFFER_SENTINEL,
-	      "v1 response buffer sentinel");
-	memset(&event, 0, sizeof(event));
-	check(agent_wait(&event, 20) == AGENT_STATUS_OK &&
-	      event.type == AGENT_EVENT_LLM_DONE && event.corr_id == 9191,
-	      "consume legacy llm response");
 
 	param_uint(0, "target_pid", getpid());
 	param_string(1, "prompt_summary", "v2-request");
@@ -341,20 +236,7 @@ static void check_key_capacity_and_llm_response(void)
 	expect_status(AGENT_STATUS_BAD_SIZE,
 		      "16-byte unterminated v2 key rejected");
 
-	memset(&legacy, 0, sizeof(legacy));
-	memset(&legacy_response.value, 0, sizeof(legacy_response.value));
-	legacy.version = AGENT_CALL_VERSION_V1;
-	legacy.tool_id = AGENT_TOOL_QUERY_PROCESS;
-	legacy.arg0 = 1;
-	legacy.arg0_type = AGENT_PARAM_UINT64;
-	memset(legacy.arg0_key, 'x', sizeof(legacy.arg0_key));
-	check(agent_call(&legacy, &legacy_response.value) == 0 &&
-	      legacy_response.value.status == AGENT_STATUS_BAD_SIZE,
-	      "16-byte unterminated v1 key rejected");
-	check(legacy_response.before == USER_BUFFER_SENTINEL &&
-	      legacy_response.after == USER_BUFFER_SENTINEL,
-	      "v1 rejection response buffer sentinel");
-	printf("agenttoolabi_ucore: key_capacity=1 llm_response_v1_v2=1 buffer_sentinel=1\n");
+	printf("agenttoolabi_ucore: key_capacity=1 llm_response_v2=1 buffer_sentinel=1\n");
 }
 
 static void check_v2_rejections(void)
@@ -448,7 +330,6 @@ int main(void)
 	pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
 	check(pid >= 0, "create test Agent");
 	if (pid == 0) {
-		check_v1_compatibility();
 		check_v2_success();
 		check_key_capacity_and_llm_response();
 		check_v2_rejections();

@@ -875,7 +875,7 @@ static TEST_PHASE_NOINLINE void sentinel_public_exec_probe(
 	      context_detail(1, &exec_transition_detail) == -1 &&
 	      context_rollback(1) == -1 && context_clear() == -1 &&
 	      agent_wait(&exec_transition_event, 0) == -1 &&
-	      agent_heartbeat(1) == -1,
+	      agent_heartbeat_configure(1) == -1,
 	      "PUBLIC exec rejects Agent and Context operations");
 	check(pipe(probe) == 0, "create Context unmap probe");
 	check(write(probe[1], (const void *)AGENT_CONTEXT_BASE, 1) == -1,
@@ -1922,7 +1922,7 @@ static __attribute__((noreturn)) void controller_public_exec_rejection_member(
 	check(context_push(&exec_transition_record) == AGENT_STATUS_OK &&
 	      agent_watch(AGENT_EVENT_MESSAGE, "exec-controller") ==
 		      AGENT_STATUS_OK &&
-	      agent_heartbeat(7) == AGENT_STATUS_OK,
+	      agent_heartbeat_configure(7) == AGENT_STATUS_OK,
 	      "seed controller identity endpoints before rejected exec");
 	memset(&exec_transition_event, 0, sizeof(exec_transition_event));
 	exec_transition_event.type = AGENT_EVENT_MESSAGE;
@@ -2052,7 +2052,7 @@ static __attribute__((noreturn)) void sentinel_public_exec_member(
 	check(context_push(&exec_transition_record) == AGENT_STATUS_OK &&
 	      agent_watch(AGENT_EVENT_MESSAGE, "exec-downgrade") ==
 		      AGENT_STATUS_OK &&
-	      agent_heartbeat(7) == AGENT_STATUS_OK,
+	      agent_heartbeat_configure(7) == AGENT_STATUS_OK,
 	      "seed identity endpoints before PUBLIC exec");
 	memset(&exec_transition_event, 0, sizeof(exec_transition_event));
 	exec_transition_event.type = AGENT_EVENT_MESSAGE;

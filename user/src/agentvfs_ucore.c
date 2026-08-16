@@ -30,7 +30,7 @@ static uint64 workflow_process_count(void)
 	struct agent_result result;
 
 	memset(&op, 0, sizeof(op));
-	op.version = AGENT_CALL_VERSION;
+	op.version = AGENT_OP_VERSION;
 	op.tool_id = AGENT_TOOL_GET_SYSTEM_STATUS;
 	memset(&result, 0, sizeof(result));
 	check(agent_run(&op, &result, 1, 0) == 1,

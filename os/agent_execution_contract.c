@@ -2181,10 +2181,15 @@ agent_execution_contract_build_node(
 	uint expected_class = p->resource_slot_reserved ?
 		RESOURCE_CHARGE_RESERVED : RESOURCE_CHARGE_ORDINARY;
 	uint envelope_nonzero = 0;
+	uint delegated_task_node;
 
 	for (uint kind = 0; kind < RESOURCE_KIND_COUNT; kind++)
 		envelope_nonzero |= node->exec_envelope[kind] != 0 ||
 			node->storage_envelope[kind] != 0;
+	delegated_task_node =
+		node->tool_id == AGENT_TOOL_DELEGATE_TASK &&
+		node->input_artifact_type == AGENT_ARTIFACT_TASK &&
+		node->output_artifact_type == AGENT_ARTIFACT_NONE;
 
 	if (node->version != AGENT_EXECUTION_CONTRACT_NODE_VERSION ||
 	    node->size != sizeof(*node) || node->node_id != index ||
@@ -2197,7 +2202,7 @@ agent_execution_contract_build_node(
 	    node->max_attempts > AGENT_EXECUTION_NODE_MAX_ATTEMPTS ||
 	    record->total_attempts + node->max_attempts >
 		    AGENT_EXECUTION_CONTRACT_MAX_ATTEMPTS ||
-	    !envelope_nonzero ||
+	    (!envelope_nonzero && !delegated_task_node) ||
 	    (node->retry_policy & ~AGENT_EXECUTION_RETRY_ALL) != 0 ||
 	    (node->max_attempts == 1 && node->retry_policy != 0) ||
 	    node->cancel_policy > AGENT_EXECUTION_CANCEL_ALLOW ||
@@ -2210,10 +2215,9 @@ agent_execution_contract_build_node(
 		    AGENT_STATUS_OK ||
 	    manifest.flags == AGENT_TOOL_F_DEPRECATED ||
 	    ((manifest.flags & AGENT_TOOL_F_CALLABLE) == 0 &&
-	     !(node->tool_id == AGENT_TOOL_DELEGATE_TASK &&
+	     !(delegated_task_node &&
 	       manifest.flags == AGENT_TOOL_F_SYSCALL_ONLY &&
-	       node->input_artifact_type == AGENT_ARTIFACT_TASK &&
-	       node->output_artifact_type == AGENT_ARTIFACT_NONE) &&
+	       node->input_artifact_type == AGENT_ARTIFACT_TASK) &&
 	     !(manifest.flags == AGENT_TOOL_F_BROKERED &&
 	       node->input_artifact_type != AGENT_ARTIFACT_NONE &&
 	       node->output_artifact_type != AGENT_ARTIFACT_NONE)) ||

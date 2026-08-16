@@ -722,7 +722,7 @@ static void make_echo(struct agent_op *op, uint64 request_id,
 		      const char *payload)
 {
 	memset(op, 0, sizeof(*op));
-	op->version = AGENT_CALL_VERSION;
+	op->version = AGENT_OP_VERSION;
 	op->tool_id = AGENT_TOOL_ECHO;
 	op->request_id = request_id;
 	op->arg0 = request_id;
@@ -734,7 +734,7 @@ static void make_kernel_op(struct agent_op *op, int tool_id,
 			   uint64 request_id, const char *payload)
 {
 	memset(op, 0, sizeof(*op));
-	op->version = AGENT_CALL_VERSION;
+	op->version = AGENT_OP_VERSION;
 	op->tool_id = tool_id;
 	op->request_id = request_id;
 	if (payload)
@@ -933,7 +933,7 @@ static int verify_kernel_dependency_path(
 static int echo_result_matches(const struct agent_op *op,
 			       const struct agent_result *result)
 {
-	return result->version == AGENT_CALL_VERSION &&
+	return result->version == AGENT_OP_VERSION &&
 	       result->status == AGENT_STATUS_OK &&
 	       result->tool_id == op->tool_id &&
 	       result->request_id == op->request_id && result->sequence != 0 &&

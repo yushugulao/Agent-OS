@@ -58,7 +58,7 @@ struct workflow_lifecycle_key {
 
 表中的权重只用于同一工作流内部选择 Agent。多个工作流之间的 EEVDF 调度对象保持等权。子进程或 `exec` 都不能扩大权限。进程最终拥有的能力集合，是角色策略、映像配置、父进程有效能力和请求掩码的交集。
 
-`Sentinel` 与 `Investigator` 具有 `AGENT_CAP_ARTIFACT_WRITE`，因为 Nexus 的 System 与 Research 是结果 artifact 的实际生产者。这项角色能力不等于任意文件写入：发布仍要通过 artifact manifest permission、当前 VFS 文件访问范围以及精确绑定到 delegated task 的 effect lease。
+通用 Harness 只向需要产出结果 Artifact 的 Agent 授予 `AGENT_CAP_ARTIFACT_WRITE`。这项能力来自 workflow policy 与启动配置，不取决于角色名称，也不等于任意文件写入：发布仍要通过 artifact manifest permission、当前 VFS 文件访问范围以及精确绑定到 delegated task 的 effect lease。
 
 ### 2.3 受控创建与映像绑定
 

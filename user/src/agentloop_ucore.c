@@ -63,7 +63,7 @@ static void run_queue_source(int target_pid, int attributed, int gate_fd,
 	if (attributed) {
 		for (int i = 0; i < AGENT_EVENT_SOURCE_LIMIT; i++) {
 			memset(&op, 0, sizeof(op));
-			op.version = AGENT_CALL_VERSION;
+			op.version = AGENT_OP_VERSION;
 			op.tool_id = AGENT_TOOL_ACTION_COMMIT;
 			op.request_id = 300 + i;
 			strcpy(op.payload, "queue-reserve-denied");
@@ -99,7 +99,7 @@ static void run_external_probe(int gate_fd, int report_fd)
 			      phase == (i == 0 ? 'G' : 'R'),
 		      "wait external probe gate");
 		memset(&op, 0, sizeof(op));
-		op.version = AGENT_CALL_VERSION;
+		op.version = AGENT_OP_VERSION;
 		op.tool_id = AGENT_TOOL_ACTION_COMMIT;
 		op.request_id = 380 + i;
 		strcpy(op.payload, "external-limit-probe");
@@ -381,7 +381,7 @@ static void run_broadcast_source(int gate_fd)
 	check(read(gate_fd, &phase, 1) == 1 && phase == 'G',
 	      "release broadcast source");
 	memset(&op, 0, sizeof(op));
-	op.version = AGENT_CALL_VERSION;
+	op.version = AGENT_OP_VERSION;
 	op.tool_id = AGENT_TOOL_ACTION_COMMIT;
 	op.request_id = 390;
 	strcpy(op.payload, "broadcast-isolation");
@@ -554,7 +554,7 @@ static void run_agent(void)
 
 	check(agent_unwatch(AGENT_EVENT_TIMER, "heartbeat") == 0,
 	      "heartbeat starts without timer watch");
-	check(sys_agent_heartbeat_set(2) == 0, "heartbeat set syscall");
+	check(agent_heartbeat_configure(2) == 0, "heartbeat set syscall");
 	memset(&event, 0, sizeof(event));
 	check(agent_wait(&event, 30) == AGENT_STATUS_OK,
 	      "intrinsic heartbeat wait");
@@ -587,7 +587,7 @@ static void run_agent(void)
 	}
 	check(after.event_queue_count == 1,
 	      "only one pending heartbeat is queued");
-	check(sys_agent_heartbeat_stop() == 0, "heartbeat stop syscall");
+	check(agent_heartbeat_configure(0) == 0, "heartbeat stop syscall");
 	expect_heartbeat();
 	memset(&event, 0, sizeof(event));
 	check(agent_wait(&event, 3) == AGENT_STATUS_TIMEOUT,
@@ -601,14 +601,14 @@ static void run_agent(void)
 	      "heartbeat above maximum rejected");
 	check(agent_heartbeat_configure(~(uint64)0) == AGENT_STATUS_BAD_PARAM,
 	      "heartbeat uint64 overflow rejected");
-	check(agent_heartbeat(-1) == AGENT_STATUS_BAD_PARAM,
+	check(agent_heartbeat_configure(-1) == AGENT_STATUS_BAD_PARAM,
 	      "legacy negative heartbeat rejected");
 	{
 		static struct agent_op heartbeat_op;
 		static struct agent_result heartbeat_res;
 
 		memset(&heartbeat_op, 0, sizeof(heartbeat_op));
-		heartbeat_op.version = AGENT_CALL_VERSION;
+		heartbeat_op.version = AGENT_OP_VERSION;
 		heartbeat_op.tool_id = AGENT_TOOL_HEARTBEAT_CONFIGURE;
 		heartbeat_op.request_id = 391;
 		heartbeat_op.arg0 = AGENT_HEARTBEAT_MAX_TICKS + 1ULL;
@@ -619,11 +619,11 @@ static void run_agent(void)
 	}
 	check(agent_info(&after) == 0 && after.heartbeat_interval == 0,
 	      "invalid heartbeat leaves stopped state");
-	check(agent_heartbeat(1) == 0, "legacy heartbeat ABI set");
+	check(agent_heartbeat_configure(1) == 0, "legacy heartbeat ABI set");
 	expect_heartbeat();
-	check(agent_heartbeat(0) == 0, "legacy heartbeat ABI stop");
-	check(sys_agent_heartbeat_stop() == 0, "heartbeat stop syscall");
-	check(sys_agent_heartbeat_stop() == 0, "heartbeat stop idempotent");
+	check(agent_heartbeat_configure(0) == 0, "legacy heartbeat ABI stop");
+	check(agent_heartbeat_configure(0) == 0, "heartbeat stop syscall");
+	check(agent_heartbeat_configure(0) == 0, "heartbeat stop idempotent");
 	printf("agentloop_ucore: heartbeat_intrinsic=1 dynamic=1 coalesced=1 stop=1 bounds=1 legacy=1\n");
 
 	pid = agent_create_role(AGENT_ROLE_SENTINEL);

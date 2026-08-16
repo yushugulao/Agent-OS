@@ -438,21 +438,6 @@ int sys_trace(int req, uint64 id, uint8 data)
 	}
 }
 
-int sys_mailwrite(int pid, uint64 buf, int len)
-{
-	(void)pid;
-	(void)buf;
-	(void)len;
-	return -1;
-}
-
-int sys_mailread(uint64 buf, int len)
-{
-	(void)buf;
-	(void)len;
-	return -1;
-}
-
 uint64 sys_clone()
 {
 	debugf("fork!");
@@ -1193,13 +1178,6 @@ static __attribute__((noinline)) int syscall_dispatch(
 	case SYS_getppid:
 		ret = sys_getppid();
 		break;
-	case SYS_mailread:
-		ret = sys_mailread(trapframe->a0, trapframe->a1);
-		break;
-	case SYS_mailwrite:
-		ret = sys_mailwrite(trapframe->a0, trapframe->a1,
-				trapframe->a2);
-		break;
 	case SYS_trace:
 		ret = sys_trace(trapframe->a0, trapframe->a1, trapframe->a2);
 		break;
@@ -1362,12 +1340,6 @@ static __attribute__((noinline)) int syscall_dispatch(
 		ret = sys_agent_run(trapframe->a0, trapframe->a1,
 				    trapframe->a2, trapframe->a3);
 		break;
-	case SYS_agent_call:
-		ret = sys_agent_call(trapframe->a0, trapframe->a1);
-		break;
-	case SYS_agent_tool_list:
-		ret = sys_agent_tool_list(trapframe->a0, trapframe->a1);
-		break;
 	case SYS_tool_call:
 		ret = sys_tool_call(trapframe->a0, trapframe->a1);
 		break;
@@ -1433,9 +1405,6 @@ static __attribute__((noinline)) int syscall_dispatch(
 		break;
 	case SYS_agent_wait_cancel:
 		ret = sys_agent_wait_cancel(trapframe->a0, trapframe->a1);
-		break;
-	case SYS_agent_heartbeat:
-		ret = sys_agent_heartbeat(trapframe->a0);
 		break;
 	case SYS_agent_heartbeat_set:
 		ret = sys_agent_heartbeat_set(trapframe->a0);
@@ -1579,8 +1548,6 @@ syscall_mutates_workflow_cut(int id, const struct trapframe *trapframe)
 	case SYS_fsync:
 	case SYS_fdatasync:
 	case SYS_brk:
-	case SYS_mailread:
-	case SYS_mailwrite:
 	case SYS_trace:
 	case SYS_execve:
 	case SYS_pipe2:
@@ -1610,7 +1577,6 @@ syscall_mutates_workflow_cut(int id, const struct trapframe *trapframe)
 	case SYS_agent_unwatch:
 	case SYS_agent_wait:
 	case SYS_agent_wait_cancel:
-	case SYS_agent_heartbeat:
 	case SYS_agent_heartbeat_set:
 	case SYS_agent_heartbeat_stop:
 	case SYS_agent_wake:
@@ -1634,7 +1600,6 @@ syscall_mutates_workflow_cut(int id, const struct trapframe *trapframe)
 	case SYS_agent_create_role:
 	case SYS_agent_workflow_create:
 	case SYS_agent_run:
-	case SYS_agent_call:
 	case SYS_tool_call:
 	case SYS_agent_file_meta_init:
 	case SYS_agent_file_meta_set:
@@ -1677,7 +1642,6 @@ syscall_mutates_workflow_cut(int id, const struct trapframe *trapframe)
 	case SYS_agent_timeline_read:
 	case SYS_agent_provenance_snapshot:
 	case SYS_agent_ledger_snapshot:
-	case SYS_agent_tool_list:
 	case SYS_tool_list:
 	case SYS_context_query:
 	case SYS_context_snapshot:
@@ -1734,8 +1698,6 @@ syscall_direct_agent_side_effects(
 	case SYS_fsync:
 	case SYS_fdatasync:
 		return AGENT_SIDE_EFFECT_FILE | AGENT_SIDE_EFFECT_METADATA;
-	case SYS_mailwrite:
-	case SYS_agent_heartbeat:
 	case SYS_agent_heartbeat_set:
 	case SYS_agent_heartbeat_stop:
 	case SYS_agent_wake:
@@ -1814,10 +1776,6 @@ syscall_merge_ingress_provenance(
 			labels = AGENT_PROVENANCE_UNTRUSTED_MASK;
 			break;
 		}
-		break;
-	case SYS_mailread:
-		labels = AGENT_PROVENANCE_CROSS_AGENT_DATA |
-			 AGENT_PROVENANCE_UNTRUSTED_TOOL_OUTPUT;
 		break;
 	default:
 		break;

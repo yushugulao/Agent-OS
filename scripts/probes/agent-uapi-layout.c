@@ -738,9 +738,8 @@ ABI_OFFSET(struct agent_workflow_fence_receipt, previous_root,
 	   workflow_fence_receipt);
 ABI_RECORD(struct agent_op, op, version, payload);
 ABI_RECORD(struct agent_result, result, version, result);
-ABI_RECORD(struct agent_request, request, version, payload);
-ABI_RECORD(struct agent_response, response, version, result);
-ABI_RECORD(struct agent_tool_desc, tool_desc, tool_id, params);
+ABI_VALUE(AGENT_UAPI_ABI_VERSION, agent_uapi_abi_version);
+ABI_VALUE(AGENT_OP_VERSION, agent_op_version);
 ABI_SIZE(union agent_param_value_v2, param_value_v2);
 ABI_RECORD(struct agent_param_v2, param_v2, version, value);
 ABI_OFFSET(struct agent_param_v2, size, param_v2);
@@ -802,8 +801,6 @@ ABI_OFFSET(struct agent_workspace_mutation_receipt, written_size,
 
 ABI_RECORD(struct agent_info, info, is_agent, file_scan_failures);
 ABI_OFFSET(struct agent_info, filesystem_capability_mask, info);
-ABI_OFFSET(struct agent_info, legacy_mailbox_allocated, info);
-ABI_OFFSET(struct agent_info, legacy_mailbox_pages, info);
 ABI_OFFSET(struct agent_info, file_scan_deferred, info);
 ABI_RECORD(struct agent_sched_record, sched_record, tick, priority);
 ABI_RECORD(struct agent_sched_config, sched_config, update_mask, budget);

@@ -5,7 +5,7 @@
 ## 文档索引
 
 - [1. 准备环境并构建](#1-准备环境并构建)
-- [2. 运行固定 replay](#2-运行固定-replay)
+- [2. 运行可重复回归](#2-运行可重复回归)
 - [3. 使用单 Agent Console](#3-使用单-agent-console)
 - [4. 使用 Nexus 多智能体 Harness](#4-使用-nexus-多智能体-harness)
 - [5. 接入 DeepSeek](#5-接入-deepseek)
@@ -68,7 +68,7 @@ AGENT_TEST_CASE=agenteval_ucore \
 
 该程序在同一个 QEMU Guest 中运行五段真实负载，Host 还会确认本次启动的随机挑战值、测试输入和预期结果。各段可观察行为见[测试说明](testing.md#42-单独运行一个场景)。
 
-## 2. 运行固定 replay
+## 2. 运行可重复回归
 
 固定 replay 使用仓库中预先保存、与对应请求逐轮匹配的模型回复，因此可以重复得到相同结果。replay 仍会真正启动 QEMU，并执行各自的 Guest 工具、Context commit、控制交互和会话关闭等步骤；在线 provider 通过同一运行链提供实时回复。
 
@@ -85,20 +85,21 @@ replay 按照 [`ci/agentos-interactive-script.txt`](../ci/agentos-interactive-sc
 agentos-console-replay: PASS (...)
 ```
 
-### 2.2 Nexus replay
+### 2.2 Harness 原生 Task Channel
 
 ```bash
 make agentos-nexus-check
-make agentos-nexus-replay TOOLPREFIX=riscv64-linux-gnu-
+make agentos-harness-native-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-旧产品路径的 Nexus replay 按照 [`ci/agentos-nexus-script.txt`](../ci/agentos-nexus-script.txt) 提交普通用户任务，并回放预先保存的 provider 回复。它是一项固定的协议交互回归：检查模型请求、7 项工具 schema、root/child Task、Task Channel claim/complete、工作区 manifest/Catalog/Typed Watch、结果 Artifact、controller/observer 输出与正常关闭。开发路径另用 [`ci/agentos-nexus-dev-replay.jsonl`](../ci/agentos-nexus-dev-replay.jsonl) 固定失败编译、修补、成功构建和三类 Guest 运行的证据顺序。通过时会输出本次运行的 provider rounds、tasks 和协议检查摘要：
+`agentos-nexus-check` 检查 7 项 brokered 工具、动态 Agent 配置、Context Artifact Store、开发 broker、完成门和开发 replay。`agentos-harness-native-test` 会启动一个长期运行的 `agentharness_ucore` Guest，把 Host Agent 映射为 Guest runtime 进程，并通过原生 Task Channel 提交 root Task 和嵌套子 Task。通过时会输出本次生命周期、Agent 和 Task 数量：
 
 ```text
-agentos-nexus-replay: PASS (<provider rounds> provider rounds, <tasks> tasks, <verified features>)
+agentos-native-task-channel: PASS lifecycle=<id/generation> agents=2,3 tasks=2 nested=1 terminal=ok
+agentos-native-harness: PASS lifecycle=<id/generation> agents=2 tasks=2 generic_loop=1
 ```
 
-Console 的 `PASS` 仍由检查程序在核对模型请求、工具结果、Context sequence、审批记录、observer 快照和关闭顺序后给出。Nexus 还会检查通用模型合约、工作区请求、Task Channel 终态、Research artifact 和跨轮 Context 路径。固定 Replay 与在线 Provider 都接收 Relay Agent 按同一规则从 Guest Context 重建的消息，并直接使用 Guest 发布的真实工具结果。
+Console 的 `PASS` 由检查程序在核对模型请求、工具结果、Context sequence、审批记录、observer 快照和关闭顺序后给出。Harness 的 `PASS` 则要求 Host 配置与 Guest identity 对齐，两个 Task 完成 claim、complete 和 terminal CQE，并在同一生命周期中正常关闭。
 
 ## 3. 使用单 Agent Console
 
@@ -126,7 +127,7 @@ AgentOS session <session-id> ready
 | `/approve` | 批准当前这一次有副作用的请求 |
 | `/approve session` | 在当前会话内记住同名工具的批准结果 |
 | `/deny` | 拒绝当前请求，并按协议把失败结果写回本轮 Context |
-| `/reset` | 保留 QEMU 和会话，清空 Context 摘要、审批记录及 provider 绑定；Nexus 还会清空 Relay Context、4 KiB 用户缓存和工作区 Catalog/Typed Watch 状态 |
+| `/reset` | 保留 Console QEMU 和会话，清空 Context 摘要、审批记录及 provider 绑定 |
 | `/quit` | 让 Guest 正常结束会话 |
 
 一次审批只对当前会话、轮次和请求生效，同时绑定 correlation、参数摘要、nonce 和有效期。模型修改参数后，系统会重新发起审批。
@@ -155,40 +156,14 @@ Guest 每次用 1 个 control inode 和 manifest 当前页面最多 32 个 data-
 
 同一生命周期内，lifecycle、cursor、entry count、EOF、workspace generation 和有序对象摘要全部匹配，且 control stub 仍为 `READY` 时，Guest 复用现有窗口。需要更新时，control stub 先进入 `BUILDING`，旧 data stub 随即失效，新页面以每批最多 16 项登记，全部完成后再进入 `READY`。构建失败或 Host stale 会将窗口置为 `STALE` 并清理，清理失败执行完整 reset。完整路径由 Guest 的有界运行时内存再次复核，正文匹配仍由 Host 在 Guest 已选定的候选中完成。实际搜索或读取正文先封存为 FILE/SEARCH Artifact，再进入 TOOL Context 和下一轮模型历史。
 
-离线运行命令如下：
+先运行 Host 合约与原生 Guest 集成测试：
 
 ```bash
-make agentos-nexus \
-  TOOLPREFIX=riscv64-linux-gnu- \
-  AGENTOS_NEXUS_PROVIDER=replay
+make agentos-nexus-check
+make agentos-harness-native-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-命令行准备完成后会显示：
-
-```text
-AgentOS session <session-id> ready profile=nexus
-```
-
-Nexus 支持 Console 的全部命令，并增加三个工作流查询命令：
-
-| 命令 | 作用 |
-| --- | --- |
-| `/agents` | 查看当前 Nexus 运行时参与进程的 PID、`role`、`identity` 和状态 |
-| `/tasks` | 查看 root/子 Task 的分配、运行与 terminal 状态 |
-| `/artifacts` | 查看本轮 brokered 工具结果的计数与来源摘要 |
-
-仓库还提供一个连接 DeepSeek 的自由演示。默认脚本用于观察模型能否自行研究代码并延续前轮结论；开发脚本则要求模型创建简易计算器、编译并在真实 Guest 中覆盖三类输入。前者不规定工具顺序，后者只在最新 build 的三类证据齐备后允许完成：
-
-```bash
-make agentos-nexus-demo TOOLPREFIX=riscv64-linux-gnu-
-
-make agentos-nexus \
-  AGENTOS_NEXUS_PROVIDER=deepseek \
-  AGENTOS_NEXUS_SCRIPT=ci/agentos-nexus-dev-script.txt \
-  TOOLPREFIX=riscv64-linux-gnu-
-```
-
-新的通用 Harness 直接接收目标；可选 JSON 配置可以为多个 Agent 指定 capability、允许工具、资源额度、提示词 Artifact 与摘要高水位。没有配置时，根 Agent 根据 workflow policy 自主选择单 Agent 或动态子任务方案。
+通用 Harness 直接接收目标；可选 JSON 配置可以为多个 Agent 指定 capability、允许工具、资源额度、提示词 Artifact 与摘要高水位。没有配置时，根 Agent 根据 workflow policy 自主选择单 Agent 或动态子任务方案。整个模型会话共用一个长期运行的 Guest，固定 Relay、Coordinator、System、Research 角色已经退出产品命令。
 
 ```bash
 make agentos-nexus-harness \
@@ -199,14 +174,6 @@ make agentos-nexus-harness \
 ```
 
 这次实际 DeepSeek 验收由模型选择单 Agent 完成，共 21 个模型轮次和 20 次工具调用；一次 revision 冲突触发重新读取，随后最新 build 在三个独立 Guest 中通过正常输入、无效输入和除零用例。运行证据见 [`ci/agentos-nexus-multiagent-evidence.json`](../ci/agentos-nexus-multiagent-evidence.json)。该结果验证的是通用工具与完成门，不要求固定 Agent 数量。
-
-默认题目保存在 [`ci/agentos-nexus-demo-script.txt`](../ci/agentos-nexus-demo-script.txt)。也可以给普通 `agentos-nexus` 传入自己的逐行任务脚本：
-
-```bash
-make agentos-nexus \
-  TOOLPREFIX=riscv64-linux-gnu- \
-  AGENTOS_NEXUS_SCRIPT=/absolute/path/to/questions.txt
-```
 
 每轮都有一个 root Task。拥有 `ORCHESTRATE` capability 的 Agent 可以建立子 Task；128 字节 descriptor 绑定 parent task、目标描述 Artifact、输入 Artifact、所需 capability、允许工具、workspace revision、资源预算、deadline 和预期结果类型。子 Agent claim 后读取输入，先封存结果 Artifact，再通过 complete 提交 terminal 状态。任务完成结算时，父 Agent 从至多一条 terminal CQE 取得状态和 handle，并复核 producer、Task id、Context sequence、lifecycle 与 SHA-256。内核拒绝 self delegation 和任务图中的真实环路，同时允许多个独立子任务并行。
 
@@ -227,13 +194,13 @@ make agentos-console-deepseek \
   AGENTOS_CONSOLE_API_KEY_ENV=DEEPSEEK_API_KEY
 ```
 
-Nexus 工作流使用对应变量：
+通用 Harness 使用仓库外的密钥文件：
 
 ```bash
-make agentos-nexus-deepseek \
+make agentos-nexus-harness \
+  AGENTOS_NEXUS_HARNESS_GOAL='检查一个 AgentOS-uCore 模块并给出经过构建和运行验证的修改' \
   TOOLPREFIX=riscv64-linux-gnu- \
-  AGENTOS_NEXUS_API_KEY_FILE= \
-  AGENTOS_NEXUS_API_KEY_ENV=DEEPSEEK_API_KEY
+  AGENTOS_NEXUS_API_KEY_FILE=/absolute/path/to/deepseek-key.txt
 ```
 
 也可以把密钥保存在仓库外的文件中，并传入绝对路径：
@@ -244,7 +211,7 @@ make agentos-console-deepseek \
   AGENTOS_CONSOLE_API_KEY_FILE=/absolute/path/to/deepseek-key.txt
 ```
 
-Nexus 对应的变量为 `AGENTOS_NEXUS_API_KEY_FILE`。Host daemon 读取密钥并发起 `HTTPS` 请求；Guest 收到模型回复后，依次检查自主合约、工具 schema、capability、Task 状态和 Context commit。DeepSeek V4 请求显式使用 `thinking.type=enabled` 与 `reasoning_effort=max`。工具轮次之间需要的 provider-private `reasoning_content` 由中继向 provider 原样回传，但不进入 Guest、controller 输出或 telemetry。在线 provider 只改变模型回复的来源，工具执行和结果结算仍由本次运行完成。
+Harness 对应的变量为 `AGENTOS_NEXUS_API_KEY_FILE`。Host 读取密钥并发起 `HTTPS` 请求；每个模型 Task 同时绑定 Guest Agent identity 和原生 Task Channel 状态。DeepSeek V4 请求显式使用 `thinking.type=enabled` 与 `reasoning_effort=max`。工具轮次之间需要的 provider-private `reasoning_content` 由 Host 向 provider 原样回传，但不进入 Guest 或 telemetry。在线 provider 只改变模型回复的来源，工具执行和结果结算仍由本次运行完成。
 
 ## 6. 观察运行状态并退出
 
@@ -254,21 +221,13 @@ Console 运行时，可以另开一个终端，接入只读 observer：
 make agentos-observe
 ```
 
-Nexus 工作流使用：
-
-```bash
-make agentos-nexus-observe
-```
-
 observer 可以查看状态、任务和内核时间线，但不能发送控制命令。当前会话信息保存在仅当前用户可读写的 Host 运行目录中。重新连接 controller 时使用：
 
 ```bash
 make agentos-cli
-# Nexus 会话
-make agentos-nexus-cli
 ```
 
-等待模型回复或工具执行时按 `Ctrl-C`，只会取消当前轮次，会话仍可继续使用。工具任务已经进入 Task Channel 时，同一生命周期内具备取消权限的 Agent 使用预先绑定的 syscall 568 `REQUEST_CANCEL`；内核确认后，已 claim 的执行 Agent 会撤销预绑定结果并完成终态 ACK，父 Agent 取得唯一 CQE 并把 Contract 收敛到 `RECLAIMED`。需要退出时，在 controller 输入 `/quit`。Guest 完成收尾后会显示：
+Console 中等待模型回复或工具执行时按 `Ctrl-C`，只会取消当前轮次，会话仍可继续使用。Harness 工具任务已经进入 Task Channel 时，同一生命周期内具备取消权限的 Agent 使用预先绑定的 syscall 568 `REQUEST_CANCEL`；内核确认后，已 claim 的执行 Agent 会撤销预绑定结果并完成终态 ACK，父 Agent 取得唯一 CQE 并把 Contract 收敛到 `RECLAIMED`。Console 需要退出时，在 controller 输入 `/quit`。Guest 完成收尾后会显示：
 
 ```text
 AgentOS session closed

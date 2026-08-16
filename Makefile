@@ -1,4 +1,4 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check host-contract-selftest local-host-selftests local-check agent-module-check agent-uapi-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agent-live-demo agent-live-demo-check agentos-console-image agentos-console agentos-cli agentos-observe agentos-console-check agentos-console-replay agentos-console-deepseek agentos-nexus-image agentos-nexus agentos-nexus-demo agentos-nexus-cli agentos-nexus-observe agentos-nexus-harness agentos-nexus-check agentos-nexus-replay agentos-nexus-deepseek contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run ch3-trace-test fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test virtio-disk-test dual-platform-run full-verify dual-clean clean-workspace-dry-run clean-workspace .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check host-contract-selftest local-host-selftests local-check agent-module-check agent-uapi-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agent-live-demo agent-live-demo-check agentos-console-image agentos-console agentos-cli agentos-observe agentos-console-check agentos-console-replay agentos-console-deepseek agentos-harness-image agentos-harness-native-test agentos-nexus-image agentos-nexus agentos-nexus-demo agentos-nexus-cli agentos-nexus-observe agentos-nexus-harness agentos-nexus-check agentos-nexus-replay agentos-nexus-deepseek contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run ch3-trace-test fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test virtio-disk-test dual-platform-run full-verify dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
 unexport BASH_ENV ENV
 all: build
@@ -454,7 +454,6 @@ override PRODUCT_STATIC_TESTS := \
 	scripts/test-check-agent-uapi-layout.py \
 	scripts/test-agent-execution-contract.py \
 	scripts/test-agent-live-loop.py \
-	scripts/test-agent-nexus-loop.py \
 	scripts/test-agent-file-publish-atomicity.py \
 	scripts/test-agent-task-channel.py \
 	scripts/test-agent-direct-denial-evidence.py \
@@ -531,11 +530,11 @@ override HOST_PRODUCT_TESTS := \
 	host_tools/test_check_host_test_alignment.py \
 	host_tools/test_agent_task_transport.py \
 	host_tools/test_agentos_console.py \
-	host_tools/test_agentos_nexus.py \
-	host_tools/test_agentos_nexus_contract.py \
-	host_tools/test_agentos_nexus_task_ledger.py \
+	host_tools/test_agentos_nexus_dev.py \
+	host_tools/test_agentos_nexus_dev_replay.py \
+	host_tools/test_agentos_nexus_multiagent.py \
+	host_tools/test_agentos_native_task_channel.py \
 	host_tools/test_agentos_workspace.py \
-	host_tools/test_validate_agentos_nexus_replay.py \
 	host_tools/test_guest_llm_relay.py \
 	host_tools/test_mcp_a2a_gateway.py \
 	host_tools/test_evaluation_contract.py \
@@ -631,36 +630,13 @@ AGENTOS_CONSOLE_PROVIDER_ARGS = \
 	--provider $(call shell_quote,$(AGENTOS_CONSOLE_PROVIDER)) \
 	$(AGENTOS_CONSOLE_REPLAY_ARGS) $(AGENTOS_CONSOLE_MODEL_ARGS) \
 	$(AGENTOS_CONSOLE_ENDPOINT_ARGS) $(AGENTOS_CONSOLE_KEY_ARGS)
-AGENTOS_NEXUS_PROVIDER ?= deepseek
-AGENTOS_NEXUS_MODEL ?= $(if $(filter deepseek,$(AGENTOS_NEXUS_PROVIDER)),deepseek-v4-flash,)
-AGENTOS_NEXUS_ENDPOINT ?= $(if $(filter deepseek,$(AGENTOS_NEXUS_PROVIDER)),https://api.deepseek.com/chat/completions,)
-AGENTOS_NEXUS_API_KEY_ENV ?=
-AGENTOS_NEXUS_API_KEY_FILE ?= $(if $(filter deepseek,$(AGENTOS_NEXUS_PROVIDER)),$(AGENT_LIVE_DEEPSEEK_KEY_FILE),)
-AGENTOS_NEXUS_REPLAY_FILE ?= ci/agentos-nexus-replay.jsonl
-AGENTOS_NEXUS_SCRIPT ?=
-AGENTOS_NEXUS_MAX_ROUNDS ?= 16
-AGENTOS_NEXUS_MAX_OUTPUT_TOKENS ?= 114514
-AGENTOS_NEXUS_HTTP_TIMEOUT ?= 600
-AGENTOS_NEXUS_MAX_HTTP_RESPONSE_BYTES ?= 8388608
-AGENTOS_NEXUS_MAX_BINARY ?= 274432
+AGENTOS_NEXUS_MODEL ?= deepseek-v4-flash
+AGENTOS_NEXUS_ENDPOINT ?= https://api.deepseek.com/chat/completions
+AGENTOS_NEXUS_API_KEY_FILE ?= $(AGENT_LIVE_DEEPSEEK_KEY_FILE)
 AGENTOS_NEXUS_HARNESS_GOAL ?=
 AGENTOS_NEXUS_HARNESS_CONFIG ?=
 AGENTOS_NEXUS_HARNESS_TIMEOUT ?= 900
-AGENTOS_NEXUS_REPLAY_DEP = $(if $(filter replay,$(AGENTOS_NEXUS_PROVIDER)),$(AGENTOS_NEXUS_REPLAY_FILE))
-AGENTOS_NEXUS_REPLAY_ARGS = $(if $(filter replay,$(AGENTOS_NEXUS_PROVIDER)),--replay-file $(call shell_quote,$(AGENTOS_NEXUS_REPLAY_FILE)))
-AGENTOS_NEXUS_SCRIPT_DEP = $(if $(strip $(AGENTOS_NEXUS_SCRIPT)),$(AGENTOS_NEXUS_SCRIPT))
-AGENTOS_NEXUS_SCRIPT_ARGS = $(if $(strip $(AGENTOS_NEXUS_SCRIPT)),--script $(call shell_quote,$(AGENTOS_NEXUS_SCRIPT)))
-AGENTOS_NEXUS_MODEL_ARGS = $(if $(strip $(AGENTOS_NEXUS_MODEL)),--model $(call shell_quote,$(AGENTOS_NEXUS_MODEL)))
-AGENTOS_NEXUS_ENDPOINT_ARGS = $(if $(strip $(AGENTOS_NEXUS_ENDPOINT)),--endpoint $(call shell_quote,$(AGENTOS_NEXUS_ENDPOINT)))
-AGENTOS_NEXUS_KEY_ARGS = $(if $(strip $(AGENTOS_NEXUS_API_KEY_FILE)),--api-key-file $(call shell_quote,$(AGENTOS_NEXUS_API_KEY_FILE)),$(if $(strip $(AGENTOS_NEXUS_API_KEY_ENV)),--api-key-env $(call shell_quote,$(AGENTOS_NEXUS_API_KEY_ENV))))
-AGENTOS_NEXUS_PROVIDER_ARGS = \
-	--provider $(call shell_quote,$(AGENTOS_NEXUS_PROVIDER)) \
-	--max-rounds $(call shell_quote,$(AGENTOS_NEXUS_MAX_ROUNDS)) \
-	--max-output-tokens $(call shell_quote,$(AGENTOS_NEXUS_MAX_OUTPUT_TOKENS)) \
-	--http-timeout $(call shell_quote,$(AGENTOS_NEXUS_HTTP_TIMEOUT)) \
-	--max-http-response-bytes $(call shell_quote,$(AGENTOS_NEXUS_MAX_HTTP_RESPONSE_BYTES)) \
-	$(AGENTOS_NEXUS_REPLAY_ARGS) $(AGENTOS_NEXUS_MODEL_ARGS) \
-	$(AGENTOS_NEXUS_ENDPOINT_ARGS) $(AGENTOS_NEXUS_KEY_ARGS)
+AGENTOS_HARNESS_MAX_BINARY ?= 274432
 QEMUOPTS = \
 	-nographic \
 	-machine virt \
@@ -881,19 +857,19 @@ agentos-console-replay: agentos-console-image host_tools/agentos_console.py host
 agentos-console-deepseek:
 	+@$(MAKE) --no-print-directory agentos-console AGENTOS_CONSOLE_PROVIDER=deepseek
 
-# Build the additive Nexus Guest using the repository's shared kernel/image outputs.
-# Do not run console and Nexus image builds concurrently in the same worktree.
-agentos-nexus-image: user/src/agentnexus_ucore.c user/include/agent_nexus.h user/include/agent_nexus_protocol.h user/lib/agent_nexus.c user/include/exec_policy_manifest.h
+# Capability-driven multi-Agent Harness. The objective and optional policy
+# document are the only task-specific inputs; the runtime has no demo workflow.
+agentos-harness-image: user/src/agentharness_ucore.c user/include/exec_policy_manifest.h
 	@rm -f $(F)/fs.img $(F)/fs-copy.img
 	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory -rR -C $(U) -f Makefile clean
 	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory -rR -C $(U) -f Makefile \
 		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
-		CHAPTER=agent CH_TESTS=agentnexus_ucore
-	@set -e; binary="$(U)/build/bin/agentnexus_ucore"; \
-		test -f "$$binary" || { echo "missing Nexus Guest binary: $$binary" >&2; exit 1; }; \
+		CHAPTER=agent CH_TESTS=agentharness_ucore
+	@set -e; binary="$(U)/build/bin/agentharness_ucore"; \
+		test -f "$$binary" || { echo "missing Harness Guest binary: $$binary" >&2; exit 1; }; \
 		size=$$(wc -c < "$$binary"); \
-		test "$$size" -le "$(AGENTOS_NEXUS_MAX_BINARY)" || { \
-			echo "agentnexus_ucore exceeds uCore MAXFILE: $$size > $(AGENTOS_NEXUS_MAX_BINARY)" >&2; \
+		test "$$size" -le "$(AGENTOS_HARNESS_MAX_BINARY)" || { \
+			echo "agentharness_ucore exceeds uCore MAXFILE: $$size > $(AGENTOS_HARNESS_MAX_BINARY)" >&2; \
 			exit 1; \
 		}
 	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory -rR -C $(F) -f Makefile
@@ -904,49 +880,15 @@ agentos-nexus-image: user/src/agentnexus_ucore.c user/include/agent_nexus.h user
 		trap - 0 1 2 3 15
 	+@$(MAKE) $(AGENTOS_SUBMAKE_JOBS) --no-print-directory build \
 		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
-		LOG=warn INIT_PROC=agentnexus_ucore CHAPTER=agent
+		LOG=warn INIT_PROC=agentharness_ucore CHAPTER=agent
 
-agentos-nexus: agentos-nexus-image host_tools/agentos_console.py host_tools/agentos_relayd.py host_tools/agentos_cli.py host_tools/agentos_local_protocol.py host_tools/agentos_nexus_contract.py host_tools/agentos_nexus_dev.py host_tools/agentos_workspace.py $(AGENTOS_NEXUS_REPLAY_DEP) $(AGENTOS_NEXUS_SCRIPT_DEP)
-	@if test -n $(call shell_quote,$(AGENTOS_NEXUS_API_KEY_FILE)) && \
-		test -n $(call shell_quote,$(AGENTOS_NEXUS_API_KEY_ENV)); then \
-		echo "AGENTOS_NEXUS_API_KEY_FILE and AGENTOS_NEXUS_API_KEY_ENV are mutually exclusive" >&2; \
-		exit 2; \
-	fi
-	@case $(call shell_quote,$(AGENTOS_NEXUS_PROVIDER)) in \
-		replay) ;; \
-		openai|anthropic|deepseek) \
-			test -n $(call shell_quote,$(AGENTOS_NEXUS_MODEL)) || \
-				{ echo "AGENTOS_NEXUS_MODEL is required for a live provider" >&2; exit 2; } ;; \
-		*) echo "invalid AGENTOS_NEXUS_PROVIDER" >&2; exit 2 ;; \
-	esac
-	@$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py run \
-		--guest-profile nexus \
-		--workspace-root $(call shell_quote,.) \
-		$(AGENTOS_NEXUS_PROVIDER_ARGS) \
-		--qemu $(call shell_quote,$(QEMU)) \
+agentos-harness-native-test: agentos-harness-image host_tools/test_agentos_native_task_channel.py
+	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_native_task_channel.py \
+		--integration --qemu $(call shell_quote,$(QEMU)) \
 		--kernel $(call shell_quote,$(BUILDDIR)/kernel) \
-		--image $(call shell_quote,$(F)/fs-copy.img) \
-		$(AGENTOS_NEXUS_SCRIPT_ARGS)
+		--image $(call shell_quote,$(F)/fs-copy.img)
 
-# Focused live engineering question for judging Nexus by the usefulness of its
-# workspace investigation and conclusion, rather than by a prescribed tool tour.
-agentos-nexus-demo: ci/agentos-nexus-demo-script.txt
-	+@$(MAKE) --no-print-directory agentos-nexus \
-		AGENTOS_NEXUS_PROVIDER=deepseek \
-		AGENTOS_NEXUS_MAX_ROUNDS=10 \
-		AGENTOS_NEXUS_SCRIPT=ci/agentos-nexus-demo-script.txt
-
-agentos-nexus-cli: host_tools/agentos_console.py host_tools/agentos_cli.py host_tools/agentos_local_protocol.py
-	@$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py cli \
-		--attach latest --expect-guest-profile nexus
-
-agentos-nexus-observe: host_tools/agentos_console.py host_tools/agentos_observe.py host_tools/agentos_local_protocol.py
-	@$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py observe \
-		--attach latest --expect-guest-profile nexus
-
-# Capability-driven multi-Agent Harness. The objective and optional policy
-# document are the only task-specific inputs; the runtime has no demo workflow.
-agentos-nexus-harness: host_tools/agentos_nexus_multiagent.py host_tools/agentos_nexus_dev.py host_tools/agentos_workspace.py
+agentos-nexus-harness: agentos-harness-image host_tools/agentos_nexus_multiagent.py host_tools/agentos_native_task_channel.py host_tools/agentos_nexus_dev.py host_tools/agentos_workspace.py
 	@test -n $(call shell_quote,$(AGENTOS_NEXUS_HARNESS_GOAL)) || \
 		{ echo "AGENTOS_NEXUS_HARNESS_GOAL is required" >&2; exit 2; }
 	@test -n $(call shell_quote,$(AGENTOS_NEXUS_API_KEY_FILE)) || \
@@ -958,103 +900,24 @@ agentos-nexus-harness: host_tools/agentos_nexus_multiagent.py host_tools/agentos
 		--endpoint $(call shell_quote,$(AGENTOS_NEXUS_ENDPOINT)) \
 		--model $(call shell_quote,$(AGENTOS_NEXUS_MODEL)) \
 		--timeout $(call shell_quote,$(AGENTOS_NEXUS_HARNESS_TIMEOUT)) \
+		--qemu $(call shell_quote,$(QEMU)) \
+		--kernel $(call shell_quote,$(BUILDDIR)/kernel) \
+		--image $(call shell_quote,$(F)/fs-copy.img) \
 		$(if $(strip $(AGENTOS_NEXUS_HARNESS_CONFIG)),--config $(call shell_quote,$(AGENTOS_NEXUS_HARNESS_CONFIG)))
 
-agentos-nexus-check: host_tools/test_agentos_console.py host_tools/test_agentos_nexus.py host_tools/test_agentos_nexus_contract.py host_tools/test_agentos_nexus_dev.py host_tools/test_agentos_nexus_dev_replay.py host_tools/test_agentos_nexus_multiagent.py host_tools/test_agentos_nexus_task_ledger.py host_tools/test_agentos_workspace.py host_tools/test_validate_agentos_nexus_replay.py host_tools/test_guest_llm_relay.py scripts/test-agent-nexus-loop.py ci/agentos-nexus-dev-replay.jsonl
-	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_console.py
-	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_nexus.py
-	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_nexus_contract.py
+# Fixed-role Nexus targets are tombstones. All supported execution uses the
+# generic Harness and its persistent native Task Channel Guest.
+agentos-nexus-image agentos-nexus agentos-nexus-demo agentos-nexus-cli agentos-nexus-observe agentos-nexus-replay agentos-nexus-deepseek:
+	@echo "fixed-role Nexus is retired; use make agentos-nexus-harness" >&2
+	@exit 2
+
+agentos-nexus-check: host_tools/test_agentos_nexus_dev.py host_tools/test_agentos_nexus_dev_replay.py host_tools/test_agentos_nexus_multiagent.py host_tools/test_agentos_native_task_channel.py host_tools/test_agentos_workspace.py host_tools/test_guest_llm_relay.py ci/agentos-nexus-dev-replay.jsonl
 	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_nexus_dev.py
 	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_nexus_dev_replay.py
 	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_nexus_multiagent.py
-	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_nexus_task_ledger.py
+	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_native_task_channel.py
 	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_workspace.py
-	@$(PYTHON_CMD) -I -S -B host_tools/test_validate_agentos_nexus_replay.py
 	@$(PYTHON_CMD) -B host_tools/test_guest_llm_relay.py
-	@$(PYTHON_CMD) -I -S -B scripts/test-agent-nexus-loop.py
-
-# Deterministic interaction regression for the Nexus protocol. The separate
-# live demonstration judges a model-selected investigation and natural answer.
-agentos-nexus-replay: agentos-nexus-image host_tools/agentos_console.py host_tools/agentos_relayd.py host_tools/agentos_cli.py host_tools/agentos_observe.py host_tools/agentos_local_protocol.py host_tools/agentos_nexus_contract.py host_tools/agentos_nexus_dev.py host_tools/agentos_workspace.py host_tools/validate_agentos_nexus_replay.py $(AGENTOS_NEXUS_REPLAY_FILE) ci/agentos-nexus-script.txt
-	@set -eu; \
-		runtime=$$(mktemp -d /tmp/aon.XXXXXX); \
-		controller="$$runtime/controller.ndjson"; \
-		controller_error="$$runtime/controller.stderr"; \
-		observer="$$runtime/observer.ndjson"; \
-		observer_error="$$runtime/observer.stderr"; \
-		daemon_log="$$runtime/daemon.log"; \
-		daemon_pid=; observer_pid=; \
-		cleanup() { \
-			status=$$?; \
-			trap - 0 1 2 3 15; \
-			set +e; \
-			if test -n "$$observer_pid" && kill -0 "$$observer_pid" 2>/dev/null; then kill "$$observer_pid" 2>/dev/null || true; fi; \
-			if test -n "$$daemon_pid" && kill -0 "$$daemon_pid" 2>/dev/null; then kill "$$daemon_pid" 2>/dev/null || true; fi; \
-			if test -n "$$observer_pid"; then wait "$$observer_pid" 2>/dev/null || true; fi; \
-			if test -n "$$daemon_pid"; then wait "$$daemon_pid" 2>/dev/null || true; fi; \
-			if test "$$status" -ne 0; then \
-				printf '%s\n' '--- AgentOS Nexus daemon ---' >&2; test ! -f "$$daemon_log" || cat "$$daemon_log" >&2; \
-				printf '%s\n' '--- AgentOS Nexus controller ---' >&2; test ! -f "$$controller" || cat "$$controller" >&2; \
-				printf '%s\n' '--- AgentOS Nexus controller stderr ---' >&2; test ! -f "$$controller_error" || cat "$$controller_error" >&2; \
-				printf '%s\n' '--- AgentOS Nexus observer ---' >&2; test ! -f "$$observer" || cat "$$observer" >&2; \
-				printf '%s\n' '--- AgentOS Nexus observer stderr ---' >&2; test ! -f "$$observer_error" || cat "$$observer_error" >&2; \
-			fi; \
-			runtime_user="$$runtime/agentos-$$(id -u)"; \
-			rm -f "$$runtime_user"/control-*.sock "$$runtime_user"/telemetry-*.sock \
-				"$$runtime_user"/latest.json "$$runtime_user"/daemon.lock 2>/dev/null || true; \
-			rm -f "$$controller" "$$controller_error" "$$observer" "$$observer_error" "$$daemon_log"; \
-			rmdir "$$runtime_user" 2>/dev/null || true; \
-			rmdir "$$runtime" 2>/dev/null || true; \
-			exit "$$status"; \
-		}; \
-		trap cleanup 0; \
-		trap 'exit 130' 1 2 3 15; \
-		$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py daemon \
-			--guest-profile nexus \
-			--workspace-root $(call shell_quote,.) \
-			--provider replay \
-			--max-rounds $(call shell_quote,$(AGENTOS_NEXUS_MAX_ROUNDS)) \
-			--max-output-tokens $(call shell_quote,$(AGENTOS_NEXUS_MAX_OUTPUT_TOKENS)) \
-			--http-timeout $(call shell_quote,$(AGENTOS_NEXUS_HTTP_TIMEOUT)) \
-			--max-http-response-bytes $(call shell_quote,$(AGENTOS_NEXUS_MAX_HTTP_RESPONSE_BYTES)) \
-			--qemu $(call shell_quote,$(QEMU)) \
-			--kernel $(call shell_quote,$(BUILDDIR)/kernel) \
-			--image $(call shell_quote,$(F)/fs-copy.img) \
-			--replay-file $(call shell_quote,$(AGENTOS_NEXUS_REPLAY_FILE)) \
-			--runtime-dir "$$runtime" --quiet > "$$daemon_log" 2>&1 & \
-		daemon_pid=$$!; \
-		state="$$runtime/agentos-$$(id -u)/latest.json"; \
-		attempt=0; \
-		while test ! -s "$$state" && test "$$attempt" -lt 3000; do \
-			kill -0 "$$daemon_pid" 2>/dev/null || { printf '%s\n' 'AgentOS Nexus daemon exited before publishing state' >&2; exit 1; }; \
-			attempt=$$((attempt + 1)); sleep 0.05; \
-		done; \
-		test -s "$$state" || { printf '%s\n' 'AgentOS Nexus daemon state timeout' >&2; exit 1; }; \
-		$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py observe \
-			--attach latest --expect-guest-profile nexus \
-			--state-file "$$state" --json-events \
-			--until-event session_closed > "$$observer" 2> "$$observer_error" & \
-		observer_pid=$$!; \
-		attempt=0; \
-		while ! grep -q '"event":"observer_attached"' "$$observer" 2>/dev/null && test "$$attempt" -lt 200; do \
-			kill -0 "$$observer_pid" 2>/dev/null || { printf '%s\n' 'AgentOS Nexus observer exited before attaching' >&2; exit 1; }; \
-			attempt=$$((attempt + 1)); sleep 0.05; \
-		done; \
-		grep -q '"event":"observer_attached"' "$$observer" 2>/dev/null || { printf '%s\n' 'AgentOS Nexus observer attach timeout' >&2; exit 1; }; \
-		$(PYTHON_CMD) -I -S -B host_tools/agentos_console.py cli \
-			--attach latest --expect-guest-profile nexus --state-file "$$state" \
-			--script ci/agentos-nexus-script.txt \
-			--json-events --event-timeout 180 > "$$controller" 2> "$$controller_error"; \
-		wait "$$observer_pid"; observer_pid=; \
-		wait "$$daemon_pid"; daemon_pid=; \
-		$(PYTHON_CMD) -I -S -B host_tools/validate_agentos_nexus_replay.py \
-			--controller "$$controller" --observer "$$observer" \
-			--fixture $(call shell_quote,$(AGENTOS_NEXUS_REPLAY_FILE)) \
-			--script $(call shell_quote,ci/agentos-nexus-script.txt) \
-			--workspace-root $(call shell_quote,.)
-
-agentos-nexus-deepseek:
-	+@$(MAKE) --no-print-directory agentos-nexus AGENTOS_NEXUS_PROVIDER=deepseek
 
 # The Guest owns the conversation, tool selection, Context, and kernel calls.
 # The Host relay only carries framed bytes and provider HTTPS; replay uses the

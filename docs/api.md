@@ -67,7 +67,7 @@ ABI 检查程序使用 RISC-V64 探针、`_Static_assert` 和冻结清单，核�
 make agent-uapi-check
 ```
 
-冻结清单位于 [`ci/agent-uapi-layout.json`](../ci/agent-uapi-layout.json)，探针位于 [`scripts/probes/agent-uapi-layout.c`](../scripts/probes/agent-uapi-layout.c)。当前检查覆盖 710 项结构大小、字段偏移、枚举值和系统调用号合约，其中包含批量 Metadata 登记、结果文件发布、workspace mutation、通用 Agent runtime、Context Artifact、查询预测以及 delegated task 的 descriptor、claim/complete、controller cancel 和协作式终态确认布局。
+冻结清单位于 [`ci/agent-uapi-layout.json`](../ci/agent-uapi-layout.json)，探针位于 [`scripts/probes/agent-uapi-layout.c`](../scripts/probes/agent-uapi-layout.c)。ABI vNext 把 `AGENT_UAPI_ABI_VERSION` 提升为 2。当前检查覆盖 701 项结构大小、字段偏移、枚举值和系统调用号合约，其中包含批量 Metadata 登记、结果文件发布、workspace mutation、通用 Agent runtime、Context Artifact、查询预测以及 delegated task 的 descriptor、claim/complete、controller cancel 和协作式终态确认布局。清单已删除恒零 mailbox 字段、旧 V1 请求结构及退役 C 包装；对应系统调用号保持为空。
 
 ## 系统调用索引
 
@@ -77,7 +77,7 @@ make agent-uapi-check
 | --- | --- | --- |
 | Identity | 500、501、517、561 | `agent_create()`、`agent_info()`、`agent_create_role()`、`agent_launch_info()` |
 | Workflow | 539、541、542、545、546、570 | `agent_worker_create()`、`agent_workflow_create()`、`agent_scope_delegate_fd()`、`agent_workflow_close()`、`agent_workflow_lifecycle_info()`、`agent_runtime_control()` |
-| 工具 | 502、503、504、547、548 | `agent_run()`、`agent_call()`、`agent_tool_list()`、`tool_call()`、`tool_call_v3()`、`tool_list()` |
+| 工具 | 502、547、548 | `agent_run()`、`tool_call()`、`tool_call_v3()`、`tool_list()`；503、504 为退役空号 |
 | Context 与 Artifact | 505 至 509、519、571 | `context_push/query/snapshot/detail/rollback/clear()`、`agent_context_artifact()` |
 | 文件状态与结果发布 | 514 至 516、535 至 538、566、569 | `agent_file_meta_*()`、`agent_file_meta_set_batch()`、`agent_file_query()`、`agent_file_edit_*()`、`agent_file_publish()` |
 | 事件与进程通信 | 510 至 513、518、520、540、552、553 | `agent_watch()`、`agent_live_watch/unwatch()`、`agent_wait()`、`agent_wait_cancel()`、`agent_wake()`、`agent_route_config()`、心跳接口 |
@@ -115,19 +115,15 @@ int agent_workflow_lifecycle_info(
 <a id="工具调用与执行约定"></a>
 ## Agent-OS 内核结构化交互接口
 
-### V1 与 V2
+### V2 工具请求
 
 ```c
-int agent_call(struct agent_request *req,
-               struct agent_response *resp);
-int agent_tool_list(struct agent_tool_desc *out, int max);
-
 int tool_call(struct agent_request_v2 *req,
-              struct agent_response_v2 *resp);
+               struct agent_response_v2 *resp);
 int tool_list(struct agent_tool_desc_v2 *out, int max);
 ```
 
-这组接口实现工具调用协议：请求以工具名称/编号和 typed 键值参数表示，响应给出状态码、序号和结构化结果。V1 使用固定布局的请求。V2 用一组带类型信息的键值参数表示调用内容。一次 V2 请求最多包含 8 个 `agent_param_v2`，每项分别填写键名、类型和值的长度。Tool Registry 登记了 33 个名称和编号均不重复的工具，同时注明所需能力、允许的 provenance 和副作用类型。20 项可通过 V2/V3 执行，`agent_wait`、`context_push`、`delegate_task` 三项只进入对应的系统调用路径，`ctx_stat`、`rerun_stage`、`write_report` 三项返回 `DEPRECATED`，工作区搜索/读取、状态观察、写入、补丁、构建和运行共 7 项返回 `BROKER_REQUIRED` 并交给受控 Host broker。详见[Agent-OS 内核结构化交互接口与工具调用协议](modules/tool-execution.md#tool-registry-与-typed-schema)。
+这组接口实现当前工具调用协议：请求以工具名称/编号和 typed 键值参数表示，响应给出状态码、序号和结构化结果。一次 V2 请求最多包含 8 个 `agent_param_v2`，每项分别填写键名、类型和值的长度。ABI vNext 已删除 V1 固定结构、`agent_call()`、`agent_tool_list()` 以及系统调用 503/504。Tool Registry 登记了 33 个名称和编号均不重复的工具，同时注明所需能力、允许的 provenance 和副作用类型。20 项可通过 V2/V3 执行，`agent_wait`、`context_push`、`delegate_task` 三项只进入对应的系统调用路径，`ctx_stat`、`rerun_stage`、`write_report` 三项返回 `DEPRECATED`，工作区搜索/读取、状态观察、写入、补丁、构建和运行共 7 项返回 `BROKER_REQUIRED` 并交给受控 Host broker。详见[Agent-OS 内核结构化交互接口与工具调用协议](modules/tool-execution.md#tool-registry-与-typed-schema)。
 
 ### V3 与 Execution Contract 管理
 
@@ -212,7 +208,7 @@ int agent_file_publish(const char *path, const void *header,
 
 Metadata Catalog 只记录经过 `agent_file_meta_set()` 或批量接口显式登记的元数据，最多保存 512 项。普通登记要求 `flags` 为零，`AGENT_FILE_META_F_DELETE` 用于删除登记；`PERSIST`、`AUTOSCAN` 和未知标志都会被拒绝。一次查询最多返回 8 项。设置 `USE_INDEX` 时，内核可以按状态、阶段或类型使用索引；设置 `SCAN` 时则逐项扫描。返回结构给出完整命中数、是否截断、实际查询方式、扫描量、候选量、查询耗时和 `fs_generation`。
 
-`agent_metadata_init()` 是 Metadata 初始化的规范入口，旧 `agent_file_meta_init()` 作为用户库兼容包装保留。Heartbeat 使用 `agent_heartbeat_configure(interval)`；`interval` 为零时停止，非零值从当前 tick 重新计时。Context 工具状态读取统一使用 `context_status`，旧 `ctx_stat` 工具编号不会执行。
+`agent_metadata_init()` 是 Metadata 初始化的公开入口；旧 `agent_file_meta_init()` C 包装已经删除。Heartbeat 统一使用 `agent_heartbeat_configure(interval)`；`interval` 为零时停止，非零值从当前 tick 重新计时，旧的 start/stop/legacy C 包装不再导出。Context 工具状态读取统一使用 `context_status`，旧 `ctx_stat` 工具编号不会执行。
 
 工作区写入描述符定义在 [`include/agent_workspace_mutation_abi.h`](../include/agent_workspace_mutation_abi.h)。`apply_patch` 与 `write_file` 分别使用独立的 operation 和工具编号，请求包含 lifecycle、object id、预期 revision、内容 artifact handle、内容长度、SHA-256 与相对路径。普通 V2/V3 调用返回 `BROKER_REQUIRED`，不会直接修改 Host 文件。Nexus 将请求送到 [`agentos_nexus_dev.py`](../host_tools/agentos_nexus_dev.py)：路径必须匹配 `user/src/nexus_*_ucore.c`，`expected_revision` 必须是当前内容的 SHA-256 或新文件使用的 `missing`，提交成功后返回新的 revision。
 
@@ -242,7 +238,7 @@ syscall 572 用 256 字节 control/result 管理每 Agent 的有界查询预测�
 
 编辑租约记录所有者、文件访问范围、inode 身份、租约号、基础版本和有效期。commit 时，`expected_version` 用来发现并发修改。
 
-`agent_file_publish()` 对应系统调用 566。64 字节请求结构带有 `version`、`size`、正式路径、header/payload 指针及两段长度，保留字段和 `flags` 必须为零，两段内容合计不能超过 4,096 字节。正式路径只能是 1–14 字节的直接 basename。调用者必须是具备 artifact 写能力、处于活动文件访问范围内的 Agent。内核先复制完整字节并写入未命名 inode，数据和 inode checkpoint 完成后再接入正式文件名，并用第二次 attach-only checkpoint 固定目录项；同名文件已存在时返回 `DUPLICATE`，不会覆盖。若目录接入结果无法确定，则返回 `INDETERMINATE`。Nexus 只在正式路径与本次 header、payload 逐字节一致且紧接 EOF 时，把这两种状态收敛为幂等成功；内容不同便保留失败结果。
+`agent_file_publish()` 对应系统调用 566。64 字节请求结构带有 `version`、`size`、正式路径、header/payload 指针及两段长度，保留字段和 `flags` 必须为零，两段内容合计不能超过 4,096 字节。正式路径只能是 1–14 字节的直接 basename。调用者必须是具备 artifact 写能力、处于活动文件访问范围内的 Agent。内核先复制完整字节并写入未命名 inode，数据和 inode checkpoint 完成后再接入正式文件名，并用第二次 attach-only checkpoint 固定目录项；同名文件已存在时返回 `DUPLICATE`，不会覆盖。若目录接入结果无法确定，则返回 `INDETERMINATE`。调用者依据返回状态处理重复或不确定结果，内核不会覆盖已有正式文件。
 
 <a id="事件调度与观测"></a>
 ## Agent Loop、调度与运行记录

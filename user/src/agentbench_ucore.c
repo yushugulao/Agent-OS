@@ -168,7 +168,7 @@ static void fill_echo_batch(uint64 base)
 {
 	for (int i = 0; i < AGENT_BATCH_MAX; i++) {
 		memset(&ops[i], 0, sizeof(ops[i]));
-		ops[i].version = AGENT_CALL_VERSION;
+		ops[i].version = AGENT_OP_VERSION;
 		ops[i].tool_id = AGENT_TOOL_ECHO;
 		ops[i].request_id = base + i;
 		ops[i].arg0 = i;
@@ -244,7 +244,7 @@ static int bench_scalar(void)
 	int start;
 
 	memset(&op, 0, sizeof(op));
-	op.version = AGENT_CALL_VERSION;
+	op.version = AGENT_OP_VERSION;
 	op.tool_id = AGENT_TOOL_ECHO;
 	strcpy(op.payload, "scalar");
 	start = now_ms();
@@ -460,7 +460,7 @@ static int bench_file_digest(int *total_bytes)
 	int start;
 
 	memset(&digest_op, 0, sizeof(digest_op));
-	digest_op.version = AGENT_CALL_VERSION;
+	digest_op.version = AGENT_OP_VERSION;
 	digest_op.tool_id = AGENT_TOOL_READ_FILE_DIGEST;
 	strcpy(digest_op.payload, "bdigest");
 	*total_bytes = 0;
@@ -726,7 +726,7 @@ static void check_timeout_and_heartbeat(void)
 	check(bench_scratch.info.timeout_count == timeout_count + 1,
 	      "timeout count");
 	old_heartbeat = bench_scratch.info.last_heartbeat_tick;
-	check(agent_heartbeat(7) == 0, "heartbeat set");
+	check(agent_heartbeat_configure(7) == 0, "heartbeat set");
 	check(agent_info(&bench_scratch.info) == 0,
 	      "info after heartbeat");
 	check(bench_scratch.info.heartbeat_interval == 7,

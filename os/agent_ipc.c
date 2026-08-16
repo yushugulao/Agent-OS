@@ -1511,12 +1511,6 @@ static int agent_ipc_heartbeat_syscall(uint64 interval_ticks, char *action)
 	return 0;
 }
 
-int sys_agent_heartbeat(uint64 interval_ticks)
-{
-	(void)interval_ticks;
-	return AGENT_STATUS_DEPRECATED;
-}
-
 int sys_agent_heartbeat_set(uint64 interval_ticks)
 {
 	return agent_ipc_heartbeat_syscall(interval_ticks, "heartbeat_set");

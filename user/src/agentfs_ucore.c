@@ -579,7 +579,7 @@ static void check_digest_text(const char *selector, const char *text)
 {
 	memset(&fs_op, 0, sizeof(fs_op));
 	memset(&fs_res, 0, sizeof(fs_res));
-	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.version = AGENT_OP_VERSION;
 	fs_op.tool_id = AGENT_TOOL_READ_FILE_DIGEST;
 	fs_op.request_id = 77001;
 	strcpy(fs_op.payload, selector);
@@ -799,7 +799,7 @@ static void run_handoff_replacement(int inspect_fd, int report_fd)
 	replacement.event_queue_count = info.event_queue_count;
 	memset(&op, 0, sizeof(op));
 	memset(&result, 0, sizeof(result));
-	op.version = AGENT_CALL_VERSION;
+	op.version = AGENT_OP_VERSION;
 	op.tool_id = AGENT_TOOL_READ_MESSAGE;
 	op.request_id = 78101;
 	check(agent_run(&op, &result, 1, 0) == 1,
@@ -948,7 +948,7 @@ static void check_scoped_dependency_query(void)
 	char run042[AGENT_FAST_RESULT_SIZE];
 
 	memset(&fs_op, 0, sizeof(fs_op));
-	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.version = AGENT_OP_VERSION;
 	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_QUERY;
 	fs_op.request_id = 78001;
 	strcpy(fs_op.payload, "label=align;namespace=lab-gene-x;run_id=RUN-042");
@@ -962,7 +962,7 @@ static void check_scoped_dependency_query(void)
 	strcpy(run042, fs_res.result);
 
 	memset(&fs_op, 0, sizeof(fs_op));
-	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.version = AGENT_OP_VERSION;
 	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_QUERY;
 	fs_op.request_id = 78002;
 	strcpy(fs_op.payload, "label=align;namespace=lab-gene-x;run_id=RUN-ALT");
@@ -981,7 +981,7 @@ static void check_user_dependency_update(void)
 {
 	memset(&fs_op, 0, sizeof(fs_op));
 	memset(&fs_res, 0, sizeof(fs_res));
-	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.version = AGENT_OP_VERSION;
 	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_UPDATE;
 	fs_op.request_id = 78003;
 	strcpy(fs_op.payload,
@@ -994,7 +994,7 @@ static void check_user_dependency_update(void)
 
 	memset(&fs_op, 0, sizeof(fs_op));
 	memset(&fs_res, 0, sizeof(fs_res));
-	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.version = AGENT_OP_VERSION;
 	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_QUERY;
 	fs_op.request_id = 78004;
 	strcpy(fs_op.payload,
@@ -1020,7 +1020,7 @@ static void check_batched_action_maintenance(void)
 
 	memset(&fs_op, 0, sizeof(fs_op));
 	memset(&fs_res, 0, sizeof(fs_res));
-	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.version = AGENT_OP_VERSION;
 	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_QUERY;
 	fs_op.request_id = 78005;
 	strcpy(fs_op.payload,
@@ -1043,7 +1043,7 @@ static void check_batched_action_maintenance(void)
 
 	memset(&fs_op, 0, sizeof(fs_op));
 	memset(&fs_res, 0, sizeof(fs_res));
-	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.version = AGENT_OP_VERSION;
 	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_QUERY;
 	fs_op.request_id = 780051;
 	strcpy(fs_op.payload,
@@ -1062,7 +1062,7 @@ static void check_batched_action_maintenance(void)
 	      "topology metadata update");
 	memset(&fs_op, 0, sizeof(fs_op));
 	memset(&fs_res, 0, sizeof(fs_res));
-	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.version = AGENT_OP_VERSION;
 	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_QUERY;
 	fs_op.request_id = 780052;
 	strcpy(fs_op.payload,
@@ -1075,7 +1075,7 @@ static void check_batched_action_maintenance(void)
 	dependency_generation = fs_res.value2;
 
 	memset(&fs_op, 0, sizeof(fs_op));
-	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.version = AGENT_OP_VERSION;
 	fs_op.tool_id = AGENT_TOOL_ACTION_COMMIT;
 	fs_op.request_id = 78006;
 	strcpy(fs_op.payload,
@@ -1109,7 +1109,7 @@ static void check_batched_action_maintenance(void)
 
 	memset(&fs_op, 0, sizeof(fs_op));
 	memset(&fs_res, 0, sizeof(fs_res));
-	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.version = AGENT_OP_VERSION;
 	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_QUERY;
 	fs_op.request_id = 78007;
 	strcpy(fs_op.payload,
@@ -1264,7 +1264,7 @@ static __attribute__((noinline)) void run_agent(void)
 	printf("agentfs_ucore: delete_clears_metadata=1\n");
 
 	memset(&fs_op, 0, sizeof(fs_op));
-	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.version = AGENT_OP_VERSION;
 	fs_op.tool_id = AGENT_TOOL_ACTION_COMMIT;
 	fs_op.request_id = 99001;
 	strcpy(fs_op.payload, "label=align;run_id=RUN-NOPE;namespace=issue4");

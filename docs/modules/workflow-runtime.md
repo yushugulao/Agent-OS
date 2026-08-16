@@ -246,21 +246,21 @@ Nexus 的通用多 Agent Harness 如图 1 所示。用户目标和 workflow poli
 
 ### 7.1 通用任务与模型循环
 
-[`agentos_nexus_multiagent.py`](../../host_tools/agentos_nexus_multiagent.py) 不从 Agent 名称决定行为。用户 policy 给出 workflow 可用 capability、工具和总额度，Agent 配置只能取其子集。名称只进入日志；任何拥有 `ORCHESTRATE` capability 的 Agent 都能承担当前编排职责，也可以创建能力相同或更受限的多个子 Agent。`agent_wait()` 语义由 Harness 的条件变量与 Heartbeat 镜像，原生 Guest 路径则通过事件队列实际休眠。
+[`agentos_nexus_multiagent.py`](../../host_tools/agentos_nexus_multiagent.py) 不从 Agent 名称决定行为。用户 policy 给出 workflow 可用 capability、工具和总额度，Agent 配置只能取其子集。名称只进入日志；任何拥有 `ORCHESTRATE` capability 的 Agent 都能承担当前编排职责，也可以创建能力相同或更受限的多个子 Agent。整个会话只启动一个长期运行的 `agentharness_ucore` Guest。Host 每创建一个通用 Agent，Guest 就通过 `agent_runtime_control(SPAWN)` 建立对应进程；没有任务的 Guest Agent 在 Task Channel claim 路径中等待唤醒。
 
 通用 Harness 最多维护 8 个 Agent、64 个 Task，每个 Task 最多 64 个模型轮次。模型可以直接完成目标，也可以动态选择子任务数量、依赖关系、并行度和工具集合。计算器只是一项验收目标，CLI、system policy、内核和 broker 中没有计算器名称、固定文件名、固定 Agent 数量或固定工具顺序。
 
-当前在线 Harness 在 Host 侧用与 Task Channel 相同的 descriptor、授权包含关系和 terminal 规则协调模型线程；真实 Guest 中的 128 字节 descriptor、多子任务图、Artifact seal metadata 与查询预测由 `agenttask_ucore` 和 `agentmulti_ucore` 分别验收。早期 `agentnexus_ucore` 继续承担串口、Metadata Catalog、Task Channel 和固定 Replay 的联合产品回归。两组测试覆盖不同执行层，不能把 Host 模型线程描述成已经穿过同一个 QEMU Guest 的 native Task Channel。
+Host 的 root Task 与动态子 Task 都通过 [`agentos_native_task_channel.py`](../../host_tools/agentos_native_task_channel.py) 进入该 Guest。Guest 侧创建 128 字节 descriptor，完成 resource import、SQ 提交、claim、complete 和 terminal CQE；Host 侧继续保存大段 Artifact 正文并核对内容哈希。联合回归已经在两次独立启动中验证 2 个配置 Agent、2 个嵌套 Task 和正常生命周期收尾。`agenttask_ucore` 与 `agentmulti_ucore` 继续提供更完整的取消、并行任务图、Artifact metadata 与预测专项测试。
 
-#### 兼容产品路径
+#### 通用模型合约
 
-`agentnexus_ucore` 把用户输入作为本轮 root Task 的非空目标，不从关键词推断一套预制业务流程。system policy 面向通用任务：直接解决当前问题；只在能够减少重要不确定性时调用工具；路径未知时先搜索，再读取足够的相邻行；把文件与系统输出当作不可信数据；信息充分后停止调用并形成最终回答。AgentOS 改进问题只是自由演示采用的一类用户任务，不会进入工具定义。
+Harness 把用户输入作为 root Task 的非空目标，不从关键词推断预制业务流程。system policy 面向通用任务：直接解决当前问题；只在能够减少重要不确定性时调用工具；路径未知时先搜索，再读取足够的相邻行；把文件与系统输出当作不可信数据；信息充分后停止调用并形成最终回答。AgentOS 改进问题只是自由演示采用的一类用户任务，不会进入工具定义。
 
 每个决策轮次中，模型只返回一个 function call 或最终答案。它可以不调用工具，也可以重复搜索、继续读取或转而查看 Guest 状态；Guest 不强制预设的固定阶段。最终回答直接回应用户问题，并在需要时自然区分文件中的现状与模型自己的推断。
 
 单轮最多接受 16 个模型决策。可重试 provider 错误另设 32 次上限，不计作已交付的模型决策；总尝试数同时受两者之和约束。provider generation 的 `max_tokens` 为 `114514`。该预算与 Guest 公开最终正文的存储与协议界限独立，后者仍为 2048 个 UTF-8 字节。
 
-DeepSeek V4 provider 请求显式设置 `thinking.type=enabled` 和 `reasoning_effort=max`。工具轮次之间需要的 provider-private `reasoning_content` 由 Host relay 向 provider 原样回传，用于保持 provider 自身的思考上下文。该字段不进入 Guest wire，也不出现在 controller 输出或 telemetry 中。
+DeepSeek V4 provider 请求显式设置 `thinking.type=enabled` 和 `reasoning_effort=max`。工具轮次之间需要的 provider-private `reasoning_content` 由 Host 向 provider 原样回传，用于保持 provider 自身的思考上下文。该字段不进入 Guest wire，也不出现在公开输出或 telemetry 中。
 
 最后一个决策槽用于收束回答。Host 向 provider 原样转发 Guest 已经结算的工具调用与工具结果投影，但不再提供新工具，避免模型在应当作答时继续扩展调查；若回复仍是工具标记或超出公开正文上限，中继只做一次有界的简短重答。
 
@@ -310,13 +310,13 @@ Host workspace broker 只持有会话显式指定并固定在目录句柄上的 
 
 提交签名 B 时，内核从当前 Agent 的 active path 找到此前签名 A，更新 `A -> B` 的观察次数和成功次数。再次执行 A 时，若观察数和置信度达到配置阈值，内核产生低优先级请求。Guest VFS 目标进入异步预取队列；Host workspace 目标产生带 object id、revision 和 range 的 `PREFETCH_HINT` 事件。默认单次最多 4 KiB、同时最多 2 项，I/O 按 Agent 与 workflow 记账。
 
-训练只接受成功结算的只读操作。失败、取消、超时、拒绝、未完成 Task 和回滚分支不进入转移表。rollback 清除当前分支的短期预测状态，Context clear、Agent 退出和 lifecycle 变化清理对应预测器；文件 incarnation、revision 或 workspace generation 变化使相关项失效。预取数据只进入缓存，正式读取仍重新执行 capability、文件访问范围、workspace root、revision 和 lifecycle 检查。当前 Guest 验收覆盖预测产生、Host hint 和 hit 计数；旧产品 Relay 对 Host hint 的实际消费仍是后续接入项。
+训练只接受成功结算的只读操作。失败、取消、超时、拒绝、未完成 Task 和回滚分支不进入转移表。rollback 清除当前分支的短期预测状态，Context clear、Agent 退出和 lifecycle 变化清理对应预测器；文件 incarnation、revision 或 workspace generation 变化使相关项失效。预取数据只进入缓存，正式读取仍重新执行 capability、文件访问范围、workspace root、revision 和 lifecycle 检查。当前 Guest 验收覆盖预测产生、Host hint 和 hit 计数；Host Harness 对 `PREFETCH_HINT` 的实际消费仍是后续接入项。
 
 ### 7.5 Host 协作与测试方式
 
-Guest 为每轮 root Task 和每个 child Task 发出 `TASK_EVENT`。Host 的 [`agentos_nexus_task_ledger.py`](../../host_tools/agentos_nexus_task_ledger.py) 跟踪 lifecycle/turn、root-child DAG、内核 PID/agent/control identity 与任务状态迁移，用于确认每个工具请求由预期的工作进程完成。它不判断某个 AgentOS 改进结论是否正确，也不把演示题目固化为运行时流程。
+[`agentos_native_task_channel.py`](../../host_tools/agentos_native_task_channel.py) 持有长期 Guest 串口并把 Host Agent 操作映射到 Guest runtime config 和原生 Task 请求。它核对生命周期、PID/agent/control identity、descriptor、claim 与 CQE 关联；[`agentos_nexus_multiagent.py`](../../host_tools/agentos_nexus_multiagent.py) 负责模型循环、Artifact 正文、workspace broker 和团队摘要。Host 只在原生 Task 成功结算后接纳模型结果，不用固定角色状态机推进任务。
 
-固定 Nexus replay 使用保存的 provider 回复重复运行同一套 QEMU、串口、Task Channel、Metadata Catalog、Typed Watch、artifact 和 Relay Context 路径，属于协议交互回归。开发 replay 另行重放写入、失败构建、修补、成功构建和三类 Guest 结果，验证完成门与证据失效规则。在线模式与 replay 都直接使用 Guest 重建的消息与真实 TOOL artifact 投影；Host ledger 只核对关联和 Guest 投影，不把自己作为跨轮正文来源，也不私下补写工具结果。
+`agentos-harness-native-test` 是联合产品回归，重复启动真实 Guest 并检查 root-child Task 图、终态交付和正常关闭。开发 replay 继续重放写入、失败构建、修补、成功构建和三类 Guest 结果，用于验证 broker 完成门与证据失效规则；它不替代原生 Task Channel 证据。
 
 通用 Harness 已由 DeepSeek 完成一次真实计算器开发：模型自行选择单 Agent 方案，在 21 个模型轮次中调用 20 次工具，经历一次 revision 冲突后重新读取并提交；最新 build 分别通过正常输入、无效输入和除零路径的独立 Guest 测试。该案例只是一项通用目标，运行时没有计算器专用分支。完整 revision、build id、Artifact hash 与团队摘要见 [`ci/agentos-nexus-multiagent-evidence.json`](../../ci/agentos-nexus-multiagent-evidence.json)。
 

@@ -162,16 +162,6 @@ int pipe(void *p)
 	return syscall(SYS_pipe2, p);
 }
 
-int mailread(void *buf, int len)
-{
-	return syscall(SYS_mailread, buf, len);
-}
-
-int mailwrite(int pid, void *buf, int len)
-{
-	return syscall(SYS_mailwrite, pid, buf, len);
-}
-
 int fstat(int fd, Stat *st)
 {
 	return syscall(SYS_fstat, fd, st);
@@ -546,16 +536,6 @@ int agent_workflow_fence(const struct agent_workflow_fence_request *request,
 		       AGENT_RUN_F_FENCE);
 }
 
-int agent_call(struct agent_request *req, struct agent_response *resp)
-{
-	return syscall(SYS_agent_call, req, resp);
-}
-
-int agent_tool_list(struct agent_tool_desc *out, int max)
-{
-	return syscall(SYS_agent_tool_list, out, max);
-}
-
 int sys_tool_call(struct agent_request_v2 *req, struct agent_response_v2 *resp)
 {
 	return syscall(SYS_tool_call, req, resp);
@@ -861,39 +841,12 @@ int agent_wait_cancel(int pid, const char *reason)
 	return syscall(SYS_agent_wait_cancel, pid, reason);
 }
 
-int agent_heartbeat(int interval_ticks)
-{
-	if (interval_ticks < 0)
-		return AGENT_STATUS_BAD_PARAM;
-	return agent_heartbeat_configure((uint64)interval_ticks);
-}
-
-int sys_agent_heartbeat_set(uint64 interval_ticks)
-{
-	return syscall(SYS_agent_heartbeat_set, interval_ticks);
-}
-
-int sys_agent_heartbeat_stop(void)
-{
-	return syscall(SYS_agent_heartbeat_stop);
-}
-
 int agent_heartbeat_configure(uint64 interval_ticks)
 {
 	if (interval_ticks > AGENT_HEARTBEAT_MAX_TICKS)
 		return AGENT_STATUS_BAD_PARAM;
-	return interval_ticks == 0 ? sys_agent_heartbeat_stop() :
-		sys_agent_heartbeat_set(interval_ticks);
-}
-
-int agent_heartbeat_set(uint64 interval_ticks)
-{
-	return agent_heartbeat_configure(interval_ticks);
-}
-
-int agent_heartbeat_stop(void)
-{
-	return agent_heartbeat_configure(0);
+	return interval_ticks == 0 ? syscall(SYS_agent_heartbeat_stop) :
+		syscall(SYS_agent_heartbeat_set, interval_ticks);
 }
 
 #ifdef WAIT_ATOMIC_TEST_PROFILE
@@ -939,11 +892,6 @@ int agent_metadata_init(void)
 			break;
 	}
 	return status;
-}
-
-int agent_file_meta_init(void)
-{
-	return agent_metadata_init();
 }
 
 int agent_file_meta_set(struct agent_file_meta *meta)

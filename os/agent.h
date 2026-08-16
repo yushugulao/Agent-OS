@@ -302,8 +302,6 @@
 #define AGENT_CAP_WORKSPACE_WRITE (1ULL << 14)
 #define AGENT_CAP_PREFETCH        (1ULL << 15)
 #define AGENT_CAP_KNOWN_ALL ((1ULL << 16) - 1ULL)
-#define AGENT_CAP_RECOVER_STAGE AGENT_CAP_ACTION_WRITE
-#define AGENT_CAP_REPORT_WRITE  AGENT_CAP_ARTIFACT_WRITE
 #define AGENT_CAP_DEPENDENCY_UPDATE AGENT_CAP_META_WRITE
 #define AGENT_DEP_SLOT(n) (1ULL << ((n) & 63))
 
@@ -381,10 +379,6 @@ struct agent_info {
 	uint64 timeline_wait_timeout_count;
 	uint64 filesystem_domain;
 	uint64 filesystem_capability_mask;
-	/* 退役 ABI 字段，内核恒填零。 */
-	uint64 legacy_mailbox_allocated;
-	uint64 legacy_mailbox_pages;
-	uint64 legacy_mailbox_queue_count;
 	uint64 file_scan_deferred;
 	uint64 file_scan_failures;
 };
@@ -838,8 +832,6 @@ int sys_agent_timeline_read(uint64 filteraddr, uint64 recordsaddr, int max,
 int sys_agent_provenance_snapshot(uint64 edgesaddr, int max);
 int sys_agent_ledger_snapshot(uint64 summaryaddr);
 int sys_agent_run(uint64 opsaddr, uint64 resultsaddr, int count, uint64 flags);
-int sys_agent_call(uint64 reqaddr, uint64 respaddr);
-int sys_agent_tool_list(uint64 addr, int max);
 int sys_tool_call(uint64 reqaddr, uint64 respaddr);
 int sys_tool_list(uint64 addr, int max, uint desc_size, uint version);
 int sys_context_push(uint64 recordaddr);
@@ -852,7 +844,6 @@ int sys_agent_watch(int event_type, uint64 filteraddr);
 int sys_agent_unwatch(int event_type, uint64 filteraddr);
 int sys_agent_wait(uint64 eventaddr, int timeout_ticks);
 int sys_agent_wait_cancel(int pid, uint64 reasonaddr);
-int sys_agent_heartbeat(uint64 interval_ticks);
 int sys_agent_heartbeat_set(uint64 interval_ticks);
 int sys_agent_heartbeat_stop(void);
 int sys_agent_wake(int pid, uint64 eventaddr);

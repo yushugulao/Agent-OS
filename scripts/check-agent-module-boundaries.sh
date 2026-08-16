@@ -21,7 +21,9 @@ active_modules="
 agent
 agent_background
 agent_context
+agent_context_artifact
 agent_context_path
+agent_context_prefetch
 agent_core
 agent_evidence_ring
 agent_execution_contract

@@ -310,7 +310,7 @@ static void verify_workflow_versions(void)
 	for (int i = 0; i < 2; i++) {
 		memset(&version_op, 0, sizeof(version_op));
 		memset(&version_result, 0, sizeof(version_result));
-		version_op.version = AGENT_CALL_VERSION;
+		version_op.version = AGENT_OP_VERSION;
 		version_op.tool_id = AGENT_TOOL_READ_FILE_DIGEST;
 		version_op.request_id = 9000 + i;
 		strcpy(version_op.payload, WORKFLOW_FILE);

@@ -110,7 +110,7 @@ static void run_agent(void)
 	make_file(live_name, "live-query-body");
 	memset(&live_generic_watch_op, 0, sizeof(live_generic_watch_op));
 	memset(&live_generic_watch_result, 0, sizeof(live_generic_watch_result));
-	live_generic_watch_op.version = AGENT_CALL_VERSION;
+	live_generic_watch_op.version = AGENT_OP_VERSION;
 	live_generic_watch_op.tool_id = AGENT_TOOL_AGENT_WATCH;
 	live_generic_watch_op.request_id = 62001;
 	live_generic_watch_op.arg0 = AGENT_EVENT_FILE_QUERY;

@@ -2015,7 +2015,7 @@ static void prepare_tool_workload(int load, int pair)
 	       (uint)load * sizeof(batch_tool_results[0]));
 	for (int i = 0; i < load; i++) {
 		memset(&tool_ops[i], 0, sizeof(tool_ops[i]));
-		tool_ops[i].version = AGENT_CALL_VERSION;
+		tool_ops[i].version = AGENT_OP_VERSION;
 		tool_ops[i].tool_id = AGENT_TOOL_ECHO;
 		tool_ops[i].request_id = semantic_token(
 			"tool-request-v1", load, pair, i);
@@ -2039,7 +2039,7 @@ static uint64 hash_tool_results(int load, int pair,
 		const struct agent_result *result = &results[i];
 		uint64 relative_sequence;
 
-		check(result->version == AGENT_CALL_VERSION &&
+		check(result->version == AGENT_OP_VERSION &&
 			      result->status == AGENT_STATUS_OK &&
 			      result->tool_id == AGENT_TOOL_ECHO,
 		      "echo result status");
@@ -2184,7 +2184,7 @@ static uint64 prepare_context_fixture(int load, int pair)
 
 	memset(&op, 0, sizeof(op));
 	memset(&result, 0, sizeof(result));
-	op.version = AGENT_CALL_VERSION;
+	op.version = AGENT_OP_VERSION;
 	op.tool_id = AGENT_TOOL_ECHO;
 	op.request_id = semantic_token("context-request-v1", load, pair, 0);
 	op.arg0 = context_fixture_arg0(load, pair);
@@ -2841,7 +2841,7 @@ static void run_functional_task2(void)
 static void prepare_functional_task3_tool(struct agent_op *op, int index)
 {
 	memset(op, 0, sizeof(*op));
-	op->version = AGENT_CALL_VERSION;
+	op->version = AGENT_OP_VERSION;
 	op->tool_id = AGENT_TOOL_ECHO;
 	op->request_id = semantic_token("task3-tool-v1",
 					FUNCTIONAL_TASK3_ROUNDS, 0, index);
@@ -2855,7 +2855,7 @@ static void check_functional_task3_result(const struct agent_op *op,
 					  const struct agent_result *result,
 					  uint64 sequence)
 {
-	check(result->version == AGENT_CALL_VERSION &&
+	check(result->version == AGENT_OP_VERSION &&
 		      result->status == AGENT_STATUS_OK &&
 		      result->tool_id == AGENT_TOOL_ECHO &&
 		      result->request_id == op->request_id &&
@@ -3358,7 +3358,7 @@ static void run_functional_task4(void)
 	/* 正式摘要工具把关键字命中绑定到真实文件内容。 */
 	memset(digest_op, 0, sizeof(*digest_op));
 	memset(digest_result, 0, sizeof(*digest_result));
-	digest_op->version = AGENT_CALL_VERSION;
+	digest_op->version = AGENT_OP_VERSION;
 	digest_op->tool_id = AGENT_TOOL_READ_FILE_DIGEST;
 	digest_op->request_id = semantic_token("task4-digest-v2", code, 0, 0);
 	strcpy(digest_op->payload, names[0]);

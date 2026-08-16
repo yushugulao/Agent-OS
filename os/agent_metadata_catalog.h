@@ -6,9 +6,6 @@
 #include "fs.h"
 
 #define AGENT_CATALOG_SCOPE_MAX VFS_SCOPE_LIFECYCLE_CAP
-#define AGENT_FILE_EXPLICIT_RESERVE 16
-#define AGENT_FILE_AUTOSCAN_SCOPE_LIMIT \
-	(AGENT_FILE_SCOPE_LIMIT - AGENT_FILE_EXPLICIT_RESERVE)
 #define AGENT_CATALOG_READ_WORDS ((AGENT_FILE_META_MAX + 63) / 64)
 
 #define AGENT_FILE_CHANGE_STATUS       (1U << 0)
@@ -91,7 +88,7 @@ struct agent_catalog_undo_token {
 #define AGENT_CATALOG_UNDO_CREATED (1U << 0)
 
 struct agent_catalog_resolution {
-	int slot, owned, ordinary, autoscan;
+	int slot, owned, ordinary;
 	uint provided, matched;
 };
 
@@ -147,7 +144,7 @@ int agent_metadata_catalog_restore_volatile(
 	const struct agent_file_meta *, uint, int);
 void agent_metadata_catalog_resolve(uint, const struct agent_file_meta *, int,
 				    struct agent_catalog_resolution *);
-int agent_metadata_catalog_alloc_slot(uint, uint);
+int agent_metadata_catalog_alloc_slot(uint);
 uint64 agent_metadata_catalog_alloc_fid(uint);
 int agent_metadata_catalog_reclaim_scope(
 	uint, struct workflow_lifecycle_key);

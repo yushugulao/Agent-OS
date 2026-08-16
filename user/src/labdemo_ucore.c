@@ -1074,7 +1074,7 @@ static void make_op(struct agent_op *op, int tool, uint64 id, uint64 arg0,
 		    const char *payload)
 {
 	memset(op, 0, sizeof(*op));
-	op->version = AGENT_CALL_VERSION;
+	op->version = AGENT_OP_VERSION;
 	op->tool_id = tool;
 	op->request_id = id;
 	op->arg0 = arg0;
@@ -1185,7 +1185,7 @@ static void run_sentinel(void)
 	uint64 discovered_us;
 
 	created("sentinel");
-	check(agent_heartbeat(5) == 0, "heartbeat");
+	check(agent_heartbeat_configure(5) == 0, "heartbeat");
 	memset(&watch, 0, sizeof(watch));
 	watch.version = AGENT_FILE_LIVE_WATCH_VERSION;
 	watch.query.flags = AGENT_FILE_QUERY_USE_INDEX;

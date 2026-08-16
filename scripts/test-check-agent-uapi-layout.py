@@ -23,7 +23,13 @@ class AgentUapiLayoutTests(unittest.TestCase):
         )
 
     def test_golden_contract_has_expected_coverage(self):
-        self.assertEqual(len(self.golden), 710)
+        self.assertEqual(len(self.golden), 701)
+        self.assertEqual(
+            self.golden["agent_uapi_layout_value_agent_uapi_abi_version"], 2
+        )
+        self.assertEqual(
+            self.golden["agent_uapi_layout_value_agent_op_version"], 1
+        )
         self.assertEqual(
             self.golden["agent_uapi_layout_value_file_meta_batch_max"],
             16,
@@ -67,11 +73,11 @@ class AgentUapiLayoutTests(unittest.TestCase):
         )
         self.assertEqual(
             self.golden["agent_uapi_layout_offset_info_file_scan_deferred"],
-            577,
+            553,
         )
         self.assertEqual(
             self.golden["agent_uapi_layout_offset_info_file_scan_failures"],
-            585,
+            561,
         )
         self.assertEqual(
             self.golden[

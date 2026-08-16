@@ -988,7 +988,7 @@ agent_context_write_latest(struct proc *p, struct agent_result *latest)
 		memmove(dst, latest, sizeof(*dst));
 	else {
 		memset(dst, 0, sizeof(*dst));
-		dst->version = AGENT_CALL_VERSION;
+		dst->version = AGENT_OP_VERSION;
 	}
 	return 0;
 }
@@ -1328,13 +1328,13 @@ agent_context_append_system_class(struct proc *p, int tool_id,
 	if (agent_lifecycle_context_lane_enter(p) < 0)
 		return -1;
 	memset(&op, 0, sizeof(op));
-	op.version = AGENT_CALL_VERSION;
+	op.version = AGENT_OP_VERSION;
 	op.tool_id = tool_id;
 	op.request_id = request_id;
 	op.arg0 = arg0;
 	safestrcpy(op.payload, payload, sizeof(op.payload));
 	memset(&latest, 0, sizeof(latest));
-	latest.version = AGENT_CALL_VERSION;
+	latest.version = AGENT_OP_VERSION;
 	latest.status = status;
 	latest.tool_id = tool_id;
 	latest.request_id = request_id;
@@ -1398,13 +1398,13 @@ agent_context_append_security_denial_record(
 	if (agent_lifecycle_context_lane_enter(p) < 0)
 		return -1;
 	memset(&op, 0, sizeof(op));
-	op.version = AGENT_CALL_VERSION;
+	op.version = AGENT_OP_VERSION;
 	op.tool_id = request->tool_id;
 	op.request_id = request->request_id;
 	op.arg0 = request->contract_generation;
 	safestrcpy(op.payload, "provenance", sizeof(op.payload));
 	memset(&latest, 0, sizeof(latest));
-	latest.version = AGENT_CALL_VERSION;
+	latest.version = AGENT_OP_VERSION;
 	latest.status = decision->status;
 	latest.tool_id = request->tool_id;
 	latest.request_id = request->request_id;
@@ -1450,13 +1450,13 @@ sys_context_push(uint64 recordaddr)
 	record.payload[sizeof(record.payload) - 1] = 0;
 	record.result[sizeof(record.result) - 1] = 0;
 	memset(&op, 0, sizeof(op));
-	op.version = AGENT_CALL_VERSION;
+	op.version = AGENT_OP_VERSION;
 	op.tool_id = record.tool_id;
 	op.request_id = record.request_id;
 	op.arg0 = record.arg0;
 	safestrcpy(op.payload, record.payload, sizeof(op.payload));
 	memset(&latest, 0, sizeof(latest));
-	latest.version = AGENT_CALL_VERSION;
+	latest.version = AGENT_OP_VERSION;
 	latest.status = record.status;
 	latest.tool_id = record.tool_id;
 	latest.request_id = record.request_id;
@@ -1778,7 +1778,7 @@ sys_context_rollback(uint64 sequence)
 	path_index->summary.oldest_sequence = active_path_oldest;
 	p->context_path_rollback_count++;
 	memset(&latest, 0, sizeof(latest));
-	latest.version = AGENT_CALL_VERSION;
+	latest.version = AGENT_OP_VERSION;
 	latest.status = record.status;
 	latest.tool_id = record.tool_id;
 	latest.request_id = record.request_id;

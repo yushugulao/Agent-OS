@@ -148,6 +148,8 @@ def validate_delegated_task(sources: dict[str, str]) -> None:
             "AGENT_CAP_TASK_ACCEPT",
             "descriptor->required_capabilities",
             "descriptor->allowed_tools",
+            "descriptor->resource_budget",
+            "descriptor->read_budget",
             "agent_task_delegate_would_cycle_locked(",
             "agent_ipc_task_route_allows_locked(owner, target)",
         ),
@@ -215,6 +217,17 @@ def validate_delegated_task(sources: dict[str, str]) -> None:
         bridge,
         "agent_task_delegate_owner_busy_locked",
         "one parent must be able to keep independent child tasks in flight",
+    )
+    begin_pending = function_body(core, "agent_execution_task_begin_pending")
+    require_order(
+        begin_pending,
+        (
+            "phase_envelope_nonzero |=",
+            "op->tool_id == AGENT_TOOL_DELEGATE_TASK && !phase_envelope_nonzero",
+            "AGENT_EXECUTION_TASK_BEGIN_PENDING",
+            "resource_phase_lease_begin(",
+        ),
+        "vNext delegated Tasks must bypass issuer phase credit only for zero envelopes",
     )
 
     claim_prepare = function_body(bridge, "agent_task_delegate_claim_prepare")
@@ -1210,11 +1223,6 @@ def validate_task_channel(sources: dict[str, str]) -> None:
     for caller, pattern in (
         (
             "sys_agent_run",
-            r"agent_execute_one\(p,\s*&op,\s*&res,\s*agent_ticks\(\),"
-            r"\s*0,\s*0,\s*0,\s*0\)",
-        ),
-        (
-            "sys_agent_call",
             r"agent_execute_one\(p,\s*&op,\s*&res,\s*agent_ticks\(\),"
             r"\s*0,\s*0,\s*0,\s*0\)",
         ),

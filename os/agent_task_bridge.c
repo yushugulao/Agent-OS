@@ -240,6 +240,10 @@ agent_task_delegate_target_locked(
 		    descriptor->allowed_tools ||
 	    (descriptor->allowed_tools & target->agent_tool_grant_mask) !=
 		    descriptor->allowed_tools ||
+	    descriptor->resource_budget == 0 ||
+	    descriptor->resource_budget > target->agent_sched_budget ||
+	    descriptor->read_budget == 0 ||
+	    descriptor->read_budget > target->agent_artifact_read_limit ||
 	    agent_task_delegate_would_cycle_locked(
 		    owner, target, lifecycle, ignore) ||
 	    !agent_ipc_task_route_allows_locked(owner, target))
@@ -278,23 +282,37 @@ agent_task_bridge_effect_pin_locked(
 			&agent_task_delegate_slots[i];
 		int exact_main;
 		int exact_helper;
+		int exact_owner;
 
-		if (slot->state != AGENT_TASK_DELEGATE_SLOT_CLAIMED ||
-		    slot->worker_pid != worker->pid ||
-		    slot->worker_agent_id != worker->agent_id ||
-		    slot->worker_control_id != worker->agent_control_id ||
-		    !workflow_lifecycle_key_equal(
-			    slot->lifecycle, vfs_proc_lifecycle(worker)))
+		if (slot->state != AGENT_TASK_DELEGATE_SLOT_CLAIMED)
 			continue;
-		exact_main = thread == &worker->threads[0] &&
-			     thread->identity_generation ==
-				     slot->worker_thread_generation;
-		exact_helper = thread->tid > 0 &&
-			       thread->tid == slot->helper_tid &&
-			       thread->identity_generation ==
-				       slot->helper_thread_generation;
-		if (!exact_main && !exact_helper)
-			continue;
+		/* A Task owner may keep orchestrating while a child holds the
+		 * delegated effect lease. The same node manifest still limits every
+		 * owner-side control effect, and the lease disappears with the claim. */
+		exact_owner =
+			thread == &worker->threads[0] &&
+			slot->owner_pid == worker->pid &&
+			slot->owner_agent_id == worker->agent_id &&
+			slot->owner_control_id == worker->agent_control_id &&
+			workflow_lifecycle_key_equal(
+				slot->lifecycle, vfs_proc_lifecycle(worker));
+		if (!exact_owner) {
+			if (slot->worker_pid != worker->pid ||
+			    slot->worker_agent_id != worker->agent_id ||
+			    slot->worker_control_id != worker->agent_control_id ||
+			    !workflow_lifecycle_key_equal(
+				    slot->lifecycle, vfs_proc_lifecycle(worker)))
+				continue;
+			exact_main = thread == &worker->threads[0] &&
+				     thread->identity_generation ==
+					     slot->worker_thread_generation;
+			exact_helper = thread->tid > 0 &&
+				       thread->tid == slot->helper_tid &&
+				       thread->identity_generation ==
+					       slot->helper_thread_generation;
+			if (!exact_main && !exact_helper)
+				continue;
+		}
 		if ((side_effect_mask & ~slot->claim.manifest.side_effect_mask) != 0 ||
 		    slot->effect_refs == (uint)-1 || slot->enqueue_sequence == 0)
 			return 0;
@@ -1475,6 +1493,8 @@ agent_task_bridge_delegate_descriptor_valid(
 	       descriptor->target_control_id != 0 && descriptor->task_id != 0 &&
 	       descriptor->correlation_id != 0 && descriptor->task_type != 0 &&
 	       descriptor->capsule_handle != 0 &&
+	       descriptor->resource_budget != 0 &&
+	       descriptor->read_budget != 0 &&
 	       (descriptor->required_capabilities & ~AGENT_CAP_KNOWN_ALL) == 0 &&
 	       (descriptor->allowed_tools &
 		~AGENT_TOOL_GRANT_ALL(AGENT_TOOL_COUNT)) == 0 &&
@@ -1512,7 +1532,7 @@ agent_task_bridge_op(const struct agent_task_sqe *sqe,
 	if (sqe == 0 || input == 0 || op == 0)
 		return -1;
 	memset(op, 0, sizeof(*op));
-	op->version = AGENT_CALL_VERSION;
+	op->version = AGENT_OP_VERSION;
 	op->tool_id = sqe->tool_id;
 	op->request_id = sqe->request_id;
 	if (agent_task_bridge_handle_null(input->handle))
@@ -1642,7 +1662,7 @@ agent_task_bridge_delegate_submit(
 	if (p == 0 || sqe == 0 || input == 0 || binding == 0 || op == 0 ||
 	    completion == 0 || !agent_task_bridge_delegate_input(sqe, input))
 		return AGENT_TASK_CHANNEL_RETRY;
-	/* V1 pins the detached phase reservation to the process main thread. */
+	/* The channel issuer is the process main thread for stable owner identity. */
 	if (curr_thread() != &p->threads[0])
 		return AGENT_TASK_CHANNEL_RETRY;
 	memmove(&descriptor, input->snapshot, sizeof(descriptor));

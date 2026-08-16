@@ -78,7 +78,7 @@ static void make_op(struct agent_op *op, int tool, uint64 id, uint64 arg0,
 		    const char *payload)
 {
 	memset(op, 0, sizeof(*op));
-	op->version = AGENT_CALL_VERSION;
+	op->version = AGENT_OP_VERSION;
 	op->tool_id = tool;
 	op->request_id = id;
 	op->arg0 = arg0;
@@ -281,66 +281,20 @@ static TEST_NOINLINE void check_preinit_index_query(void)
 	printf("agentsecurity_ucore: preinit_index_query=1\n");
 }
 
-static void check_legacy_tool_mismatch(void)
+static void check_syscall_only_tool(void)
 {
-	struct agent_request req;
-	struct agent_response resp;
-
-	memset(&req, 0, sizeof(req));
-	memset(&resp, 0, sizeof(resp));
-	req.version = AGENT_CALL_VERSION;
-	req.tool_id = AGENT_TOOL_ECHO;
-	req.request_id = 8301;
-	strcpy(req.tool_name, "pid_info");
-	strcpy(req.payload, "mismatch-payload");
-	check(agent_call(&req, &resp) == 0, "legacy mismatch call");
-	check(resp.status == AGENT_STATUS_BAD_REQUEST, "legacy mismatch status");
-	check(strcmp(resp.result, "tool_mismatch") == 0, "legacy mismatch text");
-	printf("agentsecurity_ucore: legacy_tool_mismatch=1\n");
-}
-
-static void check_legacy_param_validation(void)
-{
-	struct agent_request req;
-	struct agent_response resp;
 	struct agent_op op;
 	struct agent_result res;
 
-	memset(&req, 0, sizeof(req));
-	memset(&resp, 0, sizeof(resp));
-	req.version = AGENT_CALL_VERSION;
-	req.tool_id = AGENT_TOOL_ECHO;
-	req.request_id = 8401;
-	strcpy(req.tool_name, "echo");
-	strcpy(req.payload_key, "payload");
-	req.payload_type = AGENT_PARAM_STRING;
-	strcpy(req.arg0_key, "arg0");
-	req.arg0_type = AGENT_PARAM_UINT64;
-	strcpy(req.arg1_key, "arg1");
-	req.arg1_type = AGENT_PARAM_UINT64;
-	req.arg0 = 11;
-	req.arg1 = 12;
-	strcpy(req.payload, "legacy-ok");
-	check(agent_call(&req, &resp) == 0, "legacy echo");
-	check(resp.status == AGENT_STATUS_OK, "legacy echo status");
-	check(strcmp(resp.result, "legacy-ok") == 0, "legacy echo result");
-
-	strcpy(req.payload_key, "bad_payload");
-	check(agent_call(&req, &resp) == 0, "legacy bad payload key");
-	check(resp.status == AGENT_STATUS_BAD_PARAM,
-	      "legacy bad payload status");
-	check(strcmp(resp.result, "bad_payload_key") == 0,
-	      "legacy bad payload text");
-
 	memset(&op, 0, sizeof(op));
-	op.version = AGENT_CALL_VERSION;
+	op.version = AGENT_OP_VERSION;
 	op.tool_id = AGENT_TOOL_AGENT_WAIT;
 	op.request_id = 8402;
 	check(agent_run(&op, &res, 1, 0) == 1, "syscall only run");
 	check(res.status == AGENT_STATUS_BAD_PARAM, "syscall only status");
 	check(strcmp(res.result, "use_agent_wait_syscall") == 0,
 	      "syscall only text");
-	printf("agentsecurity_ucore: legacy_param_validation=1 syscall_only=1\n");
+	printf("agentsecurity_ucore: syscall_only=1\n");
 }
 
 static void check_plain_child_creation_denied(void)
@@ -1217,8 +1171,7 @@ static void run_orchestrator(void)
 	check_controller_handoff();
 	check_preinit_index_query();
 	check(agent_metadata_init() == 0, "metadata init");
-	check_legacy_tool_mismatch();
-	check_legacy_param_validation();
+	check_syscall_only_tool();
 	set_align_failed("RUN-042", 3, "r42aerr");
 	set_align_failed("RUN-999", 30, "r999aerr");
 	set_align_failed("RUN-998", 31, "r998aerr");
@@ -1420,22 +1373,6 @@ static void check_plain_process_denied(void)
 	printf("agentsecurity_ucore: retired_metadata_banks_plain_files=1\n");
 }
 
-static void check_legacy_mail_fail_closed(void)
-{
-	char byte = 0;
-
-	check(mailread(&byte, sizeof(byte)) == -1,
-	      "retired mailread fails closed");
-	check(mailwrite(getpid(), &byte, sizeof(byte)) == -1,
-	      "retired mailwrite fails closed");
-	check(agent_info(&security_agent_info) == 0 &&
-		      security_agent_info.legacy_mailbox_allocated == 0 &&
-		      security_agent_info.legacy_mailbox_pages == 0 &&
-		      security_agent_info.legacy_mailbox_queue_count == 0,
-	      "retired legacy mailbox metrics stay zero");
-	printf("agentsecurity_ucore: legacy_mail_fail_closed=1\n");
-}
-
 int main(int argc, char **argv)
 {
 	int pid;
@@ -1460,7 +1397,6 @@ int main(int argc, char **argv)
 
 	printf("agentsecurity_ucore: Agent permission test\n");
 	check_bootstrap_identity();
-	check_legacy_mail_fail_closed();
 	check_plain_process_denied();
 	check_plain_child_creation_denied();
 	check_wait_cancel_controller_lifecycle();

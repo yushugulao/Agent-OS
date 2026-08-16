@@ -370,7 +370,7 @@ static void run_batch_ablation(void)
 	memset(batch_ops, 0, sizeof(batch_ops));
 	memset(batch_results, 0, sizeof(batch_results));
 	for (uint i = 0; i < PERF_OPERATION_COUNT; i++) {
-		batch_ops[i].version = AGENT_CALL_VERSION;
+		batch_ops[i].version = AGENT_OP_VERSION;
 		batch_ops[i].tool_id = AGENT_TOOL_ECHO;
 		batch_ops[i].request_id = PERF_REQUEST_BASE + i + 1;
 	}
@@ -836,7 +836,7 @@ static void prime_task_resource_context(void)
 
 	memset(&op, 0, sizeof(op));
 	memset(&result, 0, sizeof(result));
-	op.version = AGENT_CALL_VERSION;
+	op.version = AGENT_OP_VERSION;
 	op.tool_id = AGENT_TOOL_ECHO;
 	op.request_id = ++next_request_id;
 	check(agent_run(&op, &result, 1, 0) == 1 &&
@@ -1905,6 +1905,8 @@ static void task_delegate_descriptor_init(
 	descriptor->parent_task_id = task_id + 1000ULL;
 	descriptor->capsule_handle = task_id + 2000ULL;
 	descriptor->allowed_tools = AGENT_TOOL_GRANT_BIT(AGENT_TOOL_ECHO);
+	descriptor->resource_budget = 1;
+	descriptor->read_budget = 1;
 }
 
 static void task_delegate_claim_one(

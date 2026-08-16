@@ -516,7 +516,7 @@ static int run_kernel_backend_check(void)
 	if (agent_launch_info(&info) < 0 || !info.is_agent)
 		return 0;
 	memset(&backend_op, 0, sizeof(backend_op));
-	backend_op.version = AGENT_CALL_VERSION;
+	backend_op.version = AGENT_OP_VERSION;
 	backend_op.tool_id = AGENT_TOOL_ECHO;
 	backend_op.request_id = 4401;
 	strcpy(backend_op.payload, "backend-kernel-check");

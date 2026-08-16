@@ -32,7 +32,7 @@ static int run_kernel_workbench_stage(void)
 	}
 
 	memset(&workbench_kernel_op, 0, sizeof(workbench_kernel_op));
-	workbench_kernel_op.version = AGENT_CALL_VERSION;
+	workbench_kernel_op.version = AGENT_OP_VERSION;
 	workbench_kernel_op.tool_id = AGENT_TOOL_ECHO;
 	workbench_kernel_op.request_id = 4601;
 	strcpy(workbench_kernel_op.payload, "workbench-file-verify");

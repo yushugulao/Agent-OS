@@ -289,6 +289,11 @@ def require_shift_define(source, name, expected_bit, owner):
 def validate_feature_abi_constants(root):
     include_dir = root / "include"
     expected = {
+        "agent_tool_abi.h": {
+            "AGENT_UAPI_ABI_VERSION": 2,
+            "AGENT_OP_VERSION": 1,
+            "AGENT_CALL_VERSION_V2": 2,
+        },
         "agent_execution_contract_abi.h": {
             "AGENT_EXECUTION_CONTRACT_VERSION": 1,
             "AGENT_EXECUTION_CONTRACT_NODE_VERSION": 1,

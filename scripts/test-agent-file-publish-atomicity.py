@@ -162,22 +162,6 @@ def validate(sources: dict[str, str]) -> None:
         "known-unattached reclaim checkpoint",
     )
 
-    nexus = function_body(sources["nexus"], "nexus_artifact_store")
-    require_order(
-        nexus,
-        (
-            "publish_status = agent_file_publish(",
-            "if (publish_status == AGENT_STATUS_OK)",
-            "if (publish_status != AGENT_STATUS_DUPLICATE && publish_status != AGENT_STATUS_INDETERMINATE)",
-            "fd = open(path, O_RDONLY);",
-        ),
-        "Nexus exact-path convergence",
-    )
-    for forbidden in ("O_CREATE", "O_TRUNC", "fsync(", "link(", "rename("):
-        if forbidden in nexus:
-            raise ContractError(f"Nexus publish restored non-atomic primitive: {forbidden}")
-
-
 def mutation_self_test(sources: dict[str, str]) -> None:
     mutations = (
         (
@@ -203,11 +187,6 @@ def mutation_self_test(sources: dict[str, str]) -> None:
             "checkpoint_result = fs_publish_checkpoint();",
             "cleanup checkpoint",
         ),
-        (
-            "nexus",
-            "publish_status != AGENT_STATUS_DUPLICATE &&",
-            "Nexus status convergence guard",
-        ),
     )
     for key, token, label in mutations:
         if token not in sources[key]:
@@ -226,9 +205,6 @@ def main() -> int:
     sources = {
         "handler": (root / "os" / "agent_file_state.c").read_text(encoding="utf-8"),
         "fs": (root / "os" / "fs.c").read_text(encoding="utf-8"),
-        "nexus": (root / "user" / "lib" / "agent_nexus.c").read_text(
-            encoding="utf-8"
-        ),
     }
     validate(sources)
     mutation_self_test(sources)

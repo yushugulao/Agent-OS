@@ -51,10 +51,11 @@ CFLAGS := $(COMMON_CFLAGS) -Iinclude -Ilib -I$(arch_dir) -I$(generated_dir)
 CFLAGS += $(USER_EXTRA_CFLAGS)
 LDFLAGS := -nostdlib -T $(arch_dir)/user.ld -Wl,-Ttext=0x1000 -Wl,--gc-sections
 
-LIB_C := $(wildcard lib/*.c)
+LIB_C := $(filter-out lib/agent_nexus.c,$(wildcard lib/*.c))
 LIB_OBJS := $(patsubst %.c,$(obj_dir)/%.o,$(LIB_C))
 CRT_OBJ := $(obj_dir)/$(arch_dir)/crt.o
-SRCS := $(wildcard $(app_dir)/*.c)
+RETIRED_APP_SRCS := $(app_dir)/agentnexus_ucore.c
+SRCS := $(filter-out $(RETIRED_APP_SRCS),$(wildcard $(app_dir)/*.c))
 APPS := $(patsubst $(app_dir)/%.c,%,$(SRCS))
 GENERATED_HEADERS := $(generated_dir)/rp_host_action_seed.h
 EVALUATION_HEADER := $(generated_dir)/agenteval_seed.h
@@ -93,7 +94,7 @@ PHYSICAL_RESOURCE_TESTS := physicalresource_ucore
 WORKFLOW_TEARDOWN_TESTS := workflow_teardown_race_ucore
 VIRTIO_DISK_TESTS := virtiodisk_ucore
 EVALUATION_TESTS := agenteval_ucore
-AGENT_TESTS := agentfinal_ucore agentfs_ucore agentscan_ucore agentloop_ucore agentsched_ucore agentconflict_ucore agentllm_ucore agentlive_ucore agentnexus_ucore agentmulti_ucore agentbench_ucore agentcontract_ucore agent_eevdf_ucore agenttask_ucore agentpublish_ucore ch8_cow_ucore labdemo_ucore labdemo_execprobe_ucore agentsecurity_ucore agenttoolabi_ucore agentscope_ucore agenttrust_ucore agentvfs_ucore agentvfs_probe iobudget_ucore $(SAFETY_TESTS)
+AGENT_TESTS := agentfinal_ucore agentfs_ucore agentscan_ucore agentloop_ucore agentsched_ucore agentconflict_ucore agentllm_ucore agentlive_ucore agentmulti_ucore agentharness_ucore agentbench_ucore agentcontract_ucore agent_eevdf_ucore agenttask_ucore agentpublish_ucore ch8_cow_ucore labdemo_ucore labdemo_execprobe_ucore agentsecurity_ucore agenttoolabi_ucore agentscope_ucore agenttrust_ucore agentvfs_ucore agentvfs_probe iobudget_ucore $(SAFETY_TESTS)
 PLATFORM_TESTS := rp_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
 PLATFORM_SEEDED_TESTS := rp_seed_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
 WORKER_BATCH_APPS := rp_wbatch0 rp_wbatch1 rp_wbatch2

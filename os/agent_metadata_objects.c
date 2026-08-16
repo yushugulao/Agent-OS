@@ -1058,7 +1058,7 @@ static int agent_file_meta_set_execute(
 		goto out_txn;
 	}
 	if (slot < 0) {
-		slot = agent_metadata_catalog_alloc_slot(scope_id, 0);
+		slot = agent_metadata_catalog_alloc_slot(scope_id);
 		if (slot < 0) {
 			result = agent_catalog_error_status(slot);
 			goto out_txn;

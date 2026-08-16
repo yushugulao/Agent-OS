@@ -2,9 +2,9 @@
 #define AGENT_TOOL_ABI_H
 
 /* 共享且架构稳定的 Agent 工具 ABI；内核和用户库共同包含，本文件不放实现声明。 */
-#define AGENT_CALL_VERSION_V1 1U
+#define AGENT_UAPI_ABI_VERSION 2U
+#define AGENT_OP_VERSION      1U
 #define AGENT_CALL_VERSION_V2 2U
-#define AGENT_CALL_VERSION AGENT_CALL_VERSION_V1
 
 #define AGENT_TOOL_ECHO              1
 #define AGENT_TOOL_PID_INFO          2
@@ -74,7 +74,6 @@
 #define AGENT_STATUS_DEPRECATED  -21
 #define AGENT_STATUS_BROKER_REQUIRED -22
 
-#define AGENT_PARAM_NONE   0U
 #define AGENT_PARAM_UINT64 1U
 #define AGENT_PARAM_STRING 2U
 #define AGENT_PARAM_VERSION 1U
@@ -146,44 +145,6 @@ struct agent_result {
 	char result[AGENT_FAST_RESULT_SIZE];
 };
 
-/* 版本 1 与原始 ABI 保持逐字节兼容。 */
-struct agent_request {
-	int version;
-	int tool_id;
-	unsigned long long request_id;
-	unsigned long long arg0;
-	unsigned long long arg1;
-	int arg0_type;
-	int arg1_type;
-	int payload_type;
-	char tool_name[AGENT_TOOL_NAME_SIZE];
-	char arg0_key[AGENT_PARAM_KEY_SIZE];
-	char arg1_key[AGENT_PARAM_KEY_SIZE];
-	char payload_key[AGENT_PARAM_KEY_SIZE];
-	char payload[AGENT_PAYLOAD_SIZE];
-};
-
-struct agent_response {
-	int version;
-	int status;
-	int tool_id;
-	unsigned long long request_id;
-	unsigned long long sequence;
-	unsigned long long value0;
-	unsigned long long value1;
-	unsigned long long value2;
-	char tool_name[AGENT_TOOL_NAME_SIZE];
-	char result[AGENT_RESULT_SIZE];
-};
-
-struct agent_tool_desc {
-	int tool_id;
-	unsigned long long flags;
-	char name[AGENT_TOOL_NAME_SIZE];
-	char params[AGENT_TOOL_PARAMS_SIZE];
-	char description[AGENT_TOOL_DESC_SIZE];
-};
-
 /* 版本 2 携带有界变长类型化参数数组；每条记录独立定长和定版，后续 ABI 可追加后缀。 */
 union agent_param_value_v2 {
 	unsigned long long uint64_value;
@@ -239,12 +200,6 @@ _Static_assert(sizeof(unsigned int) == 4,
 	       "Agent tool ABI requires 32-bit unsigned int");
 _Static_assert(sizeof(unsigned long long) == 8,
 	       "Agent tool ABI requires 64-bit unsigned long long");
-_Static_assert(sizeof(struct agent_request) == 192,
-	       "Agent tool request v1 ABI layout");
-_Static_assert(sizeof(struct agent_response) == 184,
-	       "Agent tool response v1 ABI layout");
-_Static_assert(sizeof(struct agent_tool_desc) == 208,
-	       "Agent tool descriptor v1 ABI layout");
 _Static_assert(sizeof(struct agent_param_v2) == 96,
 	       "Agent tool parameter v2 ABI layout");
 _Static_assert(__builtin_offsetof(struct agent_param_v2, value) == 32,

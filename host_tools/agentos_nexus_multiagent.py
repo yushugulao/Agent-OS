@@ -23,10 +23,12 @@ from typing import Callable, Final, Mapping, Sequence
 
 try:
     import agentos_nexus_dev as development
+    import agentos_native_task_channel as native_task
     import agentos_workspace as workspace
     import guest_llm_relay as relay
 except ModuleNotFoundError:  # pragma: no cover
     from . import agentos_nexus_dev as development
+    from . import agentos_native_task_channel as native_task
     from . import agentos_workspace as workspace
     from . import guest_llm_relay as relay
 
@@ -401,12 +403,27 @@ class TaskRecord:
 
 
 class TaskChannel:
-    """Host verification mirror of pending/claim/complete/cancel semantics."""
+    """Host verifier backed by the long-lived Guest's native Task Channel."""
 
-    def __init__(self, store: ContextArtifactStore):
+    def __init__(
+        self,
+        store: ContextArtifactStore,
+        native: native_task.NativeTaskChannel | None = None,
+    ):
         self.store = store
+        self.native = native
         self._tasks: dict[int, TaskRecord] = {}
         self._lock = threading.RLock()
+
+    def publish_root(self, descriptor: TaskDescriptor) -> TaskRecord:
+        with self._lock:
+            if len(self._tasks) >= MAX_TASKS or descriptor.task_id in self._tasks:
+                raise HarnessError("task_capacity_or_reuse")
+            if self.native is not None:
+                self.native.delegate(descriptor)
+            record = TaskRecord(descriptor)
+            self._tasks[descriptor.task_id] = record
+            return record
 
     def delegate(
         self,
@@ -440,6 +457,8 @@ class TaskChannel:
                 raise HarnessError("task_deadline_invalid")
             if descriptor.expected_result_kind not in RESULT_KINDS:
                 raise HarnessError("task_result_kind_invalid")
+            if self.native is not None:
+                self.native.delegate(descriptor)
             record = TaskRecord(descriptor)
             self._tasks[descriptor.task_id] = record
             return record
@@ -455,6 +474,8 @@ class TaskChannel:
                 record.state = "terminal"
                 record.terminal_status = "timeout"
                 raise HarnessError("task_timed_out")
+            if self.native is not None:
+                self.native.claim(task_id, agent_id)
             record.state = "claimed"
             record.claimed_by = agent_id
             return record
@@ -492,6 +513,8 @@ class TaskChannel:
                     raise HarnessError("task_result_invalid")
             elif result_artifact:
                 raise HarnessError("failed_task_has_result")
+            if self.native is not None:
+                self.native.complete(task_id, agent_id, status, result_artifact)
             record.result_artifact = result_artifact
             record.terminal_status = status
             record.state = "terminal"
@@ -504,6 +527,12 @@ class TaskChannel:
                 raise HarnessError("task_cancel_denied")
             if record.state == "terminal":
                 return record
+            if self.native is not None:
+                if record.state != "claimed" or record.claimed_by == 0:
+                    raise HarnessError("native_task_not_claimed")
+                self.native.complete(
+                    task_id, record.claimed_by, "cancelled", 0
+                )
             record.state = "terminal"
             record.terminal_status = "cancelled"
             return record
@@ -539,6 +568,9 @@ class AgentLoop:
     config: AgentConfig
     model: Model
     label: str
+    native_pid: int = 0
+    native_agent_id: int = 0
+    native_control_id: int = 0
     private_context: list[dict[str, object]] = field(default_factory=list)
     pending_tasks: deque[int] = field(default_factory=deque)
     sequence: int = 0
@@ -797,18 +829,22 @@ class NexusHarness:
         lifecycle: tuple[int, int] = (1, 1),
         model_factory: Callable[[AgentConfig], Model] | None = None,
         trace_path: Path | None = None,
+        native_channel: native_task.NativeTaskChannel | None = None,
     ) -> None:
         self.root = Path(root).resolve(strict=True)
         self.goal = goal
         self.policy = policy
-        self.lifecycle = lifecycle
+        self.native_channel = native_channel
+        self.lifecycle = (
+            native_channel.lifecycle if native_channel is not None else lifecycle
+        )
         self.store = ContextArtifactStore(
-            lifecycle,
+            self.lifecycle,
             policy.artifact_count_limit,
             policy.artifact_bytes_limit,
             policy.artifact_read_limit,
         )
-        self.tasks = TaskChannel(self.store)
+        self.tasks = TaskChannel(self.store, native_channel)
         self.development = development.NexusDevelopmentBroker(self.root)
         self.agents: dict[int, AgentLoop] = {}
         self.shared_context: list[dict[str, object]] = []
@@ -846,6 +882,8 @@ class NexusHarness:
         if any(agent.is_alive() for agent in self.agents.values()):
             raise HarnessError("agent_shutdown_timeout")
         self.development.close()
+        if self.native_channel is not None:
+            self.native_channel.close()
 
     def spawn(
         self, config: AgentConfig, model: Model | None = None, label: str = "agent"
@@ -861,6 +899,11 @@ class NexusHarness:
             agent_id = self._next_agent
             self._next_agent += 1
             agent = AgentLoop(self, agent_id, config, model, label)
+            if self.native_channel is not None:
+                identity = self.native_channel.spawn(agent_id, config)
+                agent.native_pid = identity["pid"]
+                agent.native_agent_id = identity["agent_id"]
+                agent.native_control_id = identity["control_id"]
             self.agents[agent_id] = agent
             agent.start()
             return agent
@@ -903,7 +946,7 @@ class NexusHarness:
             deadline_monotonic=time.monotonic() + deadline_seconds,
             expected_result_kind=expected_result_kind,
         )
-        self.tasks._tasks[task_id] = TaskRecord(descriptor)
+        self.tasks.publish_root(descriptor)
         agent.wake(task_id)
         return task_id
 
@@ -1862,6 +1905,10 @@ def cli() -> argparse.Namespace:
     parser.add_argument("--model", default=relay.DEEPSEEK_DEFAULT_MODEL)
     parser.add_argument("--timeout", type=float, default=900.0)
     parser.add_argument("--trace-file", type=Path)
+    parser.add_argument("--qemu", default="qemu-system-riscv64")
+    parser.add_argument("--kernel", type=Path, required=True)
+    parser.add_argument("--image", type=Path, required=True)
+    parser.add_argument("--native-boot-timeout", type=float, default=150.0)
     return parser.parse_args()
 
 
@@ -1911,14 +1958,22 @@ def main() -> int:
         ),
         summary_high_watermark=int(root_document.get("summary_high_watermark", 24)),
     )
-    with_harness = NexusHarness(
-        args.workspace,
-        args.goal,
-        policy,
-        model_factory=factory,
-        trace_path=args.trace_file,
+    native_channel = native_task.NativeTaskChannel(
+        qemu=args.qemu,
+        kernel=args.kernel,
+        image=args.image,
+        boot_timeout=args.native_boot_timeout,
     )
+    with_harness: NexusHarness | None = None
     try:
+        with_harness = NexusHarness(
+            args.workspace,
+            args.goal,
+            policy,
+            model_factory=factory,
+            trace_path=args.trace_file,
+            native_channel=native_channel,
+        )
         root_agent = with_harness.spawn(root_config, label="configured-agent")
         root_task = with_harness.submit_root(root_agent)
         deadline = time.monotonic() + args.timeout
@@ -1947,6 +2002,17 @@ def main() -> int:
                     "agent_contexts": {
                         str(item.agent_id): item.private_context[-24:]
                         for item in with_harness.agents.values()
+                    },
+                    "native_guest": {
+                        "lifecycle": list(with_harness.lifecycle),
+                        "agents": {
+                            str(item.agent_id): {
+                                "pid": item.native_pid,
+                                "agent_id": item.native_agent_id,
+                                "control_id": item.native_control_id,
+                            }
+                            for item in with_harness.agents.values()
+                        },
                     },
                     "artifacts": [
                         {
@@ -1998,7 +2064,10 @@ def main() -> int:
             time.sleep(0.05)
         raise HarnessError("workflow_timeout")
     finally:
-        with_harness.close()
+        if with_harness is not None:
+            with_harness.close()
+        else:
+            native_channel.close()
 
 
 if __name__ == "__main__":

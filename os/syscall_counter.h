@@ -55,8 +55,6 @@ enum syscall_class {
 	X(gettimeofday, FAST, ALWAYS) \
 	X(getpid, FAST, ALWAYS) \
 	X(getppid, FAST, ALWAYS) \
-	X(mailread, FAST, ALWAYS) \
-	X(mailwrite, FAST, ALWAYS) \
 	X(trace, FAST, ALWAYS) \
 	X(clone, FAST, ALWAYS) \
 	X(execve, BLOCK_IO, ALWAYS) \
@@ -105,8 +103,6 @@ enum syscall_class {
 	X(agent_provenance_snapshot, FAST, ALWAYS) \
 	X(agent_ledger_snapshot, FAST, ALWAYS) \
 	X(agent_run, BLOCK_IO_FS_EPOCH, ALWAYS) \
-	X(agent_call, BLOCK_IO_FS_EPOCH, ALWAYS) \
-	X(agent_tool_list, FAST, ALWAYS) \
 	X(tool_call, BLOCK_IO_FS_EPOCH, ALWAYS) \
 	X(tool_list, FAST, ALWAYS) \
 	X(virtio_disk_test, BLOCK_IO, VIRTIO_TEST) \
@@ -123,7 +119,6 @@ enum syscall_class {
 	X(agent_unwatch, FAST, ALWAYS) \
 	X(agent_wait, FAST, ALWAYS) \
 	X(agent_wait_cancel, FAST, ALWAYS) \
-	X(agent_heartbeat, FAST, ALWAYS) \
 	X(agent_heartbeat_set, FAST, ALWAYS) \
 	X(agent_heartbeat_stop, FAST, ALWAYS) \
 	X(agent_wake, FAST, ALWAYS) \

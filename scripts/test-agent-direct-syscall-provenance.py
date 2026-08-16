@@ -140,7 +140,6 @@ def validate(syscall: str, ipc: str) -> None:
         "AGENT_PROVENANCE_UNTRUSTED_TOOL_OUTPUT",
         "case FD_INODE:",
         "AGENT_PROVENANCE_UNTRUSTED_FILE_DATA",
-        "case SYS_mailread:",
         "agent_provenance_merge_current(p, labels)",
     ):
         if token not in ingress:

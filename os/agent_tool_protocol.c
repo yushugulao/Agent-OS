@@ -502,74 +502,6 @@ int agent_tool_protocol_resolve(int tool_id, char *name,
 	return AGENT_STATUS_OK;
 }
 
-static int rule_for_target(const struct param_rule *tool_rules, uint count,
-			   uint target)
-{
-	for (uint i = 0; i < count; i++)
-		if (rule_target(&tool_rules[i]) == target)
-			return i;
-	return -1;
-}
-
-int agent_tool_protocol_decode_v1(struct agent_request *request,
-				  struct agent_tool_match *match,
-				  struct agent_op *op, char *error,
-				  int error_size)
-{
-	char *keys[] = { request->arg0_key, request->arg1_key,
-			 request->payload_key };
-	int types[] = { request->arg0_type, request->arg1_type,
-			request->payload_type };
-	int present[] = {
-		keys[0][0] || types[0] != AGENT_PARAM_NONE,
-		keys[1][0] || types[1] != AGENT_PARAM_NONE,
-		keys[2][0] || types[2] != AGENT_PARAM_NONE || request->payload[0],
-	};
-	uint count = rule_count(match->tool_id);
-	const struct param_rule *tool_rules = rules_for_tool(match->tool_id);
-	uint seen = 0;
-
-	if (string_length(keys[0], sizeof(request->arg0_key), 0) < 0 ||
-	    string_length(keys[1], sizeof(request->arg1_key), 0) < 0 ||
-	    string_length(keys[2], sizeof(request->payload_key), 0) < 0 ||
-	    string_length(request->payload, sizeof(request->payload), 0) < 0)
-		REJECT(AGENT_STATUS_BAD_SIZE, "unterminated_field");
-	for (uint target = 0; target < 3; target++) {
-		int index;
-
-		if (!present[target]) {
-			uint64 hidden_value = target == PARAM_ARG0 ? request->arg0 :
-				target == PARAM_ARG1 ? request->arg1 : 0;
-
-			if (hidden_value != 0)
-				REJECT(AGENT_STATUS_BAD_PARAM, "untyped_param_value");
-			continue;
-		}
-		index = rule_for_target(tool_rules, count, target);
-		if (index < 0)
-			REJECT(AGENT_STATUS_BAD_PARAM, "unexpected_param");
-		if (strncmp(keys[target], rule_key(&tool_rules[index]),
-			    AGENT_PARAM_KEY_SIZE))
-			REJECT(AGENT_STATUS_BAD_PARAM, target == PARAM_PAYLOAD ?
-			       "bad_payload_key" : "bad_arg_key");
-		if (types[target] != (int)rule_type(&tool_rules[index]))
-			REJECT(AGENT_STATUS_BAD_PARAM, target == PARAM_PAYLOAD ?
-			       "bad_payload_type" : "bad_arg_type");
-		seen |= 1U << index;
-	}
-	for (uint i = 0; i < count; i++)
-		if (rule_required(&tool_rules[i]) && !(seen & (1U << i)))
-			REJECT(AGENT_STATUS_BAD_PARAM, "missing_param");
-	memset(op, 0, sizeof(*op));
-	op->version = AGENT_CALL_VERSION_V1;
-	op->tool_id = match->tool_id;
-	op->request_id = request->request_id;
-	op->arg0 = request->arg0;
-	op->arg1 = request->arg1;
-	safestrcpy(op->payload, request->payload, sizeof(op->payload));
-	return AGENT_STATUS_OK;
-}
-
 int agent_tool_protocol_decode_v2(pagetable_t pagetable,
 				  struct agent_request_v2 *request,
 				  struct agent_tool_match *match,
@@ -580,7 +512,7 @@ int agent_tool_protocol_decode_v2(pagetable_t pagetable,
 	const struct param_rule *tool_rules = rules_for_tool(match->tool_id);
 
 	memset(op, 0, sizeof(*op));
-	op->version = AGENT_CALL_VERSION_V1;
+	op->version = AGENT_OP_VERSION;
 	op->tool_id = match->tool_id;
 	op->request_id = request->request_id;
 	for (uint i = 0; i < request->param_count; i++) {
@@ -633,33 +565,6 @@ int agent_tool_protocol_decode_v2(pagetable_t pagetable,
 }
 
 #undef REJECT
-
-int agent_tool_protocol_list_v1(pagetable_t pagetable, uint64 address, int max)
-{
-	struct agent_tool_desc desc;
-	int count = max > AGENT_TOOL_COUNT ? AGENT_TOOL_COUNT : max;
-
-	if (max < 0)
-		return -1;
-	if (count && user_range_check(pagetable, address,
-				      (uint64)count * sizeof(desc), PTE_W) < 0)
-		return -1;
-	for (int i = 0; i < count; i++) {
-		memset(&desc, 0, sizeof(desc));
-		desc.tool_id = agent_tools[i].tool_id;
-		desc.flags = agent_tools[i].flags;
-		safestrcpy(desc.name, agent_tools[i].name, sizeof(desc.name));
-		if (agent_tool_schema(i + 1, desc.params,
-				      sizeof(desc.params)) < 0)
-			return -1;
-		safestrcpy(desc.description, agent_tools[i].description,
-			   sizeof(desc.description));
-		if (copyout(pagetable, address + (uint64)i * sizeof(desc),
-			    (char *)&desc, sizeof(desc)) < 0)
-			return -1;
-	}
-	return AGENT_TOOL_COUNT;
-}
 
 int agent_tool_protocol_list_v2(pagetable_t pagetable, uint64 address, int max,
 				uint desc_size, uint version)

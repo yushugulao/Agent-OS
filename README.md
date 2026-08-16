@@ -53,12 +53,12 @@
 4. **以工作流为单位管理资源和 CPU 时间。** 资源额度按 `free`、`pending`、`used` 三种状态记账。工作流调度器把同一工作流的多个进程合在一起，再按虚拟截止时间选择下一个工作流。
 5. **保留可追查的 Context 与 terminal record。** 工具结果、文件内容和跨 Agent 消息都携带 provenance label。控制进程可在阶段结束时通过 Workflow Fence 取得 Context 的 terminal state、metadata generation、资源用量和工作流记录摘要。
 
-### 1.5 团队成员
+### 1.5 团队成员分工
 
-| **成员** | **联系方式** | **项目工作** |
+| 姓名 | 负责模块 | 工作内容 |
 | --- | --- | --- |
-| 王浩沣 | QQ 2091576055 | AgentOS-uCore 内核、应用、测试与文档 |
-| 康俊豪 | QQ 488718235 | AgentOS-uCore 内核、应用、测试与文档 |
+| 康峻豪 | Agent 进程与 Context 机制；身份及 Artifact 元数据一致性；对应专项测试 | 1. 在 xv6 原型中扩展 PCB、映射 Agent Context，并实现路径追加、查询和回滚，与结构化工具共同跑通五轮以上的查询闭环。<br>2. 迁移至 uCore 时复核身份发布、页面权限以及 `exec`、退出和槽位复用语义，避免旧身份或旧 Context 被新进程继承。<br>3. 在当前系统中完善受控创建和 lifecycle 代次，维护 7 页用户 Context、9 页 sidecar、稳定读取、FIFO 淘汰、分支回滚和清空机制。<br>4. 实现 Artifact 的封存元数据与 Context 绑定<br>5. 负责创建、身份、生命周期、Context 和 Artifact 的定向测试，并验收综合测试中的任务一、任务三及关闭回收链路。 |
+| 王浩沣 | uCore 迁移与总体架构；结构化执行、文件查询、Agent Loop 和多 Agent 协作；整体测试与交付 | 1. 在 xv6 原型中实现结构化请求解析、基础工具、错误返回和演示程序，并确定 ABI 和最小验收流程。<br>2. 主导将原型迁移至 uCore，把能力接入进程、虚拟内存、系统调用、VFS、等待队列和调度器，同时重建 Guest Runtime、构建入口和 QEMU 回归链。<br>3. 将工具接口扩展为带 schema 的 Tool Registry 和 Execution Contract，使单次、批量及 Task Channel 调用统一接受能力、来源、副作用和资源检查。<br>4. 建立文件 Metadata Catalog、索引和 Typed Watch，使 Agent 能按属性查询文件、接收增量变化，并通过遍历对照验证结果与性能。<br>5. 实现 heartbeat、IPC、等待唤醒、资源记账、工作流调度和 Fence，让多个 Agent 空闲时休眠、事件到达后恢复，并在结束时完成结算。<br>6. 完成 Nexus、用户态 Artifact Store、Host workspace broker、外部模型接入和综合演示，使子任务能够委派、返回并被父 Agent 接纳。<br>7. 负责工具、文件、Loop、Task、Host、故障和性能测试，维护统一测试运行链与全量回归，并验收综合测试中的任务二、任务四、任务五和最终交付。 |
 
 ### 1.6 文档索引
 
@@ -68,7 +68,7 @@
     - [1.2 摘要](#12-摘要)
     - [1.3 系统能力概览](#13-系统能力概览)
     - [1.4 主要创新](#14-主要创新)
-    - [1.5 团队成员](#15-团队成员)
+    - [1.5 团队成员分工](#15-团队成员分工)
     - [1.6 文档索引](#16-文档索引)
   - [二、项目概述](#二项目概述)
     - [2.1 背景与意义](#21-背景与意义)
@@ -80,7 +80,7 @@
     - [3.2 Agent-OS 内核结构化交互接口与工具调用协议](#32-agent-os-内核结构化交互接口与工具调用协议)
     - [3.3 面向 Agent 查询优化的文件系统扩展](#33-面向-agent-查询优化的文件系统扩展)
     - [3.4 Agent Loop 内核运行机制](#34-agent-loop-内核运行机制)
-    - [3.5 Agent Live 与 Nexus](#35-agent-live-与-nexus)
+    - [3.5 通用 Agent Loop 与 Nexus Harness](#35-通用-agent-loop-与-nexus-harness)
   - [四、测试结果](#四测试结果)
     - [4.1 测试体系](#41-测试体系)
     - [4.2 Live Query 性能](#42-live-query-性能)
@@ -208,7 +208,9 @@ Agent 的低频控制状态放在 PCB 与生命周期记录中，高频读取的
 
 ### 3.2 Agent-OS 内核结构化交互接口与工具调用协议
 
-Agent-OS 内核结构化交互接口以工具调用协议接收工具编号和 typed 参数，并返回状态码与结构化结果。自然语言和整段 Shell 命令留在 Guest Runtime 中处理。Tool Registry 为每项工具登记名称、编号、参数 schema、所需能力位和副作用掩码。当前 33 项登记分为 20 项可调用工具、3 项 syscall-only 工具、3 项废弃兼容项和 7 项 Host broker 工具。`rerun_stage`、`write_report` 与旧 `ctx_stat` 会返回 `DEPRECATED`；Context 状态、Heartbeat 配置和 Metadata 初始化分别统一为 `context_status`、`heartbeat_configure` 与 `metadata_init`。7 项 brokered 工具包括工作区搜索、revision 绑定读取、Guest 状态观察、版本化写入、补丁、隔离构建和独立 Guest 运行。V2 请求最多带 8 个带类型信息的参数。V3 在 V2 的基础上增加 Execution Contract generation、节点、尝试次数、schema digest、输入指纹、来源 Context 和 Artifact 类型。每份 Execution Contract 最多包含 24 个节点，每个节点最多尝试 4 次。
+Agent-OS 内核结构化交互接口以工具调用协议接收工具编号和 typed 参数，并返回状态码与结构化结果。自然语言和整段 Shell 命令留在 Guest Runtime 中处理。Tool Registry 为每项工具登记名称、编号、参数 schema、所需能力位和副作用掩码。当前 33 项登记分为 20 项可调用工具、3 项 syscall-only 工具、3 项废弃编号和 7 项 Host broker 工具。`rerun_stage`、`write_report` 与旧 `ctx_stat` 只保留编号并返回 `DEPRECATED`；Context 状态、Heartbeat 配置和 Metadata 初始化统一使用 `context_status`、`heartbeat_configure` 与 `metadata_init`。7 项 brokered 工具包括工作区搜索、revision 绑定读取、Guest 状态观察、版本化写入、补丁、隔离构建和独立 Guest 运行。
+
+ABI vNext 将公开 UAPI 版本提升为 2，并集中移除了恒零 mailbox 字段、已经退役的 mailbox/Heartbeat 专用入口、系统调用 503/504、旧 C 包装和 V1 固定工具结构。退役系统调用号保持为空，内核不会重新分派这些编号。当前工具请求从 V2 起步：V2 最多带 8 个 typed 参数；V3 在 V2 基础上增加 Execution Contract generation、节点、尝试次数、schema digest、输入指纹、来源 Context 和 Artifact 类型。每份 Execution Contract 最多包含 24 个节点，每个节点最多尝试 4 次。
 
 `apply_patch` 与 `write_file` 使用两个独立工具编号，并共享版本化工作区变更描述符。请求绑定 workflow lifecycle、Host manifest object、预期 revision、目标路径和包含内容的 Guest artifact；工具还要求 `AGENT_CAP_WORKSPACE_WRITE`。普通 V2/V3 执行返回 `BROKER_REQUIRED`，具体修改由 Nexus Host broker 在会话 root 中完成。broker 只接受 `user/src/nexus_*_ucore.c`，逐次核对 SHA-256 revision，再用同目录临时文件、`fsync` 和原子替换提交内容。写入 receipt 带回旧 revision、新 revision、字节数和提交状态。
 
@@ -316,7 +318,7 @@ Nexus 的通用多 Agent Harness 如图 4 所示。CLI 只接收用户目标、�
 5. **受控开发 Provider。** `search_files`、`read_workspace_file`、`inspect_system`、`write_file`、`apply_patch`、`build_ucore_program` 和 `run_ucore_program` 都是 Tool Registry 中的 brokered 工具。工作区 broker 核对会话 root、相对路径、object id、revision、范围和输出长度；写入使用 revision 冲突检查和同目录原子替换。构建 broker 在独立临时工作树中固定 RISC-V 工具链、目标清单和资源上限。运行 broker 为每个用例启动独立的 AgentOS-uCore Guest，并返回实际输出、退出状态和有界日志。
 6. **结构化预测。** 每次成功只读查询都可向内核提交机器可读签名。每个 Agent 的 16 项转移表用 active path 上的 `A -> B` 次数和置信度生成低优先级预取；默认单次不超过 4 KiB、同时最多 2 项。Guest 文件进入异步预取队列，Host 工作区产生 `PREFETCH_HINT`。实际读取仍重新执行 capability、VFS 访问范围、workspace root、revision 和 lifecycle 检查，预测失败不会改变正常读取结果。
 
-当前代码同时保留早期 `agentnexus_ucore` 产品路径用于固定 Replay，并提供 [`agentos_nexus_multiagent.py`](host_tools/agentos_nexus_multiagent.py) 作为通用 Harness。前者继续验证真实 Guest 串口、Metadata Catalog 与原生 Task Channel；后者让真实模型按 capability 和工具集合动态选择单 Agent 或多 Agent 方案。Host Harness 用与 Task Channel 相同的 descriptor、授权包含关系和终态规则协调模型线程，原生 Task Channel 的 128 字节描述符与多子任务图另由 `agenttask_ucore` 在真实 Guest 中验收。两类证据分别说明 Host 编排行为和内核 Task 语义，文档不把它们合并成一次未发生的执行路径。
+通用 Harness 为整个会话启动一个长期运行的 `agentharness_ucore` Guest。Host 每创建一个通用 Agent，Guest 就通过 `agent_runtime_control(SPAWN)` 建立对应的受控进程；root Task、动态子 Task、claim、complete、取消和 terminal CQE 全部进入这个 Guest 的原生 Task Channel。Host 侧保存完整 Artifact 正文并核对内容哈希，Guest 内核维护 identity、lifecycle、route、Task 状态和终态交付。`agentos-harness-native-test` 在两次独立启动中验证 2 个配置 Agent、2 个嵌套 Task 和通用 Loop。固定角色实现只作为历史源码留存，不进入用户程序库、默认镜像或产品命令；旧 `agentos-nexus-*` 入口会明确拒绝并引导使用通用 Harness。
 
 DeepSeek 的通用开发验收以“创建简易计算器”作为普通用户目标，没有预设文件名、Agent 数量或工具顺序。模型最终选择单 Agent 完成任务，在 21 轮模型交互中调用 20 次工具，经历一次 revision 冲突后重新读取并提交；源码 revision 为 `77c4cd1b...598c4f9`，build id 为 `a88b281e...50d72ad`。正常输入、无效输入和除零路径分别在独立 AgentOS-uCore Guest 中取得成功证据。完整 Artifact hash、运行日志 hash 和 workflow 摘要记录在 [`ci/agentos-nexus-multiagent-evidence.json`](ci/agentos-nexus-multiagent-evidence.json)。这个案例用于验证通用能力，Harness 中没有计算器专用状态机。
 
@@ -333,7 +335,7 @@ DeepSeek 的通用开发验收以“创建简易计算器”作为普通用户�
 | ABI 与模块契约 | `agent-uapi-check`、`agent-module-check` | 系统调用号、结构大小与字段偏移、模块依赖和状态转换 |
 | Host 自测 | `local-host-selftests` | Context、Execution Contract、资源、查询、调度、串口协议和校验器 |
 | QEMU Guest | `agentos-test` | Agent identity、VFS、工具、事件、调度、内存、故障和生命周期 |
-| 常驻应用 | 控制台、Nexus Replay 与通用 Harness | Console 的多轮工具/审批；Nexus 的 7 项 brokered 工具、动态 Agent 配置、版本化读写、隔离构建、独立 Guest 测试、Artifact 汇总与正常关闭 |
+| 常驻应用 | 控制台与通用 Harness | Console 的多轮工具/审批；Harness 的 7 项 brokered 工具、动态 Agent 配置、原生 Task Channel、版本化读写、隔离构建、独立 Guest 测试、Artifact 汇总与正常关闭 |
 | 系统对照 | `dual-platform-run` | 普通 uCore 与 AgentOS-uCore 的业务结果和端到端耗时 |
 
 五项赛题能力另由 `agenteval_ucore` 在同一个 RISC-V64 Guest 程序中串联测试，Host 再确认测试输入一致且输出符合预期：
@@ -343,7 +345,7 @@ AGENT_TEST_CASE=agenteval_ucore \
   make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-工作流结果文件另由 `agentpublish_ucore` 检查完整内容、同名竞争、幂等回读和资源回收：
+工作流结果文件另由 `agentpublish_ucore` 检查完整内容、同名竞争、失败零副作用和资源回收：
 
 ```bash
 AGENT_TEST_CASE=agentpublish_ucore \
@@ -391,15 +393,15 @@ AGENT_TEST_CASE=agentpublish_ucore \
 
 AgentOS-uCore 已经把 Agent 从创建、交互、记录 Context、查询文件到等待下一轮事件的过程接入 uCore。Agent identity 与生命周期负责管理成员及其关联对象，private Context 与共享索引保存多轮任务的起因、provenance 和已经结算的团队事实。Structured Tool、Execution Contract 与动态 Task descriptor 在操作生效前完成检查，Context Artifact Store 保存完整正文，Live Query 和预测器把文件变化及历史访问送入 Agent Loop。Workflow Credit Domain 和工作流 EEVDF 负责跨进程资源与 CPU 时间。Agent Live 与 Nexus 直接使用这些机制连续运行并按配置组织协作。
 
-项目保留了稳定 ABI、细分的 Guest 测试、Host 状态机测试、故障注入、普通 uCore 与 AgentOS-uCore 对照测试，以及逐样本性能数据。每项主要功能都能从文档找到调用入口、实现文件和测试结果。
+项目保留了版本化 ABI 与冻结布局清单、细分的 Guest 测试、Host 状态机测试、故障注入、普通 uCore 与 AgentOS-uCore 对照测试，以及逐样本性能数据。每项主要功能都能从文档找到调用入口、实现文件和测试结果。
 
 ### 5.2 当前技术限制
 
-性能测试采用 RISC-V64 QEMU 单 Hart，工作流 EEVDF 场景覆盖 1 至 4 个并发工作流。Metadata Catalog 最多保存 512 条记录，单次 Live Query 最多返回 8 项且没有分页游标。Context、事件队列、Task Channel、Artifact metadata 表、16 项查询转移表和工作流记录环都采用固定容量。当前通用 Harness 的模型线程在 Host 侧按内核 Task Channel 规则镜像状态机，尚未把每一次真实模型委派都送入同一 QEMU Guest 的原生 Task Channel；Host `PREFETCH_HINT` 消费路径也需要接入早期产品 Relay。多 Hart 调度、长 Provider 延迟和大规模异步积压仍需进一步测试。
+性能测试采用 RISC-V64 QEMU 单 Hart，工作流 EEVDF 场景覆盖 1 至 4 个并发工作流。Metadata Catalog 最多保存 512 条记录，单次 Live Query 最多返回 8 项且没有分页游标。Context、事件队列、Task Channel、Artifact metadata 表、16 项查询转移表和工作流记录环都采用固定容量。通用 Harness 已把 Host Agent 与同一个长期运行 Guest 中的原生 Task Channel 对接；当前联合回归覆盖 2 个配置 Agent 和 2 个嵌套 Task，尚未覆盖长 Provider 延迟、大规模并行子任务和 Host `PREFETCH_HINT` 的实际消费。多 Hart 调度也需要进一步测试。
 
 ### 5.3 后续工作
 
-下一阶段将把 Host 通用 Agent Loop 与单个长期运行的 Guest Task Channel 会话完整接通，使动态模型委派、Artifact seal 和 terminal CQE 在同一次产品运行中留下联合证据；Host `PREFETCH_HINT` 也将接入版本化 workspace broker，并补充命中率、额外 I/O 与多 Agent 信息隔离测试。Live Query 还需增加分页与复合索引，工作流调度和资源记账需要覆盖多 Hart。开发 Harness 将继续加入用户审批策略、更丰富的构建目标、长会话取消回归和构建缓存。
+下一阶段将扩大长期 Guest 会话中的并行子任务、取消和 Provider 故障回归，并把 Host `PREFETCH_HINT` 接入版本化 workspace broker，补充命中率、额外 I/O 与多 Agent 信息隔离测试。Live Query 还需增加分页与复合索引，工作流调度和资源记账需要覆盖多 Hart。开发 Harness 将继续加入用户审批策略、更丰富的构建目标和构建缓存。
 
 ## 六、运行与文档
 
@@ -413,29 +415,16 @@ make agentos-build TOOLPREFIX=riscv64-linux-gnu-
 make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-Agent Live 与 Nexus 的固定 Replay 会启动真实的 QEMU Guest，并通过产品串口协议完成多轮交互：
+Agent Live 的固定 Replay 与通用 Harness 的原生 Task Channel 回归都会启动真实的 QEMU Guest：
 
 ```bash
 make agentos-console-replay TOOLPREFIX=riscv64-linux-gnu-
-make agentos-nexus-replay TOOLPREFIX=riscv64-linux-gnu-
+make agentos-harness-native-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-要直接观察 Nexus 使用通用工作区工具研究一个聚焦的 AgentOS 内核问题，并在下一轮基于 active Context 继续取舍，可连接 DeepSeek 运行自由演示：
+受控开发演示的历史证据保存在 [`ci/agentos-nexus-dev-evidence.json`](ci/agentos-nexus-dev-evidence.json) 与 [`ci/agentos-nexus-dev-replay.jsonl`](ci/agentos-nexus-dev-replay.jsonl)。其中 DeepSeek 在一次会话中读取现有程序、创建计算器、调用固定工具链编译，再用同一 build 分别启动 3 个 AgentOS-uCore Guest；正常加法、无效操作数和除零路径均得到预期输出与退出状态。这些文件用于复核 broker 与完成门，新的产品入口统一为通用 Harness。
 
-```bash
-make agentos-nexus-demo TOOLPREFIX=riscv64-linux-gnu-
-```
-
-受控开发演示使用 [`ci/agentos-nexus-dev-script.txt`](ci/agentos-nexus-dev-script.txt)。DeepSeek 在一次会话中读取现有程序、创建计算器、调用固定工具链编译，再用同一 build 分别启动 3 个 AgentOS-uCore Guest。正常加法、无效操作数和除零路径均得到预期输出与退出状态，build id、source revision 和三份运行证据见 [`ci/agentos-nexus-dev-evidence.json`](ci/agentos-nexus-dev-evidence.json)。固定的失败编译、修补、重编译和三类运行顺序另由 [`ci/agentos-nexus-dev-replay.jsonl`](ci/agentos-nexus-dev-replay.jsonl) 回放检查。
-
-```bash
-make agentos-nexus \
-  AGENTOS_NEXUS_PROVIDER=deepseek \
-  AGENTOS_NEXUS_SCRIPT=ci/agentos-nexus-dev-script.txt \
-  TOOLPREFIX=riscv64-linux-gnu-
-```
-
-通用 Harness 不预设开发流程。下面的入口只提供目标和 workspace policy，Agent 自行选择是否拆分任务、使用哪些工具以及何时构建和运行；可选配置文件还能为多个 Agent 分别限定 capability、工具、Artifact 与资源额度。
+通用 Harness 不预设开发流程。下面的入口只提供目标和 workspace policy，Agent 自行选择是否拆分任务、使用哪些工具以及何时构建和运行；可选配置文件还能为多个 Agent 分别限定 capability、工具、Artifact 与资源额度。整段会话共用一个长期运行的 Guest：
 
 ```bash
 make agentos-nexus-harness \

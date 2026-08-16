@@ -1087,7 +1087,7 @@ agent_context_status_result(struct proc *p, struct agent_result *res)
 static void agent_result_init(struct agent_result *res, struct agent_op *op)
 {
 	memset(res, 0, sizeof(*res));
-	res->version = AGENT_CALL_VERSION;
+	res->version = AGENT_OP_VERSION;
 	res->status = AGENT_STATUS_OK;
 	res->tool_id = op->tool_id;
 	res->request_id = op->request_id;
@@ -1137,7 +1137,7 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 	int metadata_locked;
 	int pending_limit;
 
-	if (op->version != AGENT_CALL_VERSION) {
+	if (op->version != AGENT_OP_VERSION) {
 		res->status = AGENT_STATUS_BAD_REQUEST;
 		agent_result_text(res, "bad_request");
 		return;
@@ -1966,6 +1966,7 @@ agent_execution_task_begin_pending(
 	struct resource_account_handle storage = resource_account_none();
 	enum agent_execution_admission admission;
 	uint64 now = agent_ticks();
+	uint phase_envelope_nonzero = 0;
 	int phase_started = 0;
 	int status;
 
@@ -2079,6 +2080,20 @@ agent_execution_task_begin_pending(
 		status = AGENT_EXECUTION_TASK_BEGIN_DENIED;
 		goto out;
 	}
+	for (uint kind = 0; kind < RESOURCE_KIND_COUNT; kind++)
+		phase_envelope_nonzero |= claim->exec_amounts[kind] != 0 ||
+			claim->storage_amounts[kind] != 0;
+	/*
+	 * vNext delegates carry their dynamic work budget in the immutable Task
+	 * descriptor. A zero-envelope DELEGATE_TASK node therefore needs no
+	 * issuer-side phase reservation, allowing several child Tasks to remain
+	 * outstanding in the same workflow. Other tools retain the phase-credit
+	 * requirement.
+	 */
+	if (op->tool_id == AGENT_TOOL_DELEGATE_TASK && !phase_envelope_nonzero) {
+		status = AGENT_EXECUTION_TASK_BEGIN_PENDING;
+		goto out;
+	}
 	if (fs_storage_owner_account(FS_OWNER_SCOPE(p->vfs_scope_id),
 				     &storage) < 0 ||
 	    resource_phase_lease_begin(
@@ -2111,14 +2126,7 @@ agent_execution_task_begin_pending(
 	}
 	phase_started = 1;
 	outcome->phase_lease_generation = phase_lease->generation;
-	/*
-	 * The admitted lease holds the envelope without installing a dynamic
-	 * allocation context on the issuer thread. V1 permits one outstanding
-	 * delegated task per issuer. The owner terminal path consumes no dynamic
-	 * resources, so it settles this reservation without installing it as the
-	 * issuer thread's allocation context. Provider-side artifact work remains
-	 * charged to the provider process.
-	 */
+	/* The owner settles this detached reservation on the terminal path. */
 	status = AGENT_EXECUTION_TASK_BEGIN_PENDING;
 out:
 	if (reservation.active)
@@ -2148,8 +2156,12 @@ agent_execution_task_finish_pending(
 
 	if (p == 0 || op == 0 || claim == 0 || provenance_decision == 0 ||
 	    phase_lease == 0 || result == 0 || outcome == 0 ||
-	    !claim->active || claim->legacy || phase_lease->generation == 0 ||
-	    phase_lease->state != RESOURCE_PHASE_LEASE_ADMITTED)
+	    !claim->active || claim->legacy ||
+	    !((phase_lease->generation != 0 &&
+	       phase_lease->state == RESOURCE_PHASE_LEASE_ADMITTED) ||
+	      (op->tool_id == AGENT_TOOL_DELEGATE_TASK &&
+	       phase_lease->generation == 0 &&
+	       phase_lease->state == RESOURCE_PHASE_LEASE_EMPTY)))
 		return -1;
 	if (agent_lifecycle_context_lane_enter_accepted_task(p) < 0)
 		panic("finish Task accepted context lane");
@@ -2211,7 +2223,8 @@ agent_execution_task_finish_pending(
 	if (agent_execution_append_terminal(
 		    p, op, result, now, 0, claim, outcome, &reservation) < 0)
 		panic("finish Task terminal");
-	if (resource_phase_lease_settle(
+	if (phase_lease->generation != 0 &&
+	    resource_phase_lease_settle(
 		    phase_lease, phase_lease->generation) < 0)
 		panic("finish Task phase settle");
 	if (reservation.active)
@@ -2853,100 +2866,10 @@ int sys_agent_run(uint64 opsaddr, uint64 resultsaddr, int count, uint64 flags)
 	return status;
 }
 
-int sys_agent_tool_list(uint64 addr, int max)
-{
-	return agent_tool_protocol_list_v1(curr_proc()->pagetable, addr, max);
-}
-
 int sys_tool_list(uint64 addr, int max, uint desc_size, uint version)
 {
 	return agent_tool_protocol_list_v2(curr_proc()->pagetable, addr, max,
 					   desc_size, version);
-}
-
-int sys_agent_call(uint64 reqaddr, uint64 respaddr)
-{
-	struct proc *p = curr_proc();
-	struct workflow_lifecycle_key lifecycle;
-	struct agent_request req;
-	struct agent_response resp;
-	struct agent_op op;
-	struct agent_result res;
-	struct agent_tool_match tool;
-	char validate_error[AGENT_RESULT_SIZE];
-	int status;
-
-	if (copyin(p->pagetable, (char *)&req, reqaddr, sizeof(req)) < 0)
-		return -1;
-	if (user_range_check(p->pagetable, respaddr, sizeof(resp), PTE_W) < 0)
-		return -1;
-	memset(&resp, 0, sizeof(resp));
-	resp.version = AGENT_CALL_VERSION_V1;
-	resp.request_id = req.request_id;
-	if (req.version != AGENT_CALL_VERSION_V1) {
-		resp.status = AGENT_STATUS_BAD_VERSION;
-		safestrcpy(resp.result, "bad_request_version", sizeof(resp.result));
-		return copyout(p->pagetable, respaddr, (char *)&resp,
-			       sizeof(resp));
-	}
-	if (!p->is_agent) {
-		resp.status = AGENT_STATUS_NOT_AGENT;
-		safestrcpy(resp.result, "not_agent", sizeof(resp.result));
-		return copyout(p->pagetable, respaddr, (char *)&resp,
-			       sizeof(resp));
-	}
-	memset(validate_error, 0, sizeof(validate_error));
-	status = agent_tool_protocol_resolve(req.tool_id, req.tool_name, &tool,
-					     validate_error,
-					     sizeof(validate_error));
-	if (status != AGENT_STATUS_OK) {
-		resp.status = status;
-		resp.tool_id = req.tool_id;
-		safestrcpy(resp.result, validate_error, sizeof(resp.result));
-		return copyout(p->pagetable, respaddr, (char *)&resp,
-			       sizeof(resp));
-	}
-	if (tool.flags & AGENT_TOOL_F_SYSCALL_ONLY) {
-		resp.status = AGENT_STATUS_BAD_PARAM;
-		resp.tool_id = tool.tool_id;
-		safestrcpy(validate_error, "syscall_only", sizeof(validate_error));
-	} else {
-		status = agent_tool_protocol_decode_v1(&req, &tool, &op,
-						       validate_error,
-						       sizeof(validate_error));
-		resp.status = status;
-	}
-	if (resp.status != AGENT_STATUS_OK) {
-		resp.tool_id = tool.tool_id;
-		safestrcpy(resp.tool_name, tool.name, sizeof(resp.tool_name));
-		safestrcpy(resp.result, validate_error, sizeof(resp.result));
-		return copyout(p->pagetable, respaddr, (char *)&resp,
-			       sizeof(resp));
-	}
-	lifecycle = vfs_proc_lifecycle(p);
-	if (workflow_lifecycle_key_valid(lifecycle) &&
-	    workflow_lifecycle_operation_enter(lifecycle) < 0) {
-		resp.status = AGENT_STATUS_RETRY;
-		resp.tool_id = tool.tool_id;
-		safestrcpy(resp.tool_name, tool.name, sizeof(resp.tool_name));
-		safestrcpy(resp.result, "workflow_fenced", sizeof(resp.result));
-		return copyout(p->pagetable, respaddr, (char *)&resp,
-			       sizeof(resp));
-	}
-	if (agent_execute_one(p, &op, &res, agent_ticks(), 0, 0, 0, 0) < 0)
-		res.status = AGENT_STATUS_NO_SPACE;
-	if (workflow_lifecycle_key_valid(lifecycle))
-		workflow_lifecycle_operation_leave(lifecycle);
-	resp.status = res.status;
-	resp.tool_id = res.tool_id;
-	resp.request_id = res.request_id;
-	resp.sequence = res.sequence;
-	resp.value0 = res.value0;
-	resp.value1 = res.value1;
-	resp.value2 = res.value2;
-	safestrcpy(resp.tool_name, tool.name, sizeof(resp.tool_name));
-	safestrcpy(resp.result, res.result, sizeof(resp.result));
-	return copyout(p->pagetable, respaddr, (char *)&resp, sizeof(resp));
 }
 
 static __attribute__((noinline)) int

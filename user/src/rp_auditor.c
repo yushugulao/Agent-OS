@@ -95,7 +95,7 @@ static int run_kernel_audit(void)
 	memset(auditor_ops, 0, sizeof(auditor_ops));
 	memset(auditor_results, 0, sizeof(auditor_results));
 	for (int i = 0; i < 2; i++) {
-		auditor_ops[i].version = AGENT_CALL_VERSION;
+		auditor_ops[i].version = AGENT_OP_VERSION;
 		auditor_ops[i].tool_id = AGENT_TOOL_ECHO;
 		auditor_ops[i].request_id = 4101 + i;
 	}
