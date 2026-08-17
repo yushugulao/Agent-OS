@@ -242,7 +242,7 @@ Nexus 的通用多 Agent Harness 如图 1 所示。用户目标和 workflow poli
 5. **受控工具。** 工作区 broker 提供 revision 绑定的 read/write/patch；构建 broker 在临时工作树中使用固定 RISC-V 工具链；运行 broker 为每个用例启动独立 Guest。工具目录和授权来自 Agent 配置，与 Agent 名称无关。
 6. **共享与预测。** 父 Agent 只接纳成功终态对应的结果 Artifact。workflow 共享索引保存任务图、revision、build 和测试；查询预测器从 active path 的结构化只读记录学习有界转移，为 Guest VFS 或 Host workspace 生成低优先级预取。
 
-原生图源见 [`nexus_multiagent_harness.mmd`](../figures/architecture/nexus_multiagent_harness.mmd)。
+可编辑图源见 [`nexus_multiagent_harness.drawio`](../figures/architecture/nexus_multiagent_harness.drawio)。
 
 ### 7.1 通用任务与模型循环
 
@@ -280,11 +280,11 @@ rollback 只移动当前 Agent 的 active path，不撤销其他 Agent 的外部
 | --- | --- | --- |
 | `search_files` | workspace broker 生成 manifest 并在允许候选中匹配；结果封存为 SEARCH Artifact | 匹配路径或文本行；空查询列出候选文件，可用 `path_prefix` 缩小范围，聚合后最多返回 8 项 |
 | `read_file` | broker 核对 root、object/path/revision/range 后返回字节；结果封存为 FILE Artifact | 从一个工作区相对路径读取 1 至 64 行，返回实际范围及是否还有后续内容 |
-| `inspect_system` | 取得当前 Guest 的受控状态投影并形成 TOOL Artifact | 只观察 `status`、`processes` 或 `context`，不描述 Host 文件 |
+| `inspect_system` | Registry 中保留的内部 Guest 状态投影 | 产品 Harness 使用同步 `STATUS` 轮询，不把它作为模型动作 |
 | `write_file` | 开发 broker 核对 root、路径和准确 revision，再执行同目录原子替换 | 新旧 revision、字节数和提交状态；只允许 `user/src/nexus_*_ucore.c` |
 | `apply_patch` | 复核相同路径与 revision 后应用有界 unified diff，冲突时保持原文件 | 新旧 revision、补丁结果和提交状态 |
 | `build_ucore_program` | 在会话私有临时工作树中构建同名目标，固定 RISC-V 工具链并限制 CPU、内存、文件、进程、时间和诊断长度 | source revision、build id、退出状态、镜像状态与有界诊断 |
-| `run_ucore_program` | 从成功 build 复制独立镜像，启动单 Hart、128 MiB 的新 Guest，通过串口输入一个测试用例 | 实际输出、退出状态、日志摘要、超时状态和 `normal/invalid/failure` 类型 |
+| `run_ucore_program` | 接受一组有界用例；每个用例从成功 build 复制独立镜像并启动单 Hart、128 MiB 的新 Guest | 每项实际输出、退出状态、日志摘要、超时状态和 `normal/invalid/failure` 类型 |
 
 工具只有在模型选中时才执行。拥有 `ORCHESTRATE` capability 的 Agent 可以为子任务构造 128 字节 descriptor，其中包含 parent task、目标描述 Artifact、输入 Artifact、所需 capability、允许工具、workspace revision、资源预算、deadline 和预期结果类型。内核检查父子 capability 与工具集合的包含关系，拒绝 self delegation 和任务图中的真实环路；多个互不依赖的子任务可以并行处于 pending 或 claimed 状态。目标处理输入 Artifact，封存结果 Artifact，再调用 complete。CQE 只返回状态、handle 与关联信息。
 
@@ -316,9 +316,11 @@ Host workspace broker 只持有会话显式指定并固定在目录句柄上的 
 
 [`agentos_native_task_channel.py`](../../host_tools/agentos_native_task_channel.py) 持有长期 Guest 串口并把 Host Agent 操作映射到 Guest runtime config 和原生 Task 请求。它核对生命周期、PID/agent/control identity、descriptor、claim 与 CQE 关联；[`agentos_nexus_multiagent.py`](../../host_tools/agentos_nexus_multiagent.py) 负责模型循环、Artifact 正文、workspace broker 和团队摘要。Host 只在原生 Task 成功结算后接纳模型结果，不用固定角色状态机推进任务。
 
+HarnessEventBus 将 Host Harness、模型、Agent、Task、工具、build、run、kernel 和 QEMU 状态规范为带 sequence 与时间戳的事件。长期 Guest 的串口协议提供同步、版本化的 `STATUS` 查询，返回 lifecycle、tick、活动 Agent、pending/claimed/terminal Task、SQ/CQ 深度与累计值、Context、等待计数、资源账户以及 workflow EEVDF 数据。状态轮询与任务命令共用 NativeTaskChannel 的串行请求锁。交互式运行在同一终端显示仪表板，普通文本和 NDJSON 模式使用相同事件；最终 workflow JSON继续单独写入标准输出。
+
 `agentos-harness-native-test` 是联合产品回归，重复启动真实 Guest 并检查 root-child Task 图、终态交付和正常关闭。开发 replay 继续重放写入、失败构建、修补、成功构建和三类 Guest 结果，用于验证 broker 完成门与证据失效规则；它不替代原生 Task Channel 证据。
 
-通用 Harness 已由 DeepSeek 完成一次真实计算器开发：模型自行选择单 Agent 方案，在 21 个模型轮次中调用 20 次工具，经历一次 revision 冲突后重新读取并提交；最新 build 分别通过正常输入、无效输入和除零路径的独立 Guest 测试。该案例只是一项通用目标，运行时没有计算器专用分支。完整 revision、build id、Artifact hash 与团队摘要见 [`ci/agentos-nexus-multiagent-evidence.json`](../../ci/agentos-nexus-multiagent-evidence.json)。
+通用 Harness 已由 DeepSeek 完成一次真实计算器开发：模型自行选择单 Agent 方案，在 5 个模型轮次中调用读取、写入、构建和运行 4 项产品工具。每次调用均建立 native Task，由对应 Provider claim、封存结果 Artifact、提交终态并写回 Context。最新 build 在 5 个独立 Guest 中通过正常表达式、非法字符、空输入、运算符错误和除零测试。该案例只是一项通用目标，运行时没有计算器专用分支。完整 revision、build id、Artifact hash、Fence evidence root 与团队摘要见 [`ci/agentos-nexus-multiagent-evidence.json`](../../ci/agentos-nexus-multiagent-evidence.json)。
 
 Shell、任意命令和任意路径写入仍不开放。`/reset` 与会话关闭会使工作区 Catalog/Typed Watch 状态及 Host 临时 build 失效。通用 Harness 位于 [`host_tools/agentos_nexus_multiagent.py`](../../host_tools/agentos_nexus_multiagent.py)，受控开发 broker 位于 [`host_tools/agentos_nexus_dev.py`](../../host_tools/agentos_nexus_dev.py)，内核 Artifact 与预测模块分别位于 [`os/agent_context_artifact.c`](../../os/agent_context_artifact.c) 和 [`os/agent_context_prefetch.c`](../../os/agent_context_prefetch.c)。运行方法见[运行指南](../usage.md#4-使用-nexus-多智能体-harness)。
 

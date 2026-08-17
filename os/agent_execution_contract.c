@@ -1124,7 +1124,11 @@ agent_execution_contract_admit(
 			AGENT_EXECUTION_REASON_TOOL_MISMATCH, claim);
 		return AGENT_EXECUTION_ADMISSION_DENIED;
 	}
-	if (tool_manifest.flags == AGENT_TOOL_F_BROKERED) {
+	if (tool_manifest.flags == AGENT_TOOL_F_BROKERED &&
+	    (binding == 0 ||
+	     (binding->internal_flags &
+	      AGENT_EXECUTION_BINDING_INTERNAL_F_TASK_CHANNEL) == 0 ||
+	     binding->input_artifact_type != AGENT_ARTIFACT_TASK)) {
 		agent_execution_result_error(
 			result, AGENT_STATUS_BROKER_REQUIRED, "broker_required",
 			AGENT_EXECUTION_REASON_TOOL_MISMATCH, claim);
@@ -2220,7 +2224,8 @@ agent_execution_contract_build_node(
 	       node->input_artifact_type == AGENT_ARTIFACT_TASK) &&
 	     !(manifest.flags == AGENT_TOOL_F_BROKERED &&
 	       node->input_artifact_type != AGENT_ARTIFACT_NONE &&
-	       node->output_artifact_type != AGENT_ARTIFACT_NONE)) ||
+	       (node->output_artifact_type != AGENT_ARTIFACT_NONE ||
+	        node->input_artifact_type == AGENT_ARTIFACT_TASK))) ||
 	    (node->required_capabilities &
 	     manifest.provenance.required_capabilities) !=
 		    manifest.provenance.required_capabilities ||

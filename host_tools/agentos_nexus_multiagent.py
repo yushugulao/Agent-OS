@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import sys
 import threading
@@ -28,23 +28,40 @@ if str(_HOST_TOOLS_DIR) not in sys.path:
 
 try:
     import agentos_nexus_dev as development
+    import agentos_harness_progress as harness_progress
     import agentos_native_task_channel as native_task
     import agentos_workspace as workspace
     import guest_llm_relay as relay
 except ModuleNotFoundError:  # pragma: no cover
     from . import agentos_nexus_dev as development
+    from . import agentos_harness_progress as harness_progress
     from . import agentos_native_task_channel as native_task
     from . import agentos_workspace as workspace
     from . import guest_llm_relay as relay
 
 
-MAX_AGENTS: Final = 8
+# One reserved workflow process is the persistent control Guest.  The kernel's
+# eight-process workflow quota therefore leaves seven identities for configured
+# Agents and controlled Providers.
+MAX_AGENTS: Final = 7
 MAX_TASKS: Final = 64
 MAX_ARTIFACT_BYTES: Final = 64 * 1024
 MAX_ARTIFACTS: Final = 128
 MAX_MODEL_PROJECTION_BYTES: Final = 12 * 1024
 MAX_ROUNDS: Final = 64
 DEFAULT_HEARTBEAT_SECONDS: Final = 0.25
+# Execution Contract nodes are single-success operations.  This mirrors the
+# frozen 24-node plan installed by agentharness_ucore and lets the model stop
+# seeing a tool before the Guest would reject an over-budget delegation.
+CONTRACT_TOOL_BUDGET: Final = {
+    "delegate_task": 3,
+    "search_files": 3,
+    "read_file": 3,
+    "write_file": 4,
+    "apply_patch": 3,
+    "build_ucore_program": 5,
+    "run_ucore_program": 3,
+}
 
 CAPABILITIES: Final = frozenset(
     (
@@ -106,6 +123,58 @@ class HarnessError(ValueError):
     """Fail-closed validation error."""
 
 
+class KernelStatusMonitor:
+    """Poll bounded Guest snapshots through the serialized native channel."""
+
+    def __init__(
+        self,
+        channel: native_task.NativeTaskChannel,
+        events: harness_progress.HarnessEventBus,
+        interval: float,
+    ) -> None:
+        if not 0.25 <= interval <= 10.0:
+            raise HarnessError("status_interval_invalid")
+        self.channel = channel
+        self.events = events
+        self.interval = interval
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name="nexus-kernel-status", daemon=True
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                status = self.channel.status()
+            except native_task.NativeTaskChannelError as error:
+                if not self._stop.is_set():
+                    self.events.emit(
+                        "kernel", "kernel_status_failed",
+                        "Guest status snapshot failed",
+                        detail=_bounded_utf8(str(error), 160),
+                    )
+                return
+            self.events.emit(
+                "kernel", "kernel_status",
+                (
+                    f"Guest tick {status['tick']}; active tasks "
+                    f"{status['tasks_active']}; SQ/CQ "
+                    f"{status['sq_depth']}/{status['cq_depth']}; Artifacts "
+                    f"{status['artifact_count']}; Catalog "
+                    f"{status['catalog_state']}/{status['catalog_candidates']}"
+                ),
+                **status,
+            )
+            self._stop.wait(self.interval)
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=7.0)
+
+
 def _canonical(value: object) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, allow_nan=False, sort_keys=True,
@@ -129,6 +198,182 @@ def _bounded_utf8(value: str, maximum: int) -> str:
         except UnicodeDecodeError:
             raw = raw[:-1]
     return marker.decode("ascii")
+
+
+def _model_projection_json(projection: Mapping[str, object]) -> str:
+    """Encode a valid bounded projection while retaining newest evidence first."""
+
+    value = json.loads(_canonical(projection).decode("utf-8"))
+    artifacts = value.get("artifacts")
+    context = value.get("context")
+    shared = value.get("shared_context")
+    if isinstance(artifacts, list):
+        # AgentLoop orders these newest first.  Older bodies remain available by
+        # handle, but the next action must see the latest build/run receipt.
+        del artifacts[3:]
+    if isinstance(context, list):
+        value["context"] = context[-8:]
+    if isinstance(shared, list):
+        value["shared_context"] = shared[-4:]
+    task = value.get("task")
+    if isinstance(task, dict):
+        for key, maximum in (("objective", 1536), ("input_artifact", 768)):
+            if isinstance(task.get(key), str):
+                task[key] = _bounded_utf8(task[key], maximum)
+    if isinstance(value.get("goal"), str):
+        value["goal"] = _bounded_utf8(value["goal"], 1536)
+    agent = value.get("agent")
+    if isinstance(agent, dict) and isinstance(agent.get("system_prompt"), str):
+        agent["system_prompt"] = _bounded_utf8(agent["system_prompt"], 768)
+
+    while True:
+        encoded = _canonical(value)
+        if len(encoded) <= MAX_MODEL_PROJECTION_BYTES:
+            return encoded.decode("utf-8")
+        artifacts = value.get("artifacts")
+        if isinstance(artifacts, list):
+            shrunk = False
+            for artifact in reversed(artifacts):
+                if not isinstance(artifact, dict):
+                    continue
+                content = artifact.get("content")
+                if isinstance(content, str) and len(content.encode("utf-8")) > 512:
+                    artifact["content"] = _bounded_utf8(
+                        content, max(512, len(content.encode("utf-8")) - 512)
+                    )
+                    artifact["truncated"] = True
+                    shrunk = True
+                    break
+            if shrunk:
+                continue
+            if len(artifacts) > 1:
+                artifacts.pop()
+                continue
+        context = value.get("context")
+        if isinstance(context, list) and len(context) > 3:
+            del context[0]
+            continue
+        shared = value.get("shared_context")
+        if isinstance(shared, list) and shared:
+            del shared[0]
+            continue
+        # This fallback remains valid JSON and retains task identity plus the
+        # newest sealed evidence metadata.  It should only be reachable after
+        # unusually large labels or policy text.
+        minimal = {
+            "goal": _bounded_utf8(str(value.get("goal", "")), 512),
+            "task": value.get("task"),
+            "context": (value.get("context") or [])[-2:],
+            "artifacts": (value.get("artifacts") or [])[:1],
+            "contract_tool_remaining": value.get("contract_tool_remaining", {}),
+        }
+        encoded = _canonical(minimal)
+        if len(encoded) > MAX_MODEL_PROJECTION_BYTES:
+            artifact = minimal["artifacts"]
+            if isinstance(artifact, list) and artifact and isinstance(artifact[0], dict):
+                artifact[0].pop("content", None)
+            task = minimal.get("task")
+            if isinstance(task, dict):
+                task["objective"] = _bounded_utf8(str(task.get("objective", "")), 512)
+                task["input_artifact"] = ""
+            encoded = _canonical(minimal)
+        if len(encoded) > MAX_MODEL_PROJECTION_BYTES:
+            raise HarnessError("model_projection_unbounded")
+        return encoded.decode("utf-8")
+
+
+def _parse_workspace_manifest(content: str) -> tuple[dict[str, int], list[dict[str, object]]]:
+    lines = content.splitlines()
+    if not lines or lines[0] != "workspace_manifest_v1":
+        raise HarnessError("workspace_manifest_malformed")
+    header: dict[str, int] = {}
+    entries: dict[int, dict[str, object]] = {}
+    for line in lines[1:]:
+        if "=" not in line:
+            raise HarnessError("workspace_manifest_malformed")
+        key, value = line.split("=", 1)
+        match = re.fullmatch(
+            r"entry\[([1-9][0-9]*)\]\.(object_id|path|revision|size|kind)", key
+        )
+        if match:
+            index = int(match.group(1))
+            entries.setdefault(index, {})[match.group(2)] = value
+            continue
+        if key not in {"cursor", "next_cursor", "entry_count", "eof"}:
+            raise HarnessError("workspace_manifest_malformed")
+        if not re.fullmatch(r"[0-9]+", value):
+            raise HarnessError("workspace_manifest_malformed")
+        header[key] = int(value)
+    if set(header) != {"cursor", "next_cursor", "entry_count", "eof"}:
+        raise HarnessError("workspace_manifest_malformed")
+    if header["eof"] not in (0, 1) or len(entries) != header["entry_count"]:
+        raise HarnessError("workspace_manifest_malformed")
+    parsed: list[dict[str, object]] = []
+    for index in range(1, header["entry_count"] + 1):
+        entry = entries.get(index)
+        if entry is None or set(entry) != {"object_id", "path", "revision", "size", "kind"}:
+            raise HarnessError("workspace_manifest_malformed")
+        if (
+            not re.fullmatch(r"[0-9a-f]{64}", str(entry["object_id"]))
+            or not re.fullmatch(r"[0-9a-f]{64}", str(entry["revision"]))
+            or not re.fullmatch(r"[0-9]+", str(entry["size"]))
+        ):
+            raise HarnessError("workspace_manifest_malformed")
+        entry["size"] = int(str(entry["size"]))
+        parsed.append(entry)
+    if header["next_cursor"] != header["cursor"] + len(parsed):
+        raise HarnessError("workspace_manifest_malformed")
+    return header, parsed
+
+
+def _catalog_semantics(path: str, kind: str) -> tuple[str, str, str]:
+    folded = path.casefold()
+    suffix = Path(path).suffix.casefold()
+    if folded.startswith("user/src/"):
+        stage = "application"
+    elif folded.startswith("os/"):
+        stage = "kernel"
+    elif folded.startswith("host_tools/"):
+        stage = "host"
+    elif folded.startswith("scripts/"):
+        stage = "test"
+    elif folded.startswith(("include/", "user/include/")):
+        stage = "interface"
+    elif folded.startswith(("docs/", "agentos-ucore-")):
+        stage = "document"
+    else:
+        stage = "workspace"
+    if suffix in {".c", ".s", ".py"}:
+        semantic_kind = "source"
+    elif suffix in {".h"}:
+        semantic_kind = "header"
+    elif suffix in {".md", ".tex", ".txt"}:
+        semantic_kind = "document"
+    elif suffix in {".json", ".jsonl", ".csv"}:
+        semantic_kind = "data"
+    else:
+        semantic_kind = "file" if kind == "file" else "object"
+    raw_summary = path.encode("utf-8", errors="replace")
+    if len(raw_summary) >= 64:
+        raw_summary = raw_summary[:60]
+        while raw_summary:
+            try:
+                summary = raw_summary.decode("utf-8") + "..."
+                break
+            except UnicodeDecodeError:
+                raw_summary = raw_summary[:-1]
+        else:
+            summary = "workspace object"
+    else:
+        summary = path
+    return stage, semantic_kind, summary or "workspace object"
+
+
+def _catalog_manifest_prefix(path: str) -> str:
+    """Normalize the user-facing relative root without weakening reader checks."""
+
+    normalized = str(PurePosixPath(path))
+    return "" if normalized == "." else normalized
 
 
 def _argument_projection(arguments: Mapping[str, object]) -> dict[str, object]:
@@ -171,6 +416,40 @@ def _result_projection(content: str) -> dict[str, object]:
         if key in allowed:
             projected[key] = value
     return projected
+
+
+def _workspace_tool_error(
+    tool: str,
+    operation: str,
+    status: str,
+    content: str,
+    *,
+    path: str,
+    workspace_generation: str = "",
+) -> development.DevelopmentResult:
+    """Return one bounded provider rejection that can settle through AgentOS.
+
+    Invalid model-supplied workspace arguments are expected tool outcomes.  The
+    controlled Provider therefore returns a sealed error receipt instead of
+    tearing down the long-running Agent Loop.  Catalog invariant failures still
+    raise HarnessError at their original call sites.
+    """
+
+    match = re.search(r"(?:^|\n)workspace_error=([^\n]+)", content)
+    code = match.group(1) if match else f"{operation}_{status}"
+    body = (
+        "workspace_tool_error\n"
+        "content_untrusted=1\n"
+        "status=rejected\n"
+        f"code={_bounded_utf8(code, 96)}\n"
+        f"operation={operation}\n"
+        f"tool={tool}\n"
+        f"path={_bounded_utf8(path, 240)}\n"
+        f"detail={_bounded_utf8(content, 320)}"
+    )
+    return development.DevelopmentResult(
+        "error", workspace_generation, body
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +504,9 @@ class Artifact:
     task_id: int
     source_sequence: int
     lifecycle: tuple[int, int]
+    native_context_sequence: int = 0
+    native_producer_agent: int = 0
+    native_producer_control: int = 0
     sealed: bool = True
     shareable: bool = False
     shared: bool = False
@@ -254,6 +536,14 @@ class ContextArtifactStore:
         self._workflow_reads = 0
         self._lock = threading.RLock()
 
+    def reserve(self) -> int:
+        """Reserve one handle before native Task admission binds its result."""
+
+        with self._lock:
+            handle = self._next_handle
+            self._next_handle += 1
+            return handle
+
     def put(
         self,
         config: AgentConfig,
@@ -265,6 +555,8 @@ class ContextArtifactStore:
         *,
         shareable: bool = False,
         retain_seconds: float = 0.0,
+        reserved_handle: int = 0,
+        native_metadata: Mapping[str, object] | None = None,
     ) -> Artifact:
         raw = content if isinstance(content, bytes) else content.encode("utf-8")
         if not raw or len(raw) > MAX_ARTIFACT_BYTES:
@@ -283,8 +575,15 @@ class ContextArtifactStore:
                 or owned_bytes + len(raw) > config.artifact_bytes_limit
             ):
                 raise HarnessError("artifact_quota_exceeded")
-            handle = self._next_handle
-            self._next_handle += 1
+            if reserved_handle:
+                if reserved_handle in self._artifacts or not (
+                    0 < reserved_handle < self._next_handle
+                ):
+                    raise HarnessError("artifact_reserved_handle_invalid")
+                handle = reserved_handle
+            else:
+                handle = self._next_handle
+                self._next_handle += 1
             artifact = Artifact(
                 handle,
                 kind,
@@ -294,6 +593,18 @@ class ContextArtifactStore:
                 task_id,
                 source_sequence,
                 self.lifecycle,
+                native_context_sequence=(
+                    0 if native_metadata is None else
+                    int(native_metadata.get("context_sequence", 0))
+                ),
+                native_producer_agent=(
+                    0 if native_metadata is None else
+                    int(native_metadata.get("producer_agent_id", 0))
+                ),
+                native_producer_control=(
+                    0 if native_metadata is None else
+                    int(native_metadata.get("producer_control_id", 0))
+                ),
                 shareable=shareable,
                 retain_until=time.monotonic() + max(0.0, retain_seconds),
             )
@@ -382,11 +693,13 @@ class ContextArtifactStore:
 @dataclass(frozen=True, slots=True)
 class TaskDescriptor:
     task_id: int
+    correlation_id: int
     parent_task_id: int
     parent_agent: int
     target_agent: int
     objective_artifact: int
     input_artifact: int
+    result_artifact: int
     required_capabilities: frozenset[str]
     allowed_tools: frozenset[str]
     workspace_revision: str
@@ -394,6 +707,7 @@ class TaskDescriptor:
     read_budget: int
     deadline_monotonic: float
     expected_result_kind: str
+    operation_tool: str = "delegate_task"
 
 
 @dataclass(slots=True)
@@ -405,6 +719,17 @@ class TaskRecord:
     claimed_by: int = 0
     model_rounds: int = 0
     tool_calls: int = 0
+    native_context_sequence: int = 0
+
+
+@dataclass(slots=True)
+class NativeProvider:
+    agent_id: int
+    config: AgentConfig
+    label: str
+    native_pid: int = 0
+    native_agent_id: int = 0
+    native_control_id: int = 0
 
 
 class TaskChannel:
@@ -468,6 +793,52 @@ class TaskChannel:
             self._tasks[descriptor.task_id] = record
             return record
 
+    def publish_brokered(
+        self,
+        parent: "AgentLoop",
+        target: NativeProvider,
+        descriptor: TaskDescriptor,
+    ) -> TaskRecord:
+        """Admit one controlled provider request through the native channel."""
+
+        with self._lock:
+            if len(self._tasks) >= MAX_TASKS or descriptor.task_id in self._tasks:
+                raise HarnessError("task_capacity_or_reuse")
+            if descriptor.parent_agent != parent.agent_id:
+                raise HarnessError("task_identity_mismatch")
+            if descriptor.target_agent != target.agent_id:
+                raise HarnessError("task_identity_mismatch")
+            if descriptor.operation_tool not in descriptor.allowed_tools:
+                raise HarnessError("task_tool_denied")
+            if not descriptor.required_capabilities <= parent.config.capabilities:
+                raise HarnessError("parent_capability_subset")
+            if not descriptor.required_capabilities <= target.config.capabilities:
+                raise HarnessError("target_capability_subset")
+            if not descriptor.allowed_tools <= parent.config.tools:
+                raise HarnessError("parent_tool_subset")
+            if not descriptor.allowed_tools <= target.config.tools:
+                raise HarnessError("target_tool_subset")
+            artifact = self.store.get(descriptor.input_artifact)
+            if (
+                artifact.producer_agent != parent.agent_id
+                or not artifact.shared
+                or artifact.task_id != descriptor.task_id
+                or artifact.native_context_sequence <= 0 and self.native is not None
+            ):
+                raise HarnessError("task_input_invalid")
+            if descriptor.result_artifact <= 0:
+                raise HarnessError("task_result_handle_invalid")
+            if self.native is not None:
+                self.native.delegate(descriptor)
+                self.native.claim(descriptor.task_id, target.agent_id)
+            record = TaskRecord(
+                descriptor=descriptor,
+                state="claimed",
+                claimed_by=target.agent_id,
+            )
+            self._tasks[descriptor.task_id] = record
+            return record
+
     def claim(self, task_id: int, agent_id: int) -> TaskRecord:
         with self._lock:
             record = self._tasks.get(task_id)
@@ -505,22 +876,41 @@ class TaskChannel:
     ) -> TaskRecord:
         with self._lock:
             record = self._tasks.get(task_id)
-            if record is None or record.state != "claimed" or record.claimed_by != agent_id:
+            if (
+                record is None
+                or record.state not in {"claimed", "cancelling"}
+                or record.claimed_by != agent_id
+            ):
                 raise HarnessError("task_completion_denied")
             if status == "ok":
                 artifact = self.store.get(result_artifact)
                 if (
-                    artifact.producer_agent != agent_id
+                    artifact.handle != record.descriptor.result_artifact
+                    or artifact.producer_agent != agent_id
                     or artifact.task_id != task_id
                     or artifact.kind != record.descriptor.expected_result_kind
                     or not artifact.sealed
+                    or (
+                        self.native is not None
+                        and (
+                            artifact.native_context_sequence <= 0
+                            or artifact.native_producer_agent <= 0
+                            or artifact.native_producer_control <= 0
+                        )
+                    )
                 ):
                     raise HarnessError("task_result_invalid")
             elif result_artifact:
                 raise HarnessError("failed_task_has_result")
             if self.native is not None:
-                self.native.complete(task_id, agent_id, status, result_artifact)
-            record.result_artifact = result_artifact
+                native_result = self.native.complete(
+                    task_id, agent_id, status, result_artifact
+                )
+                record.native_context_sequence = native_result["context_sequence"]
+                status = native_task.STATUS_NAMES.get(
+                    native_result["status"], f"status_{native_result['status']}"
+                )
+            record.result_artifact = result_artifact if status == "ok" else 0
             record.terminal_status = status
             record.state = "terminal"
             return record
@@ -535,9 +925,8 @@ class TaskChannel:
             if self.native is not None:
                 if record.state != "claimed" or record.claimed_by == 0:
                     raise HarnessError("native_task_not_claimed")
-                self.native.complete(
-                    task_id, record.claimed_by, "cancelled", 0
-                )
+                native_result = self.native.cancel(task_id)
+                record.native_context_sequence = native_result["context_sequence"]
             record.state = "terminal"
             record.terminal_status = "cancelled"
             return record
@@ -718,7 +1107,7 @@ class AgentLoop:
                 handles.append(handle)
         artifact_rows: list[dict[str, object]] = []
         remaining = MAX_MODEL_PROJECTION_BYTES
-        for handle in handles[-8:]:
+        for handle in reversed(handles[-8:]):
             if remaining <= 256:
                 break
             artifact = self.harness.store.get(handle)
@@ -741,6 +1130,13 @@ class AgentLoop:
                 }
             )
             remaining -= len(content.encode("utf-8"))
+        completion_missing = (
+            []
+            if task is None
+            else self.harness._development_completion_missing(
+                task.descriptor.task_id
+            )
+        )
         return {
             "goal": self.harness.goal,
             "agent": {
@@ -776,6 +1172,8 @@ class AgentLoop:
             "context": self.private_context[-12:],
             "shared_context": self.harness.shared_context[-16:],
             "artifacts": artifact_rows,
+            "contract_tool_remaining": self.harness.contract_tool_remaining(),
+            "completion_missing": completion_missing,
         }
 
     def run(self) -> None:
@@ -799,7 +1197,54 @@ class AgentLoop:
                 task.model_rounds += 1
                 if task.model_rounds > MAX_ROUNDS:
                     raise HarnessError("task_round_limit")
-                action = dict(self.model(self._projection(task)))
+                model_started = time.monotonic()
+                self.harness.events.emit(
+                    "model", "model_started",
+                    f"Agent {self.agent_id} started model round {task.model_rounds}",
+                    agent_id=self.agent_id,
+                    task_id=task_id,
+                    model_round=task.model_rounds,
+                    tool_calls=task.tool_calls,
+                )
+                provider_model = (
+                    self.model if isinstance(self.model, DeepSeekModel) else None
+                )
+                if provider_model is not None:
+                    provider_model.set_progress_context(
+                        task_id=task_id, model_round=task.model_rounds
+                    )
+                try:
+                    action = dict(self.model(self._projection(task)))
+                except Exception as error:
+                    self.harness.events.emit(
+                        "model", "model_failed",
+                        f"Agent {self.agent_id} model round {task.model_rounds} failed",
+                        agent_id=self.agent_id,
+                        task_id=task_id,
+                        model_round=task.model_rounds,
+                        tool_calls=task.tool_calls,
+                        error=type(error).__name__,
+                        detail=_bounded_utf8(str(error), 160),
+                        duration_ms=int((time.monotonic() - model_started) * 1000),
+                    )
+                    raise
+                finally:
+                    if provider_model is not None:
+                        provider_model.set_progress_context()
+                self.harness.events.emit(
+                    "model", "model_completed",
+                    (
+                        f"Agent {self.agent_id} completed model round "
+                        f"{task.model_rounds}: {action.get('type', 'invalid')}"
+                    ),
+                    agent_id=self.agent_id,
+                    task_id=task_id,
+                    model_round=task.model_rounds,
+                    tool_calls=task.tool_calls,
+                    action_type=str(action.get("type", "invalid")),
+                    selected_tool=str(action.get("tool", "")),
+                    duration_ms=int((time.monotonic() - model_started) * 1000),
+                )
                 self.harness.execute_action(self, task, action)
             except Exception as error:  # fail closed at the Agent boundary
                 self._append(
@@ -835,6 +1280,7 @@ class NexusHarness:
         model_factory: Callable[[AgentConfig], Model] | None = None,
         trace_path: Path | None = None,
         native_channel: native_task.NativeTaskChannel | None = None,
+        event_bus: harness_progress.HarnessEventBus | None = None,
     ) -> None:
         self.root = Path(root).resolve(strict=True)
         self.goal = goal
@@ -850,28 +1296,155 @@ class NexusHarness:
             policy.artifact_read_limit,
         )
         self.tasks = TaskChannel(self.store, native_channel)
-        self.development = development.NexusDevelopmentBroker(self.root)
+        if event_bus is not None and trace_path is not None:
+            raise HarnessError("event_bus_trace_conflict")
+        self._owns_events = event_bus is None
+        self.events = event_bus or harness_progress.HarnessEventBus(
+            mode="off", goal=goal, trace_path=trace_path
+        )
+        self._tool_progress = threading.local()
+        self.development = development.NexusDevelopmentBroker(
+            self.root, progress_callback=self._development_progress
+        )
         self.agents: dict[int, AgentLoop] = {}
+        self.providers: dict[str, NativeProvider] = {}
         self.shared_context: list[dict[str, object]] = []
         self._context_lock = threading.RLock()
         self.stopped = False
         self.model_factory = model_factory
-        self.trace_path = trace_path
-        self._trace_lock = threading.Lock()
-        if self.trace_path is not None:
-            self.trace_path.parent.mkdir(parents=True, exist_ok=True)
-            self.trace_path.write_bytes(b"")
         self._next_agent = 1
         self._next_task = 1
+        self._next_correlation = 1
         self._lock = threading.RLock()
+        self._catalog_lock = threading.RLock()
+        self._catalog_invalidated = False
+
+    def contract_tool_remaining(self) -> dict[str, int]:
+        used = {name: 0 for name in CONTRACT_TOOL_BUDGET}
+        with self.tasks._lock:
+            for record in self.tasks._tasks.values():
+                operation = record.descriptor.operation_tool
+                if operation in used:
+                    used[operation] += 1
+        return {
+            name: max(0, limit - used[name])
+            for name, limit in CONTRACT_TOOL_BUDGET.items()
+        }
+
+    def _provider_group(self, tool: str) -> tuple[str, frozenset[str], frozenset[str]]:
+        if tool in ("search_files", "read_file"):
+            allowed = frozenset(("search_files", "read_file")) & self.policy.tools
+            if tool not in allowed:
+                raise HarnessError("provider_tool_not_allowed")
+            return (
+                "workspace-read",
+                frozenset(("READ_WORKSPACE", "SHARE_ARTIFACT")),
+                allowed,
+            )
+        if tool in ("write_file", "apply_patch"):
+            allowed = frozenset(("write_file", "apply_patch")) & self.policy.tools
+            if tool not in allowed:
+                raise HarnessError("provider_tool_not_allowed")
+            return (
+                "workspace-mutation",
+                frozenset(("WRITE_WORKSPACE", "SHARE_ARTIFACT")),
+                allowed,
+            )
+        if tool in ("build_ucore_program", "run_ucore_program"):
+            allowed = frozenset(
+                ("build_ucore_program", "run_ucore_program")
+            ) & self.policy.tools
+            if tool not in allowed:
+                raise HarnessError("provider_tool_not_allowed")
+            return (
+                "execution",
+                frozenset(("BUILD", "RUN", "SHARE_ARTIFACT")),
+                allowed,
+            )
+        raise HarnessError("unknown_tool")
+
+    def _provider_for(self, tool: str) -> NativeProvider:
+        group, capabilities, tools = self._provider_group(tool)
+        with self._lock:
+            existing = self.providers.get(group)
+            if existing is not None:
+                return existing
+            if len(self.agents) + len(self.providers) >= MAX_AGENTS:
+                raise HarnessError("agent_capacity")
+            config = AgentConfig(
+                capabilities=capabilities,
+                tools=tools,
+                system_prompt="Execute only claimed controlled provider requests.",
+                resource_budget=min(32, self.policy.resource_budget),
+                artifact_count_limit=min(32, self.policy.artifact_count_limit),
+                artifact_bytes_limit=min(
+                    512 * 1024, self.policy.artifact_bytes_limit
+                ),
+                artifact_read_limit=min(
+                    1024 * 1024, self.policy.artifact_read_limit
+                ),
+                summary_high_watermark=24,
+            )
+            config.validate(self.policy)
+            agent_id = self._next_agent
+            self._next_agent += 1
+            provider = NativeProvider(agent_id, config, f"{group}-provider")
+            if self.native_channel is not None:
+                identity = self.native_channel.spawn(
+                    agent_id, config, channel_owner=False
+                )
+                provider.native_pid = identity["pid"]
+                provider.native_agent_id = identity["agent_id"]
+                provider.native_control_id = identity["control_id"]
+            self.providers[group] = provider
+            self.events.emit(
+                "agent", "provider_spawned",
+                f"Controlled {group} Provider is ready",
+                agent_id=agent_id, provider_group=group,
+                capabilities=sorted(capabilities), tools=sorted(tools),
+                native_pid=provider.native_pid,
+                native_agent_id=provider.native_agent_id,
+                native_control_id=provider.native_control_id,
+            )
+            return provider
 
     def trace_event(self, agent_id: int, row: Mapping[str, object]) -> None:
-        if self.trace_path is None:
-            return
-        line = _canonical({"agent_id": agent_id, **dict(row)}) + b"\n"
-        with self._trace_lock:
-            with self.trace_path.open("ab") as stream:
-                stream.write(line)
+        self.events.emit_context(agent_id, row)
+
+    def _development_progress(
+        self, kind: str, fields: Mapping[str, object]
+    ) -> None:
+        source = "build" if kind.startswith("build_") else "run"
+        context = getattr(self._tool_progress, "context", {})
+        merged = {**dict(context), **dict(fields)}
+        messages = {
+            "build_worktree_started": "Creating an isolated build worktree",
+            "build_worktree_completed": "Isolated build worktree is ready",
+            "build_worktree_failed": "Isolated build worktree creation failed",
+            "build_command_started": (
+                f"Running build command {merged.get('command_index', 0)}/"
+                f"{merged.get('command_count', 0)}"
+            ),
+            "build_command_completed": (
+                f"Build command {merged.get('command_index', 0)}/"
+                f"{merged.get('command_count', 0)} exited with "
+                f"{merged.get('exit_status', 'unknown')}"
+            ),
+            "build_completed": "uCore program build completed",
+            "build_failed": "uCore program build failed",
+            "run_guest_started": (
+                f"Starting isolated Guest for {merged.get('case_kind', 'test')} case"
+            ),
+            "run_input_sent": (
+                f"Sent bounded input for {merged.get('case_kind', 'test')} case"
+            ),
+            "run_guest_completed": (
+                f"Isolated Guest {merged.get('case_kind', 'test')} case completed"
+            ),
+        }
+        self.events.emit(
+            source, kind, messages.get(kind, kind.replace("_", " ")), **merged
+        )
 
     def close(self) -> None:
         self.stopped = True
@@ -889,6 +1462,8 @@ class NexusHarness:
         self.development.close()
         if self.native_channel is not None:
             self.native_channel.close()
+        if self._owns_events:
+            self.events.close()
 
     def spawn(
         self, config: AgentConfig, model: Model | None = None, label: str = "agent"
@@ -899,10 +1474,19 @@ class NexusHarness:
                 raise HarnessError("model_factory_missing")
             model = self.model_factory(config)
         with self._lock:
-            if len(self.agents) >= MAX_AGENTS:
+            if len(self.agents) + len(self.providers) >= MAX_AGENTS:
                 raise HarnessError("agent_capacity")
             agent_id = self._next_agent
             self._next_agent += 1
+            if isinstance(model, DeepSeekModel):
+                model.bind_progress(
+                    lambda kind, message, fields, bound_agent=agent_id: (
+                        self.events.emit(
+                            "model", kind, message,
+                            agent_id=bound_agent, **dict(fields)
+                        )
+                    )
+                )
             agent = AgentLoop(self, agent_id, config, model, label)
             if self.native_channel is not None:
                 identity = self.native_channel.spawn(agent_id, config)
@@ -911,6 +1495,15 @@ class NexusHarness:
                 agent.native_control_id = identity["control_id"]
             self.agents[agent_id] = agent
             agent.start()
+            self.events.emit(
+                "agent", "agent_spawned",
+                f"Agent {agent_id} ({label}) is running",
+                agent_id=agent_id,
+                label=label,
+                native_pid=agent.native_pid,
+                native_agent_id=agent.native_agent_id,
+                native_control_id=agent.native_control_id,
+            )
             return agent
 
     def submit_root(
@@ -936,13 +1529,18 @@ class NexusHarness:
             shareable=True,
         )
         self.store.share(agent.config, agent.agent_id, artifact.handle)
+        result_handle = self.store.reserve()
+        correlation_id = self._next_correlation
+        self._next_correlation += 1
         descriptor = TaskDescriptor(
             task_id=task_id,
+            correlation_id=correlation_id,
             parent_task_id=0,
             parent_agent=agent.agent_id,
             target_agent=agent.agent_id,
             objective_artifact=artifact.handle,
             input_artifact=0,
+            result_artifact=result_handle,
             required_capabilities=agent.config.capabilities,
             allowed_tools=agent.config.tools,
             workspace_revision="",
@@ -950,8 +1548,18 @@ class NexusHarness:
             read_budget=agent.config.artifact_read_limit,
             deadline_monotonic=time.monotonic() + deadline_seconds,
             expected_result_kind=expected_result_kind,
+            operation_tool="delegate_task",
         )
         self.tasks.publish_root(descriptor)
+        self.events.emit(
+            "task", "root_task_submitted",
+            f"Root Task {task_id} submitted",
+            task_id=task_id,
+            parent_task_id=0,
+            parent_agent=agent.agent_id,
+            target_agent=agent.agent_id,
+            resource_budget=descriptor.resource_budget,
+        )
         agent.wake(task_id)
         return task_id
 
@@ -979,13 +1587,18 @@ class NexusHarness:
             objective, shareable=True,
         )
         self.store.share(parent.config, parent.agent_id, objective_artifact.handle)
+        result_handle = self.store.reserve()
+        correlation_id = self._next_correlation
+        self._next_correlation += 1
         descriptor = TaskDescriptor(
             task_id,
+            correlation_id,
             parent_task_id,
             parent.agent_id,
             target.agent_id,
             objective_artifact.handle,
             input_artifact,
+            result_handle,
             required_capabilities,
             allowed_tools,
             workspace_revision,
@@ -993,8 +1606,18 @@ class NexusHarness:
             read_budget,
             time.monotonic() + deadline_seconds,
             expected_result_kind,
+            "delegate_task",
         )
         self.tasks.delegate(parent, target, descriptor)
+        self.events.emit(
+            "task", "task_delegated",
+            f"Task {task_id} delegated from Agent {parent.agent_id} to Agent {target.agent_id}",
+            task_id=task_id,
+            parent_task_id=parent_task_id,
+            parent_agent=parent.agent_id,
+            target_agent=target.agent_id,
+            resource_budget=resource_budget,
+        )
         target.wake(task_id)
         return task_id
 
@@ -1166,8 +1789,11 @@ class NexusHarness:
                 task_id = record.descriptor.parent_task_id
             return False
 
-        builds: set[str] = set()
+        builds: dict[str, str] = {}
         cases: dict[str, set[str]] = {}
+        observed_workspace_read = False
+        observed_workspace_mutation = False
+        latest_source_revision = ""
         with self.store._lock:
             artifacts = tuple(self.store._artifacts.values())
         for artifact in artifacts:
@@ -1178,39 +1804,283 @@ class NexusHarness:
             except UnicodeDecodeError:
                 continue
             fields = {}
-            for line in text.splitlines():
+            lines = text.splitlines()
+            result_kind = lines[0] if lines else ""
+            for line in lines:
                 if "=" in line:
                     key, value = line.split("=", 1)
                     fields.setdefault(key, value)
+            record = self.tasks._tasks.get(artifact.task_id)
+            tool = "" if record is None else record.descriptor.operation_tool
+            if (
+                tool in {"search_files", "read_file"}
+                and result_kind == "catalog_evidence_v1"
+                and fields.get("used_index") == "1"
+                and fields.get("workspace_generation")
+                and int(fields.get("catalog_records", "0"))
+                > int(fields.get("catalog_candidates", "0"))
+            ):
+                observed_workspace_read = True
+            if (
+                tool == "write_file"
+                and result_kind == "workspace_write"
+                and fields.get("revision")
+                and fields.get("atomic_commit") == "1"
+            ) or (
+                tool == "apply_patch"
+                and result_kind == "workspace_patch"
+                and fields.get("revision")
+                and fields.get("atomic_commit") == "1"
+            ):
+                observed_workspace_mutation = True
+                latest_source_revision = fields.get("revision", "")
             build_id = fields.get("build_id", "")
             if (
                 artifact.kind == "build_diagnostic"
                 and fields.get("status") == "passed"
                 and build_id
             ):
-                builds.add(build_id)
+                builds[build_id] = fields.get("source_revision", "")
             if (
                 artifact.kind == "test_result"
                 and fields.get("status") == "passed"
                 and build_id
-                and fields.get("case_kind") in development.CASE_KINDS
             ):
-                cases.setdefault(build_id, set()).add(fields["case_kind"])
-        for build_id in builds:
-            if development.CASE_KINDS <= cases.get(build_id, set()):
-                return []
+                observed = {
+                    value for value in fields.get("case_kinds", "").split(",")
+                    if value in development.CASE_KINDS
+                }
+                if fields.get("case_kind") in development.CASE_KINDS:
+                    observed.add(fields["case_kind"])
+                cases.setdefault(build_id, set()).update(observed)
         missing = []
-        if not builds:
+        if (
+            required_tools & {"search_files", "read_file"}
+            and not observed_workspace_read
+        ):
+            missing.append("workspace_read")
+        if (
+            required_tools & {"write_file", "apply_patch"}
+            and not observed_workspace_mutation
+        ):
+            missing.append("workspace_mutation")
+        current_builds = {
+            build_id
+            for build_id, source_revision in builds.items()
+            if not latest_source_revision or source_revision == latest_source_revision
+        }
+        if not current_builds:
             missing.append("successful_build")
-        observed_cases = set().union(*(cases.values())) if cases else set()
-        missing.extend(sorted(development.CASE_KINDS - observed_cases))
+        completed_build = next(
+            (
+                build_id for build_id in current_builds
+                if development.CASE_KINDS <= cases.get(build_id, set())
+            ),
+            "",
+        )
+        if not completed_build:
+            observed_cases = set().union(*(cases.values())) if cases else set()
+            missing.extend(sorted(development.CASE_KINDS - observed_cases))
         return missing
+
+    @staticmethod
+    def _artifact_kind_for_tool(tool: str) -> str:
+        return {
+            "write_file": "file",
+            "apply_patch": "patch",
+            "build_ucore_program": "build_diagnostic",
+            "run_ucore_program": "test_result",
+            "search_files": "search",
+            "read_file": "file",
+        }[tool]
+
+    def _next_task_identity(self) -> tuple[int, int]:
+        with self._lock:
+            task_id = self._next_task
+            self._next_task += 1
+            correlation_id = self._next_correlation
+            self._next_correlation += 1
+        return task_id, correlation_id
+
+    def _execute_brokered_tool(
+        self,
+        agent: AgentLoop,
+        parent_task: TaskRecord,
+        tool: str,
+        arguments: Mapping[str, object],
+    ) -> tuple[development.DevelopmentResult, Artifact, TaskRecord, int]:
+        """Run one Host operation only after native Task admission and claim."""
+
+        if self.contract_tool_remaining().get(tool, 0) <= 0:
+            raise HarnessError("contract_tool_budget")
+        provider = self._provider_for(tool)
+        task_id, correlation_id = self._next_task_identity()
+        sequence = agent._append(
+            "tool",
+            task_id=task_id,
+            parent_task_id=parent_task.descriptor.task_id,
+            correlation_id=correlation_id,
+            tool=tool,
+            arguments=_argument_projection(arguments),
+        )
+        request_body = _canonical(
+            {
+                "version": 1,
+                "task_id": task_id,
+                "parent_task_id": parent_task.descriptor.task_id,
+                "correlation_id": correlation_id,
+                "tool": tool,
+                "arguments": dict(arguments),
+            }
+        )
+        input_handle = self.store.reserve()
+        native_input: Mapping[str, object] | None = None
+        if self.native_channel is not None:
+            sealed_input = self.native_channel.seal_artifact(
+                host_agent_id=agent.agent_id,
+                task_id=task_id,
+                handle=input_handle,
+                kind="tool",
+                tool=tool,
+                content=request_body,
+                host_context_sequence=sequence,
+                shareable=True,
+            )
+            native_input = self.native_channel.bind_artifact(
+                host_agent_id=agent.agent_id,
+                task_id=task_id,
+                handle=input_handle,
+                kind="tool",
+                tool=tool,
+                length=len(request_body),
+                sha256=str(sealed_input["sha256"]),
+                host_context_sequence=sequence,
+                cause_sequence=int(sealed_input["context_sequence"]),
+            )
+        input_artifact = self.store.put(
+            agent.config,
+            agent.agent_id,
+            task_id,
+            sequence,
+            "tool",
+            request_body,
+            shareable=True,
+            reserved_handle=input_handle,
+            native_metadata=native_input,
+        )
+        self.store.share(agent.config, agent.agent_id, input_handle)
+        result_handle = self.store.reserve()
+        artifact_kind = self._artifact_kind_for_tool(tool)
+        workspace_revision = str(
+            arguments.get("expected_revision")
+            or arguments.get("source_revision")
+            or arguments.get("build_id")
+            or ""
+        )
+        descriptor = TaskDescriptor(
+            task_id=task_id,
+            correlation_id=correlation_id,
+            parent_task_id=parent_task.descriptor.task_id,
+            parent_agent=agent.agent_id,
+            target_agent=provider.agent_id,
+            objective_artifact=input_artifact.handle,
+            input_artifact=input_artifact.handle,
+            result_artifact=result_handle,
+            required_capabilities=frozenset((TOOL_CAPABILITY[tool],)),
+            allowed_tools=frozenset((tool,)),
+            workspace_revision=workspace_revision,
+            resource_budget=1,
+            read_budget=min(64 * 1024, provider.config.artifact_read_limit),
+            deadline_monotonic=min(
+                parent_task.descriptor.deadline_monotonic,
+                time.monotonic()
+                + development.BUILD_TIMEOUT_SECONDS
+                + development.RUN_TIMEOUT_SECONDS
+                + 30.0,
+            ),
+            expected_result_kind=artifact_kind,
+            operation_tool=tool,
+        )
+        record = self.tasks.publish_brokered(agent, provider, descriptor)
+        self.events.emit(
+            "task", "tool_task_claimed",
+            f"Controlled Provider claimed {tool} Task {task_id}",
+            task_id=task_id,
+            parent_task_id=parent_task.descriptor.task_id,
+            parent_agent=agent.agent_id,
+            target_agent=provider.agent_id,
+            correlation_id=correlation_id,
+            tool=tool,
+            input_artifact=input_handle,
+            result_artifact=result_handle,
+        )
+        try:
+            result = self.call_tool(
+                tool,
+                arguments,
+                provider=provider,
+                task_id=task_id,
+            )
+            result_body = result.content.encode("utf-8")
+            native_result: Mapping[str, object] | None = None
+            if self.native_channel is not None:
+                native_result = self.native_channel.seal_artifact(
+                    host_agent_id=provider.agent_id,
+                    task_id=task_id,
+                    handle=result_handle,
+                    kind=artifact_kind,
+                    tool=tool,
+                    content=result_body,
+                    host_context_sequence=sequence,
+                    shareable=True,
+                )
+            artifact = self.store.put(
+                provider.config,
+                provider.agent_id,
+                task_id,
+                sequence,
+                artifact_kind,
+                result_body,
+                shareable=True,
+                reserved_handle=result_handle,
+                native_metadata=native_result,
+            )
+            self.store.share(provider.config, provider.agent_id, result_handle)
+            record = self.tasks.complete(
+                task_id, provider.agent_id, "ok", result_handle
+            )
+        except Exception:
+            try:
+                if record.state == "claimed":
+                    self.tasks.complete(task_id, provider.agent_id, "failed", 0)
+            finally:
+                raise
+        merge_sequence = 0
+        if self.native_channel is not None:
+            bound = self.native_channel.bind_artifact(
+                host_agent_id=agent.agent_id,
+                task_id=task_id,
+                handle=result_handle,
+                kind=artifact_kind,
+                tool=tool,
+                length=len(artifact.content),
+                sha256=artifact.sha256,
+                host_context_sequence=sequence,
+                cause_sequence=record.native_context_sequence,
+            )
+            merge_sequence = int(bound["context_sequence"])
+        accepted = self.tasks.accept_result(task_id, agent.agent_id)
+        if accepted.handle != artifact.handle:
+            raise HarnessError("task_result_evidence_invalid")
+        return result, artifact, record, merge_sequence
 
     def execute_action(
         self, agent: AgentLoop, task: TaskRecord, action: Mapping[str, object]
     ) -> None:
         kind = action.get("type")
         if kind == "delegate":
+            if self.contract_tool_remaining()["delegate_task"] <= 0:
+                raise HarnessError("contract_delegate_budget")
             if "ORCHESTRATE" not in agent.config.capabilities:
                 raise HarnessError("task_delegate_denied")
             objective = action.get("objective")
@@ -1311,43 +2181,78 @@ class NexusHarness:
             task.tool_calls += 1
             if task.tool_calls > task.descriptor.resource_budget:
                 raise HarnessError("task_resource_budget")
-            result = self.call_tool(tool, arguments)
-            sequence = agent._append(
-                "tool",
-                task_id=task.descriptor.task_id,
-                tool=tool,
-                arguments=_argument_projection(arguments),
+            projected_arguments = _argument_projection(arguments)
+            tool_started = time.monotonic()
+            progress_context = {
+                "agent_id": agent.agent_id,
+                "task_id": task.descriptor.task_id,
+                "tool": tool,
+                "model_round": task.model_rounds,
+                "tool_calls": task.tool_calls,
+            }
+            self.events.emit(
+                "tool", "tool_started",
+                f"Agent {agent.agent_id} started {tool}",
+                **progress_context,
+                arguments=projected_arguments,
             )
-            artifact_kind = {
-                "write_file": "file",
-                "apply_patch": "patch",
-                "build_ucore_program": "build_diagnostic",
-                "run_ucore_program": "test_result",
-                "search_files": "search",
-                "read_file": "file",
-            }[tool]
-            artifact = self.store.put(
-                agent.config,
-                agent.agent_id,
-                task.descriptor.task_id,
-                sequence,
-                artifact_kind,
-                result.content,
-                shareable=True,
+            self._tool_progress.context = progress_context
+            try:
+                result, artifact, tool_task, merge_sequence = (
+                    self._execute_brokered_tool(agent, task, tool, arguments)
+                )
+            except Exception as error:
+                self.events.emit(
+                    "tool", "tool_failed",
+                    f"Tool {tool} raised {type(error).__name__}",
+                    **progress_context,
+                    detail=_bounded_utf8(str(error), 160),
+                    duration_ms=int((time.monotonic() - tool_started) * 1000),
+                )
+                raise
+            finally:
+                self._tool_progress.context = {}
+            evidence = _result_projection(result.content)
+            self.events.emit(
+                "tool", "tool_completed",
+                f"Agent {agent.agent_id} completed {tool}",
+                **progress_context,
+                status=result.status,
+                workspace_revision=result.workspace_generation,
+                evidence=evidence,
+                duration_ms=int((time.monotonic() - tool_started) * 1000),
             )
-            self.store.share(agent.config, agent.agent_id, artifact.handle)
             result_row = {
-                "sequence": sequence,
+                "sequence": agent.sequence,
                 "kind": "tool_result",
                 "event": "ARTIFACT_SHARED",
-                "task_id": task.descriptor.task_id,
+                "task_id": tool_task.descriptor.task_id,
+                "parent_task_id": task.descriptor.task_id,
+                "correlation_id": tool_task.descriptor.correlation_id,
+                "tool": tool,
                 "artifact": artifact.handle,
                 "sha256": artifact.sha256,
+                "native_artifact_sequence": artifact.native_context_sequence,
+                "native_terminal_sequence": tool_task.native_context_sequence,
+                "native_merge_sequence": merge_sequence,
                 "workspace_revision": result.workspace_generation,
-                "evidence": _result_projection(result.content),
+                "evidence": evidence,
             }
             agent.private_context.append(result_row)
             self.trace_event(agent.agent_id, result_row)
+            self.events.emit(
+                "harness", "artifact_sealed",
+                f"Artifact {artifact.handle} sealed for Task {tool_task.descriptor.task_id}",
+                agent_id=agent.agent_id,
+                task_id=tool_task.descriptor.task_id,
+                parent_task_id=task.descriptor.task_id,
+                correlation_id=tool_task.descriptor.correlation_id,
+                artifact=artifact.handle,
+                artifact_kind=artifact.kind,
+                bytes=len(artifact.content),
+                sha256=artifact.sha256,
+                artifact_count=len(self.store._artifacts),
+            )
             # The same event-driven loop resumes after the sealed result exists.
             agent.wake(task.descriptor.task_id)
             return
@@ -1376,16 +2281,42 @@ class NexusHarness:
                 agent.wake(task.descriptor.task_id)
                 return
             sequence = agent._append("final", task_id=task.descriptor.task_id)
+            native_final: Mapping[str, object] | None = None
+            final_body = content.encode("utf-8")
+            if self.native_channel is not None:
+                native_final = self.native_channel.seal_artifact(
+                    host_agent_id=agent.agent_id,
+                    task_id=task.descriptor.task_id,
+                    handle=task.descriptor.result_artifact,
+                    kind=task.descriptor.expected_result_kind,
+                    tool="delegate_task",
+                    content=final_body,
+                    host_context_sequence=sequence,
+                    shareable=True,
+                )
             artifact = self.store.put(
                 agent.config,
                 agent.agent_id,
                 task.descriptor.task_id,
                 sequence,
                 task.descriptor.expected_result_kind,
-                content,
+                final_body,
                 shareable=True,
+                reserved_handle=task.descriptor.result_artifact,
+                native_metadata=native_final,
             )
             self.store.share(agent.config, agent.agent_id, artifact.handle)
+            self.events.emit(
+                "harness", "artifact_sealed",
+                f"Final Artifact {artifact.handle} sealed",
+                agent_id=agent.agent_id,
+                task_id=task.descriptor.task_id,
+                artifact=artifact.handle,
+                artifact_kind=artifact.kind,
+                bytes=len(artifact.content),
+                sha256=artifact.sha256,
+                artifact_count=len(self.store._artifacts),
+            )
             self.tasks.complete(task.descriptor.task_id, agent.agent_id, "ok", artifact.handle)
             agent._append(
                 "task_completed",
@@ -1400,56 +2331,254 @@ class NexusHarness:
             return
         raise HarnessError("model_action_invalid")
 
-    def call_tool(self, tool: str, arguments: Mapping[str, object]) -> development.DevelopmentResult:
+    def _workspace_catalog_tool(
+        self,
+        tool: str,
+        arguments: Mapping[str, object],
+        provider: NativeProvider,
+        task_id: int,
+    ) -> development.DevelopmentResult:
+        if self.native_channel is None:
+            raise HarnessError("catalog_native_guest_required")
+        requested_path = str(arguments.get("path", ""))
+        prefix = _catalog_manifest_prefix(requested_path)
+        query_text = str(arguments.get("query", ""))
+        requested_stage = str(arguments.get("stage", ""))
+        requested_kind = str(arguments.get("kind", ""))
+        requested_status = str(arguments.get("status", "current"))
+        summary_contains = str(arguments.get("summary_contains", ""))
+        if (
+            tool == "search_files"
+            and prefix == ""
+            and query_text in ("", ".")
+            and not requested_stage
+            and not requested_kind
+            and not summary_contains
+        ):
+            return _workspace_tool_error(
+                tool,
+                "search",
+                "error",
+                "workspace_error=query_too_broad",
+                path=requested_path,
+            )
+        if prefix == "":
+            prefix = {
+                "application": "user/src",
+                "kernel": "os",
+                "host": "host_tools",
+                "test": "scripts",
+            }.get(requested_stage, prefix)
+        if tool == "read_file":
+            requested = PurePosixPath(requested_path)
+            prefix = "" if str(requested.parent) == "." else str(requested.parent)
+            summary_contains = requested.name
+        cursor = 0
+        generation = ""
+        host_body_reads = 0
+        catalog_records = 0
+        catalog_candidates = 0
+        watch_events = 0
+        reused_pages = 0
+        result_sections: list[str] = []
+        selected_read: tuple[Mapping[str, object], str] | None = None
+        reader = workspace.WorkspaceReader(self.root)
+        try:
+            with self._catalog_lock:
+                if self._catalog_invalidated:
+                    self.native_channel.catalog_stale(
+                        host_agent_id=provider.agent_id, task_id=task_id
+                    )
+                    self._catalog_invalidated = False
+                while True:
+                    manifest = reader.manifest(
+                        generation, cursor, 8, prefix
+                    )
+                    if manifest.status != "ok":
+                        return _workspace_tool_error(
+                            tool,
+                            "manifest",
+                            manifest.status,
+                            manifest.content,
+                            path=requested_path,
+                            workspace_generation=manifest.workspace_generation,
+                        )
+                    if not generation:
+                        generation = manifest.workspace_generation
+                    elif manifest.workspace_generation != generation:
+                        raise HarnessError("workspace_manifest_generation_changed")
+                    header, entries = _parse_workspace_manifest(manifest.content)
+                    if not entries:
+                        break
+                    enriched: list[dict[str, object]] = []
+                    for entry in entries:
+                        stage, semantic_kind, summary = _catalog_semantics(
+                            str(entry["path"]), str(entry["kind"])
+                        )
+                        enriched.append(
+                            {
+                                **entry,
+                                "stage": stage,
+                                "kind": semantic_kind,
+                                "summary": summary,
+                            }
+                        )
+                    loaded = self.native_channel.catalog_load(
+                        host_agent_id=provider.agent_id,
+                        task_id=task_id,
+                        workspace_generation=generation,
+                        cursor=cursor,
+                        eof=bool(header["eof"]),
+                        entries=enriched,
+                    )
+                    reused_pages += int(loaded["reuse"])
+                    watch_events = max(watch_events, int(loaded["watch_events"]))
+                    selected = self.native_channel.catalog_query(
+                        host_agent_id=provider.agent_id,
+                        task_id=task_id,
+                        stage=requested_stage,
+                        kind=requested_kind,
+                        status=requested_status,
+                        summary_contains=summary_contains,
+                    )
+                    mask = int(selected["candidate_mask"])
+                    identities = selected["identities"]
+                    page_candidates: list[Mapping[str, object]] = []
+                    for index, entry in enumerate(enriched):
+                        if not mask & (1 << index):
+                            continue
+                        identity = identities[index]
+                        if min(
+                            int(identity["dev"]),
+                            int(identity["inum"]),
+                            int(identity["incarnation"]),
+                        ) <= 0:
+                            raise HarnessError("catalog_candidate_identity_invalid")
+                        page_candidates.append(entry)
+                    if len(page_candidates) != int(selected["candidates"]):
+                        raise HarnessError("catalog_candidate_mask_mismatch")
+                    if int(selected["records"]) < len(page_candidates):
+                        raise HarnessError("catalog_candidate_count_invalid")
+                    catalog_records += int(selected["records"])
+                    catalog_candidates += len(page_candidates)
+                    watch_events = max(watch_events, int(selected["watch_events"]))
+                    if tool == "search_files" and page_candidates:
+                        candidates = [
+                            {
+                                "object_id": entry["object_id"],
+                                "path": entry["path"],
+                                "revision": entry["revision"],
+                            }
+                            for entry in page_candidates
+                        ]
+                        searched = reader.search_candidates(
+                            generation, query_text, candidates
+                        )
+                        if searched.status != "ok":
+                            return _workspace_tool_error(
+                                tool,
+                                "search",
+                                searched.status,
+                                searched.content,
+                                path=requested_path,
+                                workspace_generation=searched.workspace_generation,
+                            )
+                        host_body_reads += len(candidates)
+                        result_sections.append(searched.content)
+                    elif tool == "read_file":
+                        for entry in page_candidates:
+                            if str(entry["path"]) == requested_path:
+                                selected_read = (entry, generation)
+                                break
+                    if selected_read is not None or header["eof"]:
+                        break
+                    cursor = header["next_cursor"]
+            if tool == "read_file":
+                if selected_read is None:
+                    content = "workspace_read\nstatus=not_found"
+                else:
+                    entry, selected_generation = selected_read
+                    read = reader.read_versioned(
+                        selected_generation,
+                        str(entry["object_id"]),
+                        str(entry["path"]),
+                        str(entry["revision"]),
+                        int(arguments.get("start_line", 1)),
+                        int(arguments.get("max_lines", 64)),
+                    )
+                    if read.status != "ok":
+                        return _workspace_tool_error(
+                            tool,
+                            "read",
+                            read.status,
+                            read.content,
+                            path=requested_path,
+                            workspace_generation=read.workspace_generation,
+                        )
+                    host_body_reads = 1
+                    content = (
+                        f"workspace_revision={entry['revision']}\n{read.content}"
+                    )
+            else:
+                content = "\n\n".join(result_sections) or (
+                    "workspace_search\nmatch_count=0"
+                )
+            evidence = (
+                "catalog_evidence_v1\n"
+                f"workspace_generation={generation}\n"
+                "used_index=1\n"
+                f"catalog_records={catalog_records}\n"
+                f"catalog_candidates={catalog_candidates}\n"
+                f"host_body_reads={host_body_reads}\n"
+                f"watch_events={watch_events}\n"
+                f"reused_pages={reused_pages}\n"
+            )
+            if host_body_reads > catalog_candidates:
+                raise HarnessError("catalog_host_read_exceeded_candidates")
+            return development.DevelopmentResult(
+                "ok", generation, _bounded_utf8(evidence + content, 12_000)
+            )
+        finally:
+            reader.close()
+
+    def call_tool(
+        self,
+        tool: str,
+        arguments: Mapping[str, object],
+        *,
+        provider: NativeProvider | None = None,
+        task_id: int = 0,
+    ) -> development.DevelopmentResult:
         if tool == "write_file":
-            return self.development.write_file_chunk(
+            result = self.development.write_file_chunk(
                 arguments.get("path"), arguments.get("content"),
                 arguments.get("expected_revision"),
                 arguments.get("write_id"), arguments.get("commit"),
             )
+            if result.status == "ok" and arguments.get("commit") == 1:
+                self._catalog_invalidated = True
+            return result
         if tool == "apply_patch":
-            return self.development.apply_patch(
+            result = self.development.apply_patch(
                 arguments.get("path"), arguments.get("patch"),
                 arguments.get("expected_revision"),
             )
+            if result.status == "ok":
+                self._catalog_invalidated = True
+            return result
         if tool == "build_ucore_program":
             return self.development.build_ucore_program(
-                arguments.get("source_path"), arguments.get("target")
+                arguments.get("source_path"), arguments.get("source_revision"),
+                arguments.get("target")
             )
         if tool == "run_ucore_program":
             return self.development.run_ucore_program(
-                arguments.get("build_id"), arguments.get("stdin"),
-                arguments.get("expected_output"), arguments.get("expected_exit"),
-                arguments.get("case_kind"),
+                arguments.get("build_id"), arguments.get("cases")
             )
         if tool in ("search_files", "read_file"):
-            # WorkspaceReader retains root/path/symlink/revision/range checks.
-            reader = workspace.WorkspaceReader(self.root)
-            try:
-                if tool == "read_file":
-                    observed = reader.read_file(
-                        arguments.get("path"),
-                        arguments.get("start_line", 1),
-                        arguments.get("max_lines", 64),
-                    )
-                    try:
-                        revision = self.development.program_revision(
-                            arguments.get("path")
-                        )
-                    except (development.NexusDevelopmentError, OSError):
-                        revision = ""
-                    if revision:
-                        observed = f"workspace_revision={revision}\n{observed}"
-                else:
-                    observed = reader.search_files(
-                        arguments.get("query"), arguments.get("path", "")
-                    )
-            finally:
-                close = getattr(reader, "close", None)
-                if callable(close):
-                    close()
-            content = observed if isinstance(observed, str) else _canonical(observed).decode("utf-8")
-            return development.DevelopmentResult("ok", "0" * 64, content)
+            if provider is None or task_id <= 0:
+                raise HarnessError("catalog_task_context_missing")
+            return self._workspace_catalog_tool(tool, arguments, provider, task_id)
         raise HarnessError("unknown_tool")
 
 
@@ -1470,7 +2599,14 @@ def _object_schema(
 
 TOOL_SCHEMAS: Final = {
     "search_files": _object_schema(
-        {"query": {"type": "string"}, "path": {"type": "string"}},
+        {
+            "query": {"type": "string"},
+            "path": {"type": "string"},
+            "stage": {"type": "string", "maxLength": 15},
+            "kind": {"type": "string", "maxLength": 15},
+            "status": {"type": "string", "maxLength": 15},
+            "summary_contains": {"type": "string", "maxLength": 63},
+        },
         ("query", "path"),
     ),
     "read_file": _object_schema(
@@ -1508,19 +2644,34 @@ TOOL_SCHEMAS: Final = {
     "build_ucore_program": _object_schema(
         {
             "source_path": {"type": "string"},
+            "source_revision": {"type": "string"},
             "target": {"type": "string"},
         },
-        ("source_path", "target"),
+        ("source_path", "source_revision", "target"),
     ),
     "run_ucore_program": _object_schema(
         {
             "build_id": {"type": "string"},
-            "stdin": {"type": "string"},
-            "expected_output": {"type": "string"},
-            "expected_exit": {"type": "integer"},
-            "case_kind": {"type": "string", "enum": ["normal", "invalid", "failure"]},
+            "cases": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": development.MAX_RUN_CASES,
+                "items": _object_schema(
+                    {
+                        "name": {"type": "string"},
+                        "stdin": {"type": "string"},
+                        "expected_output": {"type": "string"},
+                        "expected_exit": {"type": "integer"},
+                        "case_kind": {
+                            "type": "string",
+                            "enum": ["normal", "invalid", "failure"],
+                        },
+                    },
+                    ("name", "stdin", "expected_output", "expected_exit", "case_kind"),
+                ),
+            },
         },
-        ("build_id", "stdin", "expected_output", "expected_exit", "case_kind"),
+        ("build_id", "cases"),
     ),
 }
 
@@ -1544,21 +2695,31 @@ DELEGATE_SCHEMA: Final = _object_schema(
 )
 
 WAIT_SCHEMA: Final = _object_schema({}, ())
+COMPLETE_SCHEMA: Final = _object_schema(
+    {"content": {"type": "string", "minLength": 1}}, ("content",)
+)
 
 TOOL_DESCRIPTIONS: Final = {
     "search_files": (
-        "Search bounded UTF-8 files below the configured workspace root. "
-        "Use this to locate examples before creating a program."
+        "Search bounded UTF-8 files below the configured workspace root through "
+        "the Guest Metadata Catalog. Use stage, kind, status, or summary_contains "
+        "to select a smaller candidate set before Host content matching. Typical "
+        "stage values are application, kernel, host, test, interface, and document; "
+        "typical kind values are source, header, document, and data. Paths must be "
+        "workspace-relative; use '.' for the workspace root and never use '/'. For "
+        "user-program development, start with path='user/src' and a meaningful query. "
+        "An unfiltered query='.' at the workspace root is rejected as too broad."
     ),
     "read_file": (
-        "Read a bounded line range from one relative UTF-8 workspace file. "
+        "Read a bounded line range from one relative UTF-8 workspace file after "
+        "the Guest Catalog validates its directory candidate and revision. "
         "max_lines must be between 1 and 64. Absolute paths, link escapes, and "
         "oversized output are rejected."
     ),
     "write_file": (
         "Atomically create or replace user/src/nexus_<name>_ucore.c. Supply "
         "expected_revision='missing' for a new file, or the exact 64-hex revision "
-        "returned by the preceding write or patch. content is limited to 2400 "
+        "returned by the preceding write or patch. content is limited to 8000 "
         "characters per call. For a larger file, begin with write_id='' and "
         "commit=0, continue with the returned write_id, then set commit=1 on the "
         "last chunk. Staged chunks remain invisible until the final atomic commit."
@@ -1570,13 +2731,14 @@ TOOL_DESCRIPTIONS: Final = {
     ),
     "build_ucore_program": (
         "Compile an allowed Nexus user source in an isolated temporary worktree "
-        "with the fixed RISC-V toolchain. The target must equal the source stem. "
+        "with the fixed RISC-V toolchain. source_revision must match the current "
+        "file revision and the target must equal the source stem. "
         "A successful result returns build_id and source_revision."
     ),
     "run_ucore_program": (
-        "Start a fresh AgentOS-uCore Guest for an existing build_id, feed bounded "
-        "serial input, and check output plus exit status. Run normal, invalid, and "
-        "important failure cases before declaring completion."
+        "Run one to six structured cases for an existing build_id. Every case starts "
+        "a separate AgentOS-uCore Guest, receives bounded serial input, and records "
+        "actual output, exit status, timeout state, and a Guest log digest."
     ),
 }
 
@@ -1598,6 +2760,30 @@ class DeepSeekModel:
         self.provider = provider
         self.config = config
         self.model = model
+        self._progress_callback: (
+            Callable[[str, str, Mapping[str, object]], None] | None
+        ) = None
+        self._progress_context: dict[str, object] = {}
+
+    def bind_progress(
+        self,
+        callback: Callable[[str, str, Mapping[str, object]], None],
+    ) -> None:
+        self._progress_callback = callback
+
+    def set_progress_context(self, **fields: object) -> None:
+        self._progress_context = dict(fields)
+
+    def _progress(self, kind: str, message: str, **fields: object) -> None:
+        if self._progress_callback is None:
+            return
+        try:
+            self._progress_callback(
+                kind, message, {**self._progress_context, **fields}
+            )
+        except Exception:
+            # Provider observability cannot affect the bounded Agent action.
+            pass
 
     @classmethod
     def _correlation(cls) -> int:
@@ -1610,20 +2796,73 @@ class DeepSeekModel:
     ) -> relay.ModelReply:
         last_error: relay.ProviderError | None = None
         for attempt in range(attempts):
+            request_started = time.monotonic()
+            correlation = int(request.get("corr_id", 0))
+            self._progress(
+                "model_request_started",
+                f"Provider request {correlation} attempt {attempt + 1} started",
+                correlation_id=correlation,
+                provider_attempt=attempt + 1,
+                provider_attempts=attempts,
+            )
             try:
-                return self.provider.complete(
+                reply = self.provider.complete(
                     request, deadline_monotonic=time.monotonic() + 120.0
                 )
             except relay.ProviderError as error:
+                will_retry = (
+                    error.code not in (
+                        "MULTIPLE_TOOL_CALLS",
+                        "TOOL_ARGUMENT_SCHEMA_MISMATCH",
+                        "INCOMPLETE_MODEL_RESPONSE",
+                        "TOOL_NOT_ADVERTISED",
+                    )
+                    and error.retryable
+                    and attempt + 1 < attempts
+                )
+                self._progress(
+                    "model_request_failed",
+                    f"Provider request {correlation} failed with {error.code}",
+                    correlation_id=correlation,
+                    provider_attempt=attempt + 1,
+                    provider_attempts=attempts,
+                    error_code=error.code,
+                    retrying=int(will_retry),
+                    duration_ms=int(
+                        (time.monotonic() - request_started) * 1000
+                    ),
+                )
                 if error.code in (
                     "MULTIPLE_TOOL_CALLS",
                     "TOOL_ARGUMENT_SCHEMA_MISMATCH",
                     "INCOMPLETE_MODEL_RESPONSE",
+                    "TOOL_NOT_ADVERTISED",
                 ) or not error.retryable:
                     raise
                 last_error = error
                 if attempt + 1 < attempts:
-                    time.sleep(0.5 * (attempt + 1))
+                    delay = 0.5 * (attempt + 1)
+                    self._progress(
+                        "model_request_retrying",
+                        f"Retrying provider request {correlation}",
+                        correlation_id=correlation,
+                        next_provider_attempt=attempt + 2,
+                        retry_delay_ms=int(delay * 1000),
+                    )
+                    time.sleep(delay)
+            else:
+                self._progress(
+                    "model_request_completed",
+                    f"Provider request {correlation} completed",
+                    correlation_id=correlation,
+                    provider_attempt=attempt + 1,
+                    provider_attempts=attempts,
+                    reply_type=reply.type,
+                    duration_ms=int(
+                        (time.monotonic() - request_started) * 1000
+                    ),
+                )
+                return reply
         assert last_error is not None
         raise last_error
 
@@ -1634,51 +2873,97 @@ class DeepSeekModel:
         deadline: float,
     ) -> relay.ModelReply:
         names = tuple(str(tool["name"]) for tool in tools)
+        final_allowed = "complete_task" in names
+        selectable = (*names, "final") if final_allowed else names
         selector = dict(request)
         selector["corr_id"] = self._correlation()
-        selector["tools"] = []
-        selector["tool_choice"] = "none"
-        selector["max_tokens"] = 64
+        selector["tools"] = [
+            {
+                "name": "select_next_action",
+                "description": (
+                    "Select exactly one admissible next Agent Loop action. This is "
+                    "a protocol repair step; it does not execute the selected action."
+                ),
+                "input_schema": _object_schema(
+                    {
+                        "action": {
+                            "type": "string",
+                            "enum": list(selectable),
+                        }
+                    },
+                    ("action",),
+                ),
+            }
+        ]
+        selector["tool_choice"] = {"tool": "select_next_action"}
+        selector["max_tokens"] = 128
         selector["system"] = (
             str(request["system"])
             + "\n\nThe previous response did not produce one admissible bounded "
             "action. Select only the "
             "single next action. Return exactly one action name with no punctuation "
             "or explanation. Allowed names: "
-            + ", ".join((*names, "final"))
+            + ", ".join(selectable)
             + "."
         )
         selection = self._complete_with_retry(selector)
-        if selection.type != "final":
+        if (
+            selection.type != "tool_use"
+            or selection.tool != "select_next_action"
+            or not isinstance(selection.arguments, Mapping)
+        ):
             raise HarnessError("provider_action_selection_invalid")
-        selected_text = selection.content.strip()
-        selected = selected_text
-        if selected not in (*names, "final"):
-            candidates = {
-                name
-                for name in (*names, "final")
-                if re.search(
-                    rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])",
-                    selected_text,
-                )
-            }
-            if len(candidates) == 1:
-                selected = candidates.pop()
-        if selected == "final":
+        selected = selection.arguments.get("action")
+        if selected == "final" and final_allowed:
             final_request = dict(request)
             final_request["corr_id"] = self._correlation()
-            final_request["tools"] = []
-            final_request["tool_choice"] = "none"
+            final_tool = "provide_final_answer"
+            final_request["tools"] = [
+                {
+                    "name": final_tool,
+                    "description": (
+                        "Provide the bounded final report for this Agent task."
+                    ),
+                    "input_schema": _object_schema(
+                        {
+                            "content": {
+                                "type": "string",
+                                "maxLength": 2048,
+                            }
+                        },
+                        ("content",),
+                    ),
+                }
+            ]
+            final_request["tool_choice"] = {"tool": final_tool}
             final_request["system"] = (
                 str(request["system"])
-                + "\n\nReturn the final answer for this Agent task now. Do not emit "
-                "tool calls or protocol markup."
+                + "\n\nProvide one concise final report of at most 2048 characters "
+                "through the required protocol tool."
             )
-            return self._complete_with_retry(final_request)
+            final_reply = self._complete_with_retry(final_request)
+            if (
+                final_reply.type != "tool_use"
+                or final_reply.tool != final_tool
+                or not isinstance(final_reply.arguments, Mapping)
+                or not isinstance(final_reply.arguments.get("content"), str)
+            ):
+                raise HarnessError("provider_final_arguments_invalid")
+            return relay.ModelReply(
+                "final", content=str(final_reply.arguments["content"])
+            )
         if selected not in names:
             raise HarnessError("provider_action_selection_invalid")
         forced = dict(request)
         forced["corr_id"] = self._correlation()
+        selected_contract = next(
+            tool for tool in tools if tool["name"] == selected
+        )
+        # Keep the real tool name in the repair request.  DeepSeek reliably obeys
+        # exact tool choice for the advertised product tool, while an artificial
+        # wrapper name can make it emit the semantically selected tool and fail the
+        # protocol even though its arguments are otherwise valid.
+        forced["tools"] = [dict(selected_contract)]
         forced["tool_choice"] = {"tool": selected}
         forced["system"] = (
             str(request["system"])
@@ -1689,53 +2974,101 @@ class DeepSeekModel:
         if selected == "write_file":
             forced["system"] = (
                 str(forced["system"])
-                + " The content field must stay below 2400 characters. If the "
+                + " The content field must stay below 8000 UTF-8 bytes. If the "
                 "complete file is longer, send only its first contiguous chunk "
                 "with write_id='' and commit=0; continue from the returned write_id "
                 "in later Agent Loop rounds. Do not include the remaining source now."
             )
-        return self._complete_with_retry(forced)
+        try:
+            repaired = self._complete_with_retry(forced)
+        except relay.ProviderError as error:
+            if error.code not in (
+                "TOOL_CHOICE_MISMATCH",
+                "TOOL_ARGUMENT_SCHEMA_MISMATCH",
+            ):
+                raise
+            # Some DeepSeek endpoints ignore exact tool choice after a long
+            # context even when they selected the same action one request
+            # earlier.  Recover only the arguments as a bounded JSON object,
+            # then apply the original schema before the action can reach the
+            # native Task Channel.  This does not execute a Host-side shortcut.
+            argument_request = dict(request)
+            argument_request["corr_id"] = self._correlation()
+            argument_request["tools"] = []
+            argument_request["tool_choice"] = "none"
+            argument_request["max_tokens"] = 2048
+            argument_request["system"] = (
+                str(request["system"])
+                + "\n\nThe next action has already been selected as "
+                + selected
+                + ". Return only one JSON object containing its arguments. Do not "
+                "use Markdown, prose, or a tool call. The object must satisfy this "
+                "JSON Schema: "
+                + json.dumps(
+                    selected_contract["input_schema"],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+            argument_reply = self._complete_with_retry(argument_request)
+            if argument_reply.type != "final":
+                raise HarnessError("provider_action_arguments_invalid")
+            encoded = argument_reply.content.strip()
+            if encoded.startswith("```"):
+                encoded = re.sub(r"^```(?:json)?\s*", "", encoded, count=1)
+                encoded = re.sub(r"\s*```$", "", encoded, count=1)
+            try:
+                arguments = json.loads(encoded)
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise HarnessError("provider_action_arguments_invalid") from exc
+            if not isinstance(arguments, Mapping) or not relay._json_value_matches_schema(
+                arguments, selected_contract["input_schema"]
+            ):
+                raise HarnessError("provider_action_arguments_invalid")
+            return relay.ModelReply(
+                "tool_use", tool=selected, arguments=dict(arguments)
+            )
+        if repaired.type != "tool_use" or repaired.tool != selected:
+            raise HarnessError("provider_action_arguments_invalid")
+        return repaired
 
     def __call__(self, projection: Mapping[str, object]) -> Mapping[str, object]:
         advertised_names = set(self.config.tools)
+        remaining = projection.get("contract_tool_remaining", {})
+        if isinstance(remaining, Mapping):
+            for name in tuple(advertised_names):
+                if remaining.get(name) == 0:
+                    advertised_names.discard(name)
         context_rows = projection.get("context", [])
         if not isinstance(context_rows, list):
             context_rows = []
-        if advertised_names.intersection(("write_file", "apply_patch")):
-            observed_tools: list[str] = []
-            if isinstance(context_rows, list):
-                for row in context_rows:
-                    if not isinstance(row, Mapping):
-                        continue
-                    tool = row.get("tool")
-                    if isinstance(tool, str):
-                        observed_tools.append(tool)
-                    summary_tools = row.get("tools")
-                    if isinstance(summary_tools, list):
-                        observed_tools.extend(
-                            value for value in summary_tools if isinstance(value, str)
-                        )
-            mutations = sum(
-                isinstance(row, Mapping)
-                and isinstance(row.get("evidence"), Mapping)
-                and isinstance(row["evidence"].get("revision"), str)
-                for row in context_rows
-            )
-            exploration = sum(
-                name in ("search_files", "read_file") for name in observed_tools
-            )
-            if mutations == 0 and exploration >= 6:
-                # Once enough examples have been inspected, only a real workspace
-                # mutation can make a build or run meaningful.  Restricting the
-                # advertised development action prevents an Agent from substituting
-                # placeholder build ids or returning to an unbounded search loop.
-                advertised_names.intersection_update(("write_file",))
         failed_build_revision = ""
         failed_build_index = -1
+        successful_build_available = False
+        successful_build_index = -1
+        successful_build_revision = ""
+        workspace_mutation_available = False
         for index, row in enumerate(context_rows):
             if not isinstance(row, Mapping) or row.get("kind") != "tool_result":
                 continue
             evidence = row.get("evidence")
+            if (
+                row.get("tool") in {"write_file", "apply_patch"}
+                and isinstance(evidence, Mapping)
+                and isinstance(evidence.get("revision"), str)
+                and evidence.get("revision")
+            ):
+                workspace_mutation_available = True
+            if (
+                row.get("tool") == "build_ucore_program"
+                and isinstance(evidence, Mapping)
+                and evidence.get("status") == "passed"
+                and isinstance(evidence.get("build_id"), str)
+                and evidence.get("build_id")
+            ):
+                successful_build_available = True
+                successful_build_index = index
+                successful_build_revision = str(evidence.get("source_revision", ""))
             if (
                 isinstance(evidence, Mapping)
                 and evidence.get("status") == "failed"
@@ -1755,6 +3088,37 @@ class DeepSeekModel:
                     break
             if not changed:
                 advertised_names.discard("build_ucore_program")
+        if not workspace_mutation_available:
+            advertised_names.discard("build_ucore_program")
+            advertised_names.discard("run_ucore_program")
+        if successful_build_index >= 0:
+            source_changed = False
+            for row in context_rows[successful_build_index + 1 :]:
+                if not isinstance(row, Mapping) or row.get("tool") not in {
+                    "write_file", "apply_patch"
+                }:
+                    continue
+                evidence = row.get("evidence")
+                revision = (
+                    evidence.get("revision") if isinstance(evidence, Mapping) else None
+                )
+                if (
+                    isinstance(revision, str)
+                    and revision
+                    and revision != successful_build_revision
+                ):
+                    source_changed = True
+                    break
+            if not source_changed:
+                advertised_names.discard("build_ucore_program")
+            else:
+                # A build id is immutable evidence for one exact source
+                # revision.  Once the Agent commits another revision it must
+                # rebuild before run_ucore_program can be offered again.
+                advertised_names.discard("run_ucore_program")
+            advertised_names.discard("search_files")
+        if not successful_build_available:
+            advertised_names.discard("run_ucore_program")
         tools = [
             {
                 "name": name,
@@ -1763,7 +3127,11 @@ class DeepSeekModel:
             }
             for name in sorted(advertised_names)
         ]
-        if "ORCHESTRATE" in self.config.capabilities:
+        delegate_remaining = (
+            remaining.get("delegate_task")
+            if isinstance(remaining, Mapping) else None
+        )
+        if "ORCHESTRATE" in self.config.capabilities and delegate_remaining != 0:
             tools.append(
                 {
                     "name": "delegate_task",
@@ -1785,31 +3153,71 @@ class DeepSeekModel:
                     "input_schema": WAIT_SCHEMA,
                 }
             )
+        completion_missing = projection.get("completion_missing", [])
+        if not completion_missing:
+            tools.append(
+                {
+                    "name": "complete_task",
+                    "description": (
+                        "Submit this Agent Task's final report. Development completion is "
+                        "accepted only after indexed workspace evidence, one atomic source "
+                        "mutation, a controlled build, and independent Guest test Artifacts "
+                        "satisfy the objective."
+                    ),
+                    "input_schema": COMPLETE_SCHEMA,
+                }
+            )
         system = (
             self.config.system_prompt
             + "\n\nYou are one instance of the common Nexus Agent Loop. Decide the next "
             "step from the objective, private Context, settled shared Context, and "
             "sealed Artifact projections. Use delegate_task only when parallel or "
             "specialized work is useful. Before reporting software development as "
-            "complete, require a successful controlled build and real Guest evidence "
+            "complete, first inspect the workspace through a selective Metadata "
+            "Catalog query whose candidate count is smaller than the Catalog record "
+            "count, then require an atomic source mutation, a successful controlled "
+            "build, and real Guest evidence "
             "for normal, invalid, and important failure cases. Never assume a tool "
             "succeeded without its Artifact evidence. The private Context records "
             "prior tool arguments: do not repeat an identical read or search. For a "
-            "development task, stop exploring after enough examples are available, "
-            "then create or modify the program, build it, and run the required cases. "
-            "If the current Context already contains six read/search calls and no "
-            "successful workspace mutation, the next action must create the program "
-            "or delegate that work to a writing Agent. New programs must use a new "
+            "single workflow the enforced Contract permits at most three search_files "
+            "calls and three read_file calls, so reuse retained Artifact content and "
+            "move to implementation once the required interfaces are known. For a "
+            "development task, use the evidence in Context to decide when to create or "
+            "modify the program, build it, and run the required cases. Source written "
+            "for a software-development objective must implement that objective; do "
+            "not substitute an unrelated audit, probe, or API-visibility program. New programs "
+            "must use a new "
             "path matching user/src/nexus_<name>_ucore.c; never replace an existing "
-            "application unless the objective explicitly names it. Keep the program "
+            "application unless the objective explicitly names it. A similar existing "
+            "program is reference material only: submit one revision-checked write_file "
+            "or apply_patch for this development task before requesting a build. Keep the program "
             "concise; use staged write_file chunks only when it cannot fit one call. "
             "After a failed build, modify the exact source_path and revision named "
             "by that diagnostic before building again. If apply_patch reports "
             "patch_invalid, replace the full file through revision-checked write_file. "
             "AgentOS-uCore user programs may call only declarations present under "
             "user/include; hosted-C helpers such as exit, fgets, fflush, and strcspn "
-            "are unavailable unless those headers declare them. Use the kernel user "
-            "read/write interfaces and return an exit status when appropriate."
+            "are unavailable unless those headers declare them. The controlled build "
+            "does not provide a user.h umbrella header: include the specific supported "
+            "headers such as <stdio.h>, <stdlib.h>, <string.h>, and <unistd.h>. "
+            "Treat the leading diagnostic_summary section of a failed build Artifact "
+            "as the authoritative compiler excerpt before editing the exact revision. "
+            "The controlled build "
+            "runner invokes the program as int main(void), so do not require argc or "
+            "argv; receive test input through read(0, ...) and write results through "
+            "printf or write. Read a bounded line incrementally until newline instead "
+            "of waiting for a large fixed-size read. Keep automatic local arrays and "
+            "the total user stack comfortably below 3072 bytes; prefer a small "
+            "streaming parser over large token stacks. Use the kernel user interfaces "
+            "and return an exit status when appropriate."
+            " A test case passes only when expected_output is a substring of the "
+            "actual serial output and expected_exit equals the program's real return "
+            "status. Prefer a consistent nonzero return such as 1 for ordinary input "
+            "validation failures, and describe each expected message exactly."
+            " All workspace paths are relative to the configured root. Use '.' when "
+            "searching from the root; absolute paths and parent traversal are rejected "
+            "with a structured tool Artifact that should be corrected next round."
         )
         request = {
             "corr_id": 0,
@@ -1819,12 +3227,12 @@ class DeepSeekModel:
                 {
                     "role": "user",
                     "content": _bounded_utf8(
-                        _canonical(projection).decode("utf-8"),
-                        MAX_MODEL_PROJECTION_BYTES,
+                        _model_projection_json(projection), MAX_MODEL_PROJECTION_BYTES
                     ),
                 }
             ],
             "tools": tools,
+            "tool_choice": "required",
             "max_tokens": 4096,
         }
         request["corr_id"] = self._correlation()
@@ -1841,6 +3249,7 @@ class DeepSeekModel:
                     "MULTIPLE_TOOL_CALLS",
                     "TOOL_ARGUMENT_SCHEMA_MISMATCH",
                     "INCOMPLETE_MODEL_RESPONSE",
+                    "TOOL_NOT_ADVERTISED",
                 )
                 and not oversized_final
                 or (
@@ -1859,6 +3268,11 @@ class DeepSeekModel:
                 return {"type": "delegate", **dict(reply.arguments or {})}
             if reply.tool == "wait_for_tasks":
                 return {"type": "wait"}
+            if reply.tool == "complete_task":
+                return {
+                    "type": "final",
+                    "content": str((reply.arguments or {}).get("content", "")),
+                }
             return {
                 "type": "tool",
                 "tool": reply.tool,
@@ -1910,6 +3324,10 @@ def cli() -> argparse.Namespace:
     parser.add_argument("--model", default=relay.DEEPSEEK_DEFAULT_MODEL)
     parser.add_argument("--timeout", type=float, default=900.0)
     parser.add_argument("--trace-file", type=Path)
+    parser.add_argument(
+        "--progress", choices=harness_progress.PROGRESS_MODES, default="off"
+    )
+    parser.add_argument("--status-interval", type=float, default=1.0)
     parser.add_argument("--qemu", default="qemu-system-riscv64")
     parser.add_argument("--kernel", type=Path, required=True)
     parser.add_argument("--image", type=Path, required=True)
@@ -1963,28 +3381,57 @@ def main() -> int:
         ),
         summary_high_watermark=int(root_document.get("summary_high_watermark", 24)),
     )
-    native_channel = native_task.NativeTaskChannel(
-        qemu=args.qemu,
-        kernel=args.kernel,
-        image=args.image,
-        boot_timeout=args.native_boot_timeout,
+    events = harness_progress.HarnessEventBus(
+        mode=args.progress, goal=args.goal, trace_path=args.trace_file
     )
+    native_channel: native_task.NativeTaskChannel | None = None
     with_harness: NexusHarness | None = None
+    monitor: KernelStatusMonitor | None = None
     try:
+        events.emit(
+            "harness", "workflow_starting", "Starting Nexus Harness workflow",
+            model=args.model,
+            timeout_seconds=args.timeout,
+            workspace=str(args.workspace.resolve()),
+        )
+        native_channel = native_task.NativeTaskChannel(
+            qemu=args.qemu,
+            kernel=args.kernel,
+            image=args.image,
+            boot_timeout=args.native_boot_timeout,
+            event_callback=lambda source, kind, message, fields: events.emit(
+                source, kind, message, **dict(fields)
+            ),
+        )
         with_harness = NexusHarness(
             args.workspace,
             args.goal,
             policy,
             model_factory=factory,
-            trace_path=args.trace_file,
             native_channel=native_channel,
+            event_bus=events,
         )
+        if args.progress != "off" or args.trace_file is not None:
+            monitor = KernelStatusMonitor(
+                native_channel, events, args.status_interval
+            )
+            monitor.start()
         root_agent = with_harness.spawn(root_config, label="configured-agent")
-        root_task = with_harness.submit_root(root_agent)
+        root_task = with_harness.submit_root(
+            root_agent, deadline_seconds=args.timeout
+        )
         deadline = time.monotonic() + args.timeout
         while time.monotonic() < deadline:
             record = with_harness.tasks._tasks[root_task]
             if record.state == "terminal":
+                fence_receipt = native_channel.fence(root_task)
+                events.emit(
+                    "harness", "workflow_completed",
+                    f"Workflow reached terminal status {record.terminal_status}",
+                    task_id=root_task,
+                    status=record.terminal_status,
+                    agents=len(with_harness.agents),
+                )
                 result = {
                     "status": record.terminal_status,
                     "task_id": root_task,
@@ -2010,6 +3457,7 @@ def main() -> int:
                     },
                     "native_guest": {
                         "lifecycle": list(with_harness.lifecycle),
+                        "fence": fence_receipt,
                         "agents": {
                             str(item.agent_id): {
                                 "pid": item.native_pid,
@@ -2019,6 +3467,7 @@ def main() -> int:
                             for item in with_harness.agents.values()
                         },
                     },
+                    "progress": events.summary(),
                     "artifacts": [
                         {
                             "handle": artifact.handle,
@@ -2064,15 +3513,33 @@ def main() -> int:
                         sha256=artifact.sha256,
                         content=artifact.content.decode("utf-8", errors="replace"),
                     )
-                print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+                print(json.dumps(result, ensure_ascii=False, sort_keys=True), flush=True)
                 return 0 if record.terminal_status == "ok" else 1
             time.sleep(0.05)
         raise HarnessError("workflow_timeout")
+    except KeyboardInterrupt:
+        events.emit(
+            "harness", "workflow_failed", "Workflow interrupted by the user",
+            reason="keyboard_interrupt",
+        )
+        return 130
+    except Exception as error:
+        events.emit(
+            "harness", "workflow_failed",
+            f"Workflow failed: {type(error).__name__}",
+            detail=_bounded_utf8(str(error), 240),
+        )
+        raise
     finally:
-        if with_harness is not None:
-            with_harness.close()
-        else:
-            native_channel.close()
+        if monitor is not None:
+            monitor.stop()
+        try:
+            if with_harness is not None:
+                with_harness.close()
+            elif native_channel is not None:
+                native_channel.close()
+        finally:
+            events.close()
 
 
 if __name__ == "__main__":

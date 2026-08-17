@@ -92,7 +92,7 @@ make agentos-nexus-check
 make agentos-harness-native-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-`agentos-nexus-check` 检查 7 项 brokered 工具、动态 Agent 配置、Context Artifact Store、开发 broker、完成门和开发 replay。`agentos-harness-native-test` 会启动一个长期运行的 `agentharness_ucore` Guest，把 Host Agent 映射为 Guest runtime 进程，并通过原生 Task Channel 提交 root Task 和嵌套子 Task。通过时会输出本次生命周期、Agent 和 Task 数量：
+`agentos-nexus-check` 检查 8 项模型动作、7 项 Registry broker、动态 Agent 配置、Context Artifact Store、开发 broker、完成门和开发 replay。`agentos-harness-native-test` 会启动一个长期运行的 `agentharness_ucore` Guest，把 Host Agent 映射为 Guest runtime 进程，并通过原生 Task Channel 提交 root Task 和嵌套子 Task。通过时会输出本次生命周期、Agent 和 Task 数量：
 
 ```text
 agentos-native-task-channel: PASS lifecycle=<id/generation> agents=2,3 tasks=2 nested=1 terminal=ok
@@ -138,17 +138,17 @@ AgentOS session <session-id> ready
 
 每个 Agent 保留 private Context active path，完整 USER、TOOL、FINAL、文件、搜索结果、补丁、编译诊断、运行日志、测试结果和子任务报告进入 Context Artifact Store。内核为正文封存 handle、类型、长度、SHA-256、producer、Task、来源 sequence 和 lifecycle；workflow 共享索引只引用成功结算且明确共享的 Artifact。达到高水位后，Harness 生成 private summary 和 team summary，仍在运行的 Task、未解决错误和未合并修改继续保留。
 
-当前公开目录包含 7 项 brokered 工具。搜索、读取和状态观察用于理解系统；`write_file`、`apply_patch`、`build_ucore_program` 与 `run_ucore_program` 用于受控开发。Harness 不开放 Shell、任意路径写入或任意构建目标。父 Agent 使用 128 字节动态 Task descriptor 描述目标 Artifact、输入 Artifact、所需 capability、允许工具、workspace revision、预算、deadline 和结果类型；子 Agent 先封存结果 Artifact，再完成 Task。
+Tool Registry 包含 7 项 brokered 条目；模型侧的通用动作集合为 `search_files`、`read_file`、`write_file`、`apply_patch`、`build_ucore_program`、`run_ucore_program`、`delegate_task` 和 `complete_task`。同步 `STATUS` 轮询提供 Guest 状态，不消耗模型工具轮次。Harness 不开放 Shell、任意路径写入或任意构建目标。父 Agent 使用 128 字节动态 Task descriptor 描述目标 Artifact、输入 Artifact、所需 capability、允许工具、workspace revision、预算、deadline 和结果类型；Provider 先封存结果 Artifact，再完成 Task。
 
 | 工具 | 行为与限制 |
 | --- | --- |
 | `search_files` | 分页取得当前 Host 工作区 manifest，由 Guest Metadata Catalog 与 Live Query 选择候选，再在这些候选中匹配路径或正文；查询为空时列出候选文件，可用 `path_prefix` 缩小范围，每次最多返回 8 项 |
 | `read_file` | 先由 Guest Catalog 精确选中 manifest 对象，再从当前 revision 读取 1 至 64 行，并说明返回范围及后面是否还有内容 |
-| `inspect_system` | 获取当前 Guest 的 `status`、`processes` 或 `context` 受控投影；结果不描述 Host 工作区 |
+| `inspect_system` | Registry 中保留的内部 Guest 状态投影；产品 Harness 使用同步 `STATUS` 轮询，不把它作为模型动作 |
 | `write_file` | 创建或替换 `user/src/nexus_*_ucore.c`；要求 `expected_revision` 与当前 SHA-256 完全一致，新文件使用 `missing`；同目录临时文件写完并同步后原子替换 |
 | `apply_patch` | 对同一路径应用一份有界 unified diff；补丁目标和 revision 均须匹配，失败时文件保持原状 |
 | `build_ucore_program` | 在独立临时工作树中以固定 `riscv64-linux-gnu-` 工具链构建同名目标，最多运行 180 秒，返回 source revision、build id 和有界诊断 |
-| `run_ucore_program` | 使用成功 build 的独立镜像启动新的单 Hart、128 MiB Guest，15 秒内传入最多 512 字节串口输入，并核对实际输出与退出状态；用例类型为 `normal`、`invalid` 或 `failure` |
+| `run_ucore_program` | 使用成功 build 的独立镜像启动新的单 Hart、128 MiB Guest，30 秒内传入最多 512 字节串口输入，并核对实际输出与退出状态；用例类型为 `normal`、`invalid` 或 `failure` |
 
 Host workspace broker 将 `.` 作为默认工作区根目录。它把这个显式 root 固定在已打开的目录句柄上，只接受根目录内的规范相对路径，拒绝绝对路径、父目录跳转和通过链接离开工作区。broker 分页返回 manifest 与 generation；只有调用 Agent 提供经过核验的 object/path/revision 后，才在这些候选中匹配正文或返回指定版本的分段 UTF-8 字节。开发 broker 只处理模型已经选择且 Task 授权允许的写入、构建和运行请求，不能自行扩展路径或目标集合。
 
@@ -173,7 +173,41 @@ make agentos-nexus-harness \
 # 可选：AGENTOS_NEXUS_HARNESS_CONFIG=/absolute/path/to/agents.json
 ```
 
-这次实际 DeepSeek 验收由模型选择单 Agent 完成，共 21 个模型轮次和 20 次工具调用；一次 revision 冲突触发重新读取，随后最新 build 在三个独立 Guest 中通过正常输入、无效输入和除零用例。运行证据见 [`ci/agentos-nexus-multiagent-evidence.json`](../ci/agentos-nexus-multiagent-evidence.json)。该结果验证的是通用工具与完成门，不要求固定 Agent 数量。
+该入口默认使用 `AGENTOS_NEXUS_HARNESS_PROGRESS=auto`。交互式终端显示单窗口仪表板，持续汇总 QEMU、Guest lifecycle、内核 tick、Task Channel pending/claimed/terminal 状态与 SQ/CQ、Context、workflow 调度、Agent、模型轮次、工具、构建、测试和 Artifact 状态。仪表板通过同一条 Native Task Channel 串口发送同步 `STATUS` 查询，默认每秒取得一次只读内核快照；所有串口请求继续由同一把锁串行处理，不会与 `SPAWN`、`DELEGATE`、`COMPLETE` 或 `CLOSE` 响应交错。
+
+构建输出和实时面板写入标准错误，任务结束后的完整 workflow JSON 单独写入标准输出。因此下面的命令会在当前窗口显示进度，同时把最终结果保存为机器可读文件：
+
+```bash
+make agentos-nexus-harness \
+  AGENTOS_NEXUS_HARNESS_GOAL="$GOAL" \
+  AGENTOS_NEXUS_API_KEY_FILE=../deepseek_api.txt \
+  TOOLPREFIX=riscv64-linux-gnu- \
+  > nexus-result.json
+```
+
+可以按使用场景选择显示方式：
+
+| 变量值 | 行为 |
+| --- | --- |
+| `auto` | 交互式终端使用仪表板，非交互输出使用逐行进度；这是 `make agentos-nexus-harness` 的默认值 |
+| `dashboard` | 在同一终端原地刷新 Agent、Task、工具和内核状态；终端较窄或高度不足时自动改用紧凑布局 |
+| `plain` | 为每个关键阶段输出带时间戳的普通文本，内核快照最多每 5 秒显示一次 |
+| `ndjson` | 把每个结构化事件作为一行 JSON 写入标准错误 |
+| `off` | 关闭实时显示，保留最终 workflow JSON |
+
+下面的运行同时保留完整结构化事件文件。事件文件与终端面板使用同一个事件总线，包含 Host、模型、Agent、Task、工具、build、run、kernel 和 QEMU 来源；长参数只记录长度与 SHA-256，API key、模型私有推理和无长度限制的日志不会进入事件。
+
+```bash
+make agentos-nexus-harness \
+  AGENTOS_NEXUS_HARNESS_GOAL="$GOAL" \
+  AGENTOS_NEXUS_API_KEY_FILE=../deepseek_api.txt \
+  AGENTOS_NEXUS_HARNESS_PROGRESS=dashboard \
+  AGENTOS_NEXUS_HARNESS_STATUS_INTERVAL=1.0 \
+  AGENTOS_NEXUS_HARNESS_TRACE_FILE=/tmp/nexus-harness.ndjson \
+  TOOLPREFIX=riscv64-linux-gnu-
+```
+
+这次实际 DeepSeek 验收由模型选择单 Agent 完成，共 5 个模型轮次和 4 次产品工具调用。读取、写入、构建和运行分别绑定 native Task；最新 build 在 5 个独立 Guest 中通过正常表达式、非法字符、空输入、运算符错误和除零用例。运行证据见 [`ci/agentos-nexus-multiagent-evidence.json`](../ci/agentos-nexus-multiagent-evidence.json)。该结果验证通用工具与完成门，不要求固定 Agent 数量。
 
 每轮都有一个 root Task。拥有 `ORCHESTRATE` capability 的 Agent 可以建立子 Task；128 字节 descriptor 绑定 parent task、目标描述 Artifact、输入 Artifact、所需 capability、允许工具、workspace revision、资源预算、deadline 和预期结果类型。子 Agent claim 后读取输入，先封存结果 Artifact，再通过 complete 提交 terminal 状态。任务完成结算时，父 Agent 从至多一条 terminal CQE 取得状态和 handle，并复核 producer、Task id、Context sequence、lifecycle 与 SHA-256。内核拒绝 self delegation 和任务图中的真实环路，同时允许多个独立子任务并行。
 
@@ -214,6 +248,8 @@ make agentos-console-deepseek \
 Harness 对应的变量为 `AGENTOS_NEXUS_API_KEY_FILE`。Host 读取密钥并发起 `HTTPS` 请求；每个模型 Task 同时绑定 Guest Agent identity 和原生 Task Channel 状态。DeepSeek V4 请求显式使用 `thinking.type=enabled` 与 `reasoning_effort=max`。工具轮次之间需要的 provider-private `reasoning_content` 由 Host 向 provider 原样回传，但不进入 Guest 或 telemetry。在线 provider 只改变模型回复的来源，工具执行和结果结算仍由本次运行完成。
 
 ## 6. 观察运行状态并退出
+
+Nexus Harness 的 Host 与内核进展已经合并到启动命令所在的终端，不需要另开 observer。仪表板关闭或输出被重定向时，可改用 `plain` 或 `ndjson`；`Ctrl-C` 会恢复终端光标、停止状态轮询、关闭开发 broker，并终止长期运行的 Harness Guest。
 
 Console 运行时，可以另开一个终端，接入只读 observer：
 

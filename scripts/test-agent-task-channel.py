@@ -110,6 +110,7 @@ def validate_delegated_task(sources: dict[str, str]) -> None:
         "#define AGENT_TASK_DELEGATE_COMPLETE_SYSCALL 568U",
         "#define AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL (1U << 0)",
         "#define AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL (1U << 1)",
+        "#define AGENT_TASK_DELEGATE_COMPLETE_F_QUERY_TERMINAL (1U << 2)",
         "struct agent_task_delegate_descriptor",
         "int ack_terminal_status;",
         "unsigned int terminal_generation;",
@@ -372,6 +373,27 @@ def validate_delegated_task(sources: dict[str, str]) -> None:
             "slot->state = AGENT_TASK_DELEGATE_SLOT_READY",
         ),
         "ACK must echo the latest deadline-arbitrated offer before READY",
+    )
+    terminal_query = function_body(
+        bridge, "agent_task_delegate_terminal_query_ready"
+    )
+    for token in (
+        "complete->flags != AGENT_TASK_DELEGATE_COMPLETE_F_QUERY_TERMINAL",
+        "candidate->worker_pid == worker->pid",
+        "candidate->worker_thread_generation ==",
+        "slot->terminal_pending",
+        "AGENT_TASK_CHANNEL_RETRY",
+        "AGENT_TASK_CHANNEL_OK",
+    ):
+        require(
+            terminal_query,
+            token,
+            f"delegated terminal query lost exact claim check: {token}",
+        )
+    forbid(
+        terminal_query,
+        "slot->state = AGENT_TASK_DELEGATE_SLOT_",
+        "terminal query must remain read-only",
     )
     cancel_control = function_body(
         bridge, "agent_task_delegate_cancel_request_ready"

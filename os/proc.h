@@ -15,7 +15,7 @@
 
 #define NPROC (128)
 #define NTHREAD (16)
-#define FD_BUFFER_SIZE (16)
+#define FD_BUFFER_SIZE (20)
 #define LOCK_POOL_SIZE (8)
 #define CHILD_EXIT_CAP (NPROC)
 #define PROC_RESOURCE_DOMAIN_CAP (NPROC)

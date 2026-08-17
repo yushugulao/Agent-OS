@@ -40,7 +40,7 @@ make agent-uapi-check TOOLPREFIX=riscv64-linux-gnu-
 make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-`agent-uapi-check` 会编译 [`scripts/probes/agent-uapi-layout.c`](../scripts/probes/agent-uapi-layout.c)，读取各个结构的大小和字段偏移，再与 [`ci/agent-uapi-layout.json`](../ci/agent-uapi-layout.json) 对照。ABI vNext 的 701 项合约覆盖 lifecycle、Execution Contract、provenance、Task Channel、33 项 Tool Registry、workflow fence、workspace mutation、通用 Agent runtime、Context Artifact、查询预测、批量 Metadata 登记、性能计数和资源管理 `ABI`，同时确认 V1 结构与退役入口已经离开公开布局。
+`agent-uapi-check` 会编译 [`scripts/probes/agent-uapi-layout.c`](../scripts/probes/agent-uapi-layout.c)，读取各个结构的大小和字段偏移，再与 [`ci/agent-uapi-layout.json`](../ci/agent-uapi-layout.json) 对照。ABI vNext 的 702 项合约覆盖 lifecycle、Execution Contract、provenance、Task Channel、33 项 Tool Registry、workflow fence、workspace mutation、通用 Agent runtime、Context Artifact、查询预测、批量 Metadata 登记、性能计数和资源管理 `ABI`，同时确认 V1 结构与退役入口已经离开公开布局。
 
 `kernel-stack-check` 读取 GCC 生成的 `.ci` 调用图，从系统调用和中断入口计算最深调用路径，并计入中断帧、保护区和预留空间。这样可以在链接前发现 AgentOS 调用链的栈空间变化。
 
@@ -67,7 +67,7 @@ make local-host-selftests
 | Live Query | lifecycle generation、inode incarnation、批量登记前缀、零订阅快速路径、typed `FILE_QUERY` 入口、mutation barrier，以及 traversal/indexed 结果是否一致 |
 | Task Channel | `SQ/CQ` 协议、cancel、backpressure、resync、128 字节动态描述符、父子授权包含关系、任务图环路拒绝、多子任务、claim/complete、终态 offer 和唯一 CQE |
 | 工作流调度 | 资源账户、scheduler model、阻塞唤醒和资源记账 |
-| Console 与 Nexus | 串口消息、本地 socket、任意用户任务、7 项 brokered 工具、动态 Agent 配置、Task/Artifact、结构化摘要、工作区结果与真实 Guest 开发证据 |
+| Console 与 Nexus | 串口消息、本地 socket、任意用户任务、8 项模型动作、动态 Agent 配置、Task/Artifact、结构化摘要、工作区结果与真实 Guest 开发证据 |
 | Context Artifact 与预测 | seal/bind/share/release、数量/字节/读取额度、父任务接纳校验、private/team summary、16 项转移表、Host hint 和 hit/miss/cancel/denied 计数 |
 | Nexus Host 工作区 | 显式 root、版本化 manifest、第一次请求空 generation、稳定窗口复用键、`BUILDING/READY/STALE`、stale 重启、有界搜索与分段读取，以及在线/replay 使用相同 Guest 工具历史 |
 | 双平台工具 | 普通 uCore 与 AgentOS-uCore 的状态提取、结果比较和来源清单 |
@@ -202,7 +202,7 @@ make agentos-harness-native-test TOOLPREFIX=riscv64-linux-gnu-
 
 Console replay 检查脚本化多轮会话中 `query_file`、`echo` 和 `send_message` 的工具结果，以及审批记录、本次启动的内核时间线和正常关闭。
 
-`agentos-nexus-check` 检查通用模型合约、7 项 brokered 工具、动态 Agent 配置、Artifact Store、开发 broker 和完成门。它不会启动退役的固定角色 Guest。Tool Registry 当前包含 33 项，其中 brokered 条目覆盖搜索、读取、Guest 状态、写入、补丁、构建和运行；普通内核 V2/V3 对这些条目返回 `BROKER_REQUIRED`。
+`agentos-nexus-check` 检查通用模型合约、8 项模型动作、7 项 Registry broker、动态 Agent 配置、Artifact Store、开发 broker 和完成门。它不会启动退役的固定角色 Guest。Tool Registry 当前包含 33 项，其中 brokered 条目覆盖搜索、读取、Guest 状态、写入、补丁、构建和运行；普通内核 V2/V3 对这些条目返回 `BROKER_REQUIRED`。
 
 开发回放读取 [`ci/agentos-nexus-dev-replay.jsonl`](../ci/agentos-nexus-dev-replay.jsonl)，依次重放写入、失败编译、修补、成功构建以及 `normal/invalid/failure` 三类 Guest 结果。检查器确认失败构建不能产生有效 build id，修补会清空旧运行证据，三类结果必须绑定同一个最新 source revision 与 build id，并且 fixture 被完整消费。真实 DeepSeek 计算器任务还启动了 3 个独立 Guest：`12 + 5` 得到 `17/exit 0`，`12 + x` 得到语法错误/exit 1，`12 / 0` 得到除零错误/exit 1；证据索引保存在 [`ci/agentos-nexus-dev-evidence.json`](../ci/agentos-nexus-dev-evidence.json)。
 
@@ -222,7 +222,7 @@ Contract 回归检查 `RETIRE` 从 `RETRY/RETIRING` 到 `OK/RECLAIMED` 的两阶
 
 Console replay 与 Harness 原生集成测试都会真正启动 QEMU Guest。前者用固定数据替换在线 provider 回复；后者在一个长期运行 Guest 中建立 Host Agent 对应进程并提交动态 Task。通用 Harness 的 Host 测试另行检查 Agent policy 子集、Context Artifact Store、private/team summary 和开发完成门；`agentmulti_ucore` 在真实 Guest 中检查 runtime config、seal/bind/share 和预测 hint/hit。具体操作见[运行方法](usage.md)。
 
-通用 Harness 的在线演示也属于交互会话测试。研究任务观察模型能否自己选择通用工具、读到相关实现并延续前轮结论；开发任务观察模型能否根据编译诊断修补源码，并为具体程序制定正常输入、异常输入和关键失败路径。现有 DeepSeek 计算器证据由模型选择单 Agent 方案，共 21 个模型轮次、20 次工具调用和一次 revision 冲突恢复，最新 build 在三个独立 Guest 中通过对应用例。答案正文不要求逐字一致，开发完成条件由构建与 Guest 证据直接决定；完整 hash 记录见 [`ci/agentos-nexus-multiagent-evidence.json`](../ci/agentos-nexus-multiagent-evidence.json)。原生 Task Channel 联合回归独立证明 Host Agent 已进入同一个长期运行 Guest；文档不把既有计算器 evidence 改写成本轮重新执行的在线证据。
+通用 Harness 的在线演示也属于交互会话测试。研究任务观察模型能否自己选择通用工具、读到相关实现并延续前轮结论；开发任务观察模型能否根据编译诊断修补源码，并为具体程序制定正常输入、异常输入和关键失败路径。最新 DeepSeek 计算器证据由模型选择单 Agent 方案，共 5 个模型轮次和 4 次产品工具调用；读取、写入、构建与运行产生 4 个 native 子 Task，最新 build 在 5 个独立 Guest 中通过全部用例。答案正文不要求逐字一致，开发完成条件由构建与 Guest 证据直接决定；完整 hash 记录见 [`ci/agentos-nexus-multiagent-evidence.json`](../ci/agentos-nexus-multiagent-evidence.json)。确定性集成测试另行覆盖“构建失败、诊断 Artifact、补丁、重建和真实 Guest 运行”的修复过程。
 
 ```bash
 make agentos-nexus-demo TOOLPREFIX=riscv64-linux-gnu-

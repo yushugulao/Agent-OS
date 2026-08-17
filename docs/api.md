@@ -67,7 +67,7 @@ ABI 检查程序使用 RISC-V64 探针、`_Static_assert` 和冻结清单，核�
 make agent-uapi-check
 ```
 
-冻结清单位于 [`ci/agent-uapi-layout.json`](../ci/agent-uapi-layout.json)，探针位于 [`scripts/probes/agent-uapi-layout.c`](../scripts/probes/agent-uapi-layout.c)。ABI vNext 把 `AGENT_UAPI_ABI_VERSION` 提升为 2。当前检查覆盖 701 项结构大小、字段偏移、枚举值和系统调用号合约，其中包含批量 Metadata 登记、结果文件发布、workspace mutation、通用 Agent runtime、Context Artifact、查询预测以及 delegated task 的 descriptor、claim/complete、controller cancel 和协作式终态确认布局。清单已删除恒零 mailbox 字段、旧 V1 请求结构及退役 C 包装；对应系统调用号保持为空。
+冻结清单位于 [`ci/agent-uapi-layout.json`](../ci/agent-uapi-layout.json)，探针位于 [`scripts/probes/agent-uapi-layout.c`](../scripts/probes/agent-uapi-layout.c)。ABI vNext 把 `AGENT_UAPI_ABI_VERSION` 提升为 2。当前检查覆盖 702 项结构大小、字段偏移、枚举值和系统调用号合约，其中包含批量 Metadata 登记、结果文件发布、workspace mutation、通用 Agent runtime、Context Artifact、查询预测以及 delegated task 的 descriptor、claim/complete、controller cancel 和协作式终态确认布局。清单已删除恒零 mailbox 字段、旧 V1 请求结构及退役 C 包装；对应系统调用号保持为空。
 
 ## 系统调用索引
 

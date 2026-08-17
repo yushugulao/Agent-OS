@@ -1,4 +1,4 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check host-contract-selftest local-host-selftests local-check agent-module-check agent-uapi-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agent-live-demo agent-live-demo-check agentos-console-image agentos-console agentos-cli agentos-observe agentos-console-check agentos-console-replay agentos-console-deepseek agentos-harness-image agentos-harness-native-test agentos-nexus-image agentos-nexus agentos-nexus-demo agentos-nexus-cli agentos-nexus-observe agentos-nexus-harness agentos-nexus-check agentos-nexus-replay agentos-nexus-deepseek contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run ch3-trace-test fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test virtio-disk-test dual-platform-run full-verify dual-clean clean-workspace-dry-run clean-workspace .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check host-contract-selftest local-host-selftests local-check agent-module-check agent-uapi-check printf-format-static-check printf-format-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agent-live-demo agent-live-demo-check agentos-console-image agentos-console agentos-cli agentos-observe agentos-console-check agentos-console-replay agentos-console-deepseek agentos-harness-image agentos-harness-native-test agentos-nexus-harness-integration agentos-nexus-image agentos-nexus agentos-nexus-demo agentos-nexus-cli agentos-nexus-observe agentos-nexus-harness agentos-nexus-check agentos-nexus-replay agentos-nexus-deepseek contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run ch3-trace-test fs-enospc-test fs-allocator-fault-test fs-epoch-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test virtio-disk-test dual-platform-run full-verify dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
 unexport BASH_ENV ENV
 all: build
@@ -636,6 +636,9 @@ AGENTOS_NEXUS_API_KEY_FILE ?= $(AGENT_LIVE_DEEPSEEK_KEY_FILE)
 AGENTOS_NEXUS_HARNESS_GOAL ?=
 AGENTOS_NEXUS_HARNESS_CONFIG ?=
 AGENTOS_NEXUS_HARNESS_TIMEOUT ?= 900
+AGENTOS_NEXUS_HARNESS_PROGRESS ?= auto
+AGENTOS_NEXUS_HARNESS_STATUS_INTERVAL ?= 1.0
+AGENTOS_NEXUS_HARNESS_TRACE_FILE ?=
 AGENTOS_HARNESS_MAX_BINARY ?= 274432
 QEMUOPTS = \
 	-nographic \
@@ -888,11 +891,21 @@ agentos-harness-native-test: agentos-harness-image host_tools/test_agentos_nativ
 		--kernel $(call shell_quote,$(BUILDDIR)/kernel) \
 		--image $(call shell_quote,$(F)/fs-copy.img)
 
-agentos-nexus-harness: agentos-harness-image host_tools/agentos_nexus_multiagent.py host_tools/agentos_native_task_channel.py host_tools/agentos_nexus_dev.py host_tools/agentos_workspace.py
+agentos-nexus-harness-integration: agentos-harness-image host_tools/test_agentos_nexus_harness_integration.py
+	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_nexus_harness_integration.py \
+		--workspace $(call shell_quote,.) \
+		--qemu $(call shell_quote,$(QEMU)) \
+		--kernel $(call shell_quote,$(BUILDDIR)/kernel) \
+		--image $(call shell_quote,$(F)/fs-copy.img)
+
+agentos-nexus-harness: host_tools/agentos_nexus_multiagent.py host_tools/agentos_harness_progress.py host_tools/agentos_native_task_channel.py host_tools/agentos_nexus_dev.py host_tools/agentos_workspace.py
 	@test -n $(call shell_quote,$(AGENTOS_NEXUS_HARNESS_GOAL)) || \
 		{ echo "AGENTOS_NEXUS_HARNESS_GOAL is required" >&2; exit 2; }
 	@test -n $(call shell_quote,$(AGENTOS_NEXUS_API_KEY_FILE)) || \
 		{ echo "AGENTOS_NEXUS_API_KEY_FILE is required" >&2; exit 2; }
+	@test -f $(call shell_quote,$(AGENTOS_NEXUS_API_KEY_FILE)) || \
+		{ echo "AGENTOS_NEXUS_API_KEY_FILE does not exist" >&2; exit 2; }
+	+@$(MAKE) --no-print-directory agentos-harness-image 1>&2
 	@$(PYTHON_CMD) -I -S -B host_tools/agentos_nexus_multiagent.py \
 		--workspace $(call shell_quote,.) \
 		--goal $(call shell_quote,$(AGENTOS_NEXUS_HARNESS_GOAL)) \
@@ -900,10 +913,11 @@ agentos-nexus-harness: agentos-harness-image host_tools/agentos_nexus_multiagent
 		--endpoint $(call shell_quote,$(AGENTOS_NEXUS_ENDPOINT)) \
 		--model $(call shell_quote,$(AGENTOS_NEXUS_MODEL)) \
 		--timeout $(call shell_quote,$(AGENTOS_NEXUS_HARNESS_TIMEOUT)) \
+		--progress $(call shell_quote,$(AGENTOS_NEXUS_HARNESS_PROGRESS)) \
+		--status-interval $(call shell_quote,$(AGENTOS_NEXUS_HARNESS_STATUS_INTERVAL)) $(if $(strip $(AGENTOS_NEXUS_HARNESS_CONFIG)),--config $(call shell_quote,$(AGENTOS_NEXUS_HARNESS_CONFIG))) $(if $(strip $(AGENTOS_NEXUS_HARNESS_TRACE_FILE)),--trace-file $(call shell_quote,$(AGENTOS_NEXUS_HARNESS_TRACE_FILE))) \
 		--qemu $(call shell_quote,$(QEMU)) \
 		--kernel $(call shell_quote,$(BUILDDIR)/kernel) \
-		--image $(call shell_quote,$(F)/fs-copy.img) \
-		$(if $(strip $(AGENTOS_NEXUS_HARNESS_CONFIG)),--config $(call shell_quote,$(AGENTOS_NEXUS_HARNESS_CONFIG)))
+		--image $(call shell_quote,$(F)/fs-copy.img)
 
 # Fixed-role Nexus targets are tombstones. All supported execution uses the
 # generic Harness and its persistent native Task Channel Guest.
@@ -911,10 +925,11 @@ agentos-nexus-image agentos-nexus agentos-nexus-demo agentos-nexus-cli agentos-n
 	@echo "fixed-role Nexus is retired; use make agentos-nexus-harness" >&2
 	@exit 2
 
-agentos-nexus-check: host_tools/test_agentos_nexus_dev.py host_tools/test_agentos_nexus_dev_replay.py host_tools/test_agentos_nexus_multiagent.py host_tools/test_agentos_native_task_channel.py host_tools/test_agentos_workspace.py host_tools/test_guest_llm_relay.py ci/agentos-nexus-dev-replay.jsonl
+agentos-nexus-check: host_tools/test_agentos_nexus_dev.py host_tools/test_agentos_nexus_dev_replay.py host_tools/test_agentos_nexus_multiagent.py host_tools/test_agentos_harness_progress.py host_tools/test_agentos_native_task_channel.py host_tools/test_agentos_workspace.py host_tools/test_guest_llm_relay.py ci/agentos-nexus-dev-replay.jsonl
 	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_nexus_dev.py
 	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_nexus_dev_replay.py
 	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_nexus_multiagent.py
+	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_harness_progress.py
 	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_native_task_channel.py
 	@$(PYTHON_CMD) -I -S -B host_tools/test_agentos_workspace.py
 	@$(PYTHON_CMD) -B host_tools/test_guest_llm_relay.py

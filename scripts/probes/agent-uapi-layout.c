@@ -312,6 +312,8 @@ ABI_VALUE(AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL,
 	  task_delegate_complete_f_ack_terminal);
 ABI_VALUE(AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL,
 	  task_delegate_complete_f_request_cancel);
+ABI_VALUE(AGENT_TASK_DELEGATE_COMPLETE_F_QUERY_TERMINAL,
+	  task_delegate_complete_f_query_terminal);
 ABI_VALUE(AGENT_TASK_DELEGATE_COMPLETE_F_ALL,
 	  task_delegate_complete_f_all);
 ABI_VALUE(((AGENT_IPC_ROUTE_MASK >> 0) & 0xffU) + 1U,

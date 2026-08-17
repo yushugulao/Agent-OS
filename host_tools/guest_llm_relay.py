@@ -105,9 +105,15 @@ DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
 MAX_MESSAGES = 64
 MAX_TOOLS = 32
 MAX_TOOL_ARGUMENTS = 3
-MAX_NEXUS_TOOL_ARGUMENTS = 5
+# Provider replies are validated against the advertised per-tool JSON Schema
+# before they can become a Guest task.  Keep a separate, bounded parser ceiling
+# here so an over-specified model reply reaches that schema validator and can be
+# repaired, instead of terminating a long-running Agent Loop merely because it
+# contains a sixth (ultimately rejected) top-level field.  The older scalar
+# Guest relay still uses MAX_TOOL_ARGUMENTS below.
+MAX_NEXUS_TOOL_ARGUMENTS = 32
 MAX_TOOL_ARGUMENT_STRING_BYTES = 512
-MAX_NEXUS_TOOL_ARGUMENT_STRING_BYTES = 3072
+MAX_NEXUS_TOOL_ARGUMENT_STRING_BYTES = 8192
 MAX_CORRELATION_ID = (1 << 63) - 1
 MAX_SEQUENCE = (1 << 63) - 1
 
@@ -369,6 +375,7 @@ def _validate_tool_arguments(
     *,
     max_arguments: int = MAX_TOOL_ARGUMENTS,
     max_string_bytes: int = MAX_TOOL_ARGUMENT_STRING_BYTES,
+    structured: bool = False,
 ) -> dict[str, object]:
     if (
         not isinstance(max_arguments, int)
@@ -387,27 +394,71 @@ def _validate_tool_arguments(
     if len(value) > max_arguments:
         raise ProviderError(
             "BAD_TOOL_ARGUMENTS",
-            f"{label} exceeds the {max_arguments}-argument Guest limit",
+            f"{label} exceeds the {max_arguments}-field provider limit",
         )
+    remaining_nodes = [256]
+
+    def validate_item(item: object, item_label: str, depth: int) -> object:
+        remaining_nodes[0] -= 1
+        if remaining_nodes[0] < 0 or depth > 6:
+            raise ProviderError(
+                "BAD_TOOL_ARGUMENTS", f"{item_label} is too deeply nested"
+            )
+        if isinstance(item, str):
+            _require_string(
+                item,
+                item_label,
+                allow_empty=True,
+                max_length=max_string_bytes,
+            )
+            return item
+        if isinstance(item, bool):
+            if structured:
+                return item
+        elif isinstance(item, int) and -0x8000000000000000 <= item <= 0xFFFFFFFFFFFFFFFF:
+            if structured or item >= 0:
+                return item
+        elif isinstance(item, float) and structured:
+            if item == item and item not in (float("inf"), float("-inf")):
+                return item
+        elif isinstance(item, list) and structured:
+            if len(item) > 64:
+                raise ProviderError(
+                    "BAD_TOOL_ARGUMENTS", f"{item_label} has too many items"
+                )
+            return [
+                validate_item(child, f"{item_label}[{index}]", depth + 1)
+                for index, child in enumerate(item)
+            ]
+        elif isinstance(item, dict) and structured:
+            if len(item) > 32:
+                raise ProviderError(
+                    "BAD_TOOL_ARGUMENTS", f"{item_label} has too many fields"
+                )
+            nested: dict[str, object] = {}
+            for child_key, child in item.items():
+                if not isinstance(child_key, str) or not TOOL_NAME_RE.fullmatch(child_key):
+                    raise ProviderError(
+                        "BAD_TOOL_ARGUMENTS", f"{item_label} has an invalid key"
+                    )
+                nested[child_key] = validate_item(
+                    child, f"{item_label}.{child_key}", depth + 1
+                )
+            return nested
+        expected = (
+            "a bounded JSON value"
+            if structured
+            else "a string or unsigned integer"
+        )
+        raise ProviderError(
+            "BAD_TOOL_ARGUMENTS", f"{item_label} must be {expected}"
+        )
+
     result: dict[str, object] = {}
     for key, item in value.items():
         if not isinstance(key, str) or not TOOL_NAME_RE.fullmatch(key):
             raise ProviderError("BAD_TOOL_ARGUMENTS", f"{label} has an invalid key")
-        if isinstance(item, str):
-            _require_string(
-                item,
-                f"{label}.{key}",
-                allow_empty=True,
-                max_length=max_string_bytes,
-            )
-        elif isinstance(item, int) and not isinstance(item, bool) and 0 <= item <= 0xFFFFFFFFFFFFFFFF:
-            pass
-        else:
-            raise ProviderError(
-                "BAD_TOOL_ARGUMENTS",
-                f"{label}.{key} must be a string or unsigned integer",
-            )
-        result[key] = item
+        result[key] = validate_item(item, f"{label}.{key}", 1)
     return result
 
 
@@ -2193,8 +2244,13 @@ class DeepSeekProvider(OpenAICompatibleProvider):
                 provider_content_value, "assistant content"
             )
         )
-        provider_reasoning_content = _validate_provider_private_text(
-            message.get("reasoning_content"), "reasoning_content"
+        reasoning_value = message.get("reasoning_content")
+        provider_reasoning_content = (
+            None
+            if reasoning_value is None
+            else _validate_provider_private_text(
+                reasoning_value, "reasoning_content"
+            )
         )
         # The generic adapter deliberately rejects public text mixed with a
         # tool call. DeepSeek thinking mode documents such content as part of
@@ -2247,6 +2303,10 @@ def _json_value_matches_schema(
         "maximum",
         "exclusiveMinimum",
         "exclusiveMaximum",
+        "items",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
     }
     if not isinstance(schema, Mapping) or any(
         not isinstance(keyword, str) or keyword not in supported
@@ -2276,6 +2336,7 @@ def _json_value_matches_schema(
             "number": isinstance(value, (int, float)) and not isinstance(value, bool),
             "boolean": isinstance(value, bool),
             "null": value is None,
+            "array": isinstance(value, list),
         }
         if not isinstance(expected_type, str) or not type_matches.get(
             expected_type, False
@@ -2340,6 +2401,32 @@ def _json_value_matches_schema(
                 if re.search(pattern, value) is None:
                     return False
             except re.error:
+                return False
+
+    if isinstance(value, list):
+        minimum_items = schema.get("minItems")
+        maximum_items = schema.get("maxItems")
+        for limit in (minimum_items, maximum_items):
+            if limit is not None and (
+                not isinstance(limit, int) or isinstance(limit, bool) or limit < 0
+            ):
+                return False
+        if minimum_items is not None and len(value) < minimum_items:
+            return False
+        if maximum_items is not None and len(value) > maximum_items:
+            return False
+        items = schema.get("items")
+        if items is not None:
+            if not isinstance(items, Mapping) or not all(
+                _json_value_matches_schema(item, items) for item in value
+            ):
+                return False
+        unique_items = schema.get("uniqueItems", False)
+        if not isinstance(unique_items, bool):
+            return False
+        if unique_items:
+            encoded = [canonical_json_bytes(item) for item in value]
+            if len(set(encoded)) != len(encoded):
                 return False
 
     if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -2459,6 +2546,7 @@ def _parse_provider_arguments(raw: bytes) -> dict[str, object]:
         "model tool arguments",
         max_arguments=MAX_NEXUS_TOOL_ARGUMENTS,
         max_string_bytes=MAX_NEXUS_TOOL_ARGUMENT_STRING_BYTES,
+        structured=True,
     )
 
 
@@ -2660,6 +2748,7 @@ class AnthropicMessagesProvider(_ProtocolProvider):
                 "model tool arguments",
                 max_arguments=MAX_NEXUS_TOOL_ARGUMENTS,
                 max_string_bytes=MAX_NEXUS_TOOL_ARGUMENT_STRING_BYTES,
+                structured=True,
             )
             return ModelReply(
                 "tool_use", tool=name, arguments=arguments, provider_call_id=provider_id
@@ -2824,6 +2913,7 @@ def _reply_from_canonical(value: Mapping[str, object]) -> ModelReply:
                 "replay arguments",
                 max_arguments=MAX_NEXUS_TOOL_ARGUMENTS,
                 max_string_bytes=MAX_NEXUS_TOOL_ARGUMENT_STRING_BYTES,
+                structured=True,
             ),
         )
     raise ProviderError("BAD_REPLAY", "replay response is malformed")

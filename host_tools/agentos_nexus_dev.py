@@ -15,7 +15,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Final, Sequence
+from typing import Callable, Final, Mapping, Sequence
 
 try:
     import agentos_workspace as workspace
@@ -24,14 +24,17 @@ except ModuleNotFoundError:  # pragma: no cover - package import fallback
 
 
 MAX_WRITE_BYTES: Final = 12 * 1024
-MAX_WRITE_CHUNK_BYTES: Final = 2_400
+MAX_SESSION_WRITE_BYTES: Final = 128 * 1024
+MAX_WRITE_CHUNK_BYTES: Final = 8_000
 MAX_STAGED_WRITES: Final = 8
 MAX_PATCH_BYTES: Final = 12 * 1024
-MAX_BUILD_DIAGNOSTIC_BYTES: Final = 2_200
-MAX_RUN_LOG_BYTES: Final = 2_200
+MAX_BUILD_DIAGNOSTIC_BYTES: Final = 48 * 1024
+MAX_RUN_LOG_BYTES: Final = 8 * 1024
 MAX_RUN_INPUT_BYTES: Final = 512
+MAX_RUN_CASES: Final = 6
 BUILD_TIMEOUT_SECONDS: Final = 180
 RUN_TIMEOUT_SECONDS: Final = 30
+BUILD_RECIPE_VERSION: Final = "agentos-nexus-build-v2"
 TOOLCHAIN_PREFIX: Final = "riscv64-linux-gnu-"
 QEMU_BINARY: Final = "qemu-system-riscv64"
 MISSING_REVISION: Final = "missing"
@@ -85,6 +88,9 @@ class _BuildRecord:
     root: Path
     kernel: Path
     image: Path
+    toolchain_id: str
+    kernel_sha256: str
+    image_sha256: str
     created_monotonic: float
 
 
@@ -311,6 +317,7 @@ class NexusDevelopmentBroker:
         toolchain_prefix: str = TOOLCHAIN_PREFIX,
         qemu: str = QEMU_BINARY,
         temporary_parent: Path | None = None,
+        progress_callback: Callable[[str, Mapping[str, object]], None] | None = None,
     ) -> None:
         self.root = Path(root).resolve(strict=True)
         if not self.root.is_dir():
@@ -319,6 +326,7 @@ class NexusDevelopmentBroker:
             raise ValueError("Nexus development uses the fixed RISC-V toolchain")
         self.toolchain_prefix = toolchain_prefix
         self.qemu = qemu
+        self._progress_callback = progress_callback
         self._temporary = tempfile.TemporaryDirectory(
             prefix="agentos-nexus-dev-",
             dir=None if temporary_parent is None else str(temporary_parent),
@@ -328,6 +336,16 @@ class NexusDevelopmentBroker:
         self._build_sequence = 0
         self._writes: dict[str, _WriteStage] = {}
         self._write_sequence = 0
+        self._session_written_bytes = 0
+
+    def _progress(self, kind: str, **fields: object) -> None:
+        if self._progress_callback is None:
+            return
+        try:
+            self._progress_callback(kind, fields)
+        except Exception:
+            # Progress reporting cannot alter a broker decision.
+            pass
 
     @staticmethod
     def _wsl_path(path: Path) -> str:
@@ -380,6 +398,8 @@ class NexusDevelopmentBroker:
 
     def _atomic_replace(self, target: Path, content: str) -> tuple[str, str]:
         raw = content.encode("utf-8", errors="strict")
+        if self._session_written_bytes + len(raw) > MAX_SESSION_WRITE_BYTES:
+            raise NexusDevelopmentError("session_write_quota")
         previous = self._revision(target)
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
@@ -402,6 +422,7 @@ class NexusDevelopmentBroker:
                     os.close(directory)
         finally:
             temporary.unlink(missing_ok=True)
+        self._session_written_bytes += len(raw)
         return previous, _sha256_bytes(raw)
 
     def write_file(self, path: object, content: object, expected_revision: object) -> DevelopmentResult:
@@ -415,7 +436,11 @@ class NexusDevelopmentBroker:
         current = self._revision(target)
         if current != expected:
             return self._operation_error("revision_conflict", current)
-        previous, revision = self._atomic_replace(target, body)
+        try:
+            previous, revision = self._atomic_replace(target, body)
+        except (OSError, NexusDevelopmentError) as error:
+            code = error.args[0] if isinstance(error, NexusDevelopmentError) else "atomic_commit_failed"
+            return self._operation_error(str(code), current)
         generation = revision
         return DevelopmentResult(
             "ok",
@@ -532,7 +557,11 @@ class NexusDevelopmentBroker:
             return self._operation_error(str(code), current)
         if len(updated.encode("utf-8")) > MAX_WRITE_BYTES:
             return self._operation_error("content_too_large", current)
-        previous, revision = self._atomic_replace(target, updated)
+        try:
+            previous, revision = self._atomic_replace(target, updated)
+        except (OSError, NexusDevelopmentError) as error:
+            code = error.args[0] if isinstance(error, NexusDevelopmentError) else "atomic_commit_failed"
+            return self._operation_error(str(code), current)
         return DevelopmentResult(
             "ok",
             revision,
@@ -575,7 +604,11 @@ class NexusDevelopmentBroker:
         for name in _COPY_NAMES:
             source = self.root / name
             target = destination / name
+            if source.is_symlink():
+                raise NexusDevelopmentError("build_source_symlink")
             if source.is_dir():
+                if any(candidate.is_symlink() for candidate in source.rglob("*")):
+                    raise NexusDevelopmentError("build_source_symlink")
                 shutil.copytree(source, target, ignore=ignored, symlinks=False)
             elif source.is_file():
                 shutil.copy2(source, target)
@@ -607,7 +640,9 @@ class NexusDevelopmentBroker:
         except (ImportError, OSError, ValueError):
             pass
 
-    def _run_build_command(self, command: Sequence[str], cwd: Path) -> tuple[int, str]:
+    def _run_build_command(
+        self, command: Sequence[str], cwd: Path, timeout_seconds: float
+    ) -> tuple[int, str]:
         environment = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "HOME": str(self.temporary_root),
@@ -635,10 +670,10 @@ class NexusDevelopmentBroker:
                 "/bin/sh",
                 "-lc",
                 (
-                    f"ulimit -t {BUILD_TIMEOUT_SECONDS}; "
+                    f"ulimit -t {max(1, int(timeout_seconds))}; "
                     "ulimit -v 2097152; ulimit -f 524288; "
                     f"exec /usr/bin/timeout --signal=TERM --kill-after=2 "
-                    f"{BUILD_TIMEOUT_SECONDS} \"$@\""
+                    f"{max(1, int(timeout_seconds))} \"$@\""
                 ),
                 "sh",
                 "/usr/bin/make",
@@ -654,7 +689,7 @@ class NexusDevelopmentBroker:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                timeout=BUILD_TIMEOUT_SECONDS + (10 if os.name == "nt" else 0),
+                timeout=timeout_seconds + (10 if os.name == "nt" else 0),
                 check=False,
                 text=False,
                 preexec_fn=self._resource_limiter if os.name == "posix" else None,
@@ -667,22 +702,77 @@ class NexusDevelopmentBroker:
         except OSError as error:
             return 127, f"build_broker_error={type(error).__name__}"
 
-    def build_ucore_program(self, source_path: object, target: object) -> DevelopmentResult:
+    def _toolchain_identity(self) -> str:
+        compiler = f"{self.toolchain_prefix}gcc"
+        if os.name == "nt":
+            command = [
+                "wsl.exe", "-e", "/bin/sh", "-c",
+                'p=$(command -v "$1") || exit 1; '
+                'printf "%s\\n" "$p"; "$p" --version | head -n 1; '
+                'sha256sum "$p"',
+                "sh", compiler,
+            ]
+        else:
+            command = ["/bin/sh", "-c",
+                       'p=$(command -v "$1") || exit 1; '
+                       'printf "%s\\n" "$p"; "$p" --version | head -n 1; '
+                       'sha256sum "$p"', "sh", compiler]
+        try:
+            completed = subprocess.run(
+                command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, timeout=10, check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise NexusDevelopmentError("toolchain_identity_failed") from error
+        if completed.returncode != 0 or not completed.stdout:
+            raise NexusDevelopmentError("toolchain_identity_failed")
+        return _sha256_bytes(completed.stdout)
+
+    def build_ucore_program(
+        self, source_path: object, source_revision: object, target: object
+    ) -> DevelopmentResult:
         try:
             relative = _validate_program_path(source_path)
+            expected_revision = _validate_revision(source_revision)
+            if expected_revision == MISSING_REVISION:
+                raise NexusDevelopmentError("source_revision_invalid")
             program = _validate_target(target, relative)
             source = self._target(relative)
         except NexusDevelopmentError as error:
             return self._operation_error(str(error))
         if not source.is_file() or source.is_symlink():
             return self._operation_error("source_missing")
-        source_revision = self._revision(source)
+        current_revision = self._revision(source)
+        if current_revision != expected_revision:
+            return self._operation_error("revision_conflict", current_revision)
+        source_revision = current_revision
+        try:
+            toolchain_id = self._toolchain_identity()
+        except NexusDevelopmentError as error:
+            return self._operation_error(str(error), source_revision)
         self._build_sequence += 1
         build_root = self.temporary_root / f"build-{self._build_sequence:04d}"
+        self._progress(
+            "build_worktree_started",
+            source_path=relative,
+            source_revision=source_revision,
+            target=program,
+            build_sequence=self._build_sequence,
+        )
         try:
             self._copy_worktree(build_root)
         except (OSError, NexusDevelopmentError):
+            self._progress(
+                "build_worktree_failed",
+                source_path=relative,
+                target=program,
+            )
             return self._operation_error("worktree_copy_failed", source_revision)
+        self._progress(
+            "build_worktree_completed",
+            source_path=relative,
+            target=program,
+        )
         runner = f"{program}_nexus_runner"
         runner_source = build_root / "user" / "src" / f"{runner}.c"
         runner_source.write_text(
@@ -727,9 +817,33 @@ class NexusDevelopmentBroker:
         )
         diagnostics: list[str] = []
         return_code = 0
-        for command in commands:
-            return_code, output = self._run_build_command(command, build_root)
+        build_started = time.monotonic()
+        for command_index, command in enumerate(commands, 1):
+            self._progress(
+                "build_command_started",
+                source_path=relative,
+                target=program,
+                command_index=command_index,
+                command_count=len(commands),
+                timeout_seconds=BUILD_TIMEOUT_SECONDS,
+            )
+            remaining = BUILD_TIMEOUT_SECONDS - (time.monotonic() - build_started)
+            if remaining <= 0:
+                return_code, output = 124, "build_timeout"
+            else:
+                return_code, output = self._run_build_command(
+                    command, build_root, remaining
+                )
             diagnostics.append(f"$ {' '.join(command)}\n{output}")
+            self._progress(
+                "build_command_completed",
+                source_path=relative,
+                target=program,
+                command_index=command_index,
+                command_count=len(commands),
+                exit_status=return_code,
+                duration_ms=int((time.monotonic() - build_started) * 1000),
+            )
             if return_code != 0:
                 break
         diagnostic_text = "\n".join(diagnostics).replace(
@@ -737,6 +851,22 @@ class NexusDevelopmentBroker:
         ).replace(str(self.root), "<workspace-root>")
         joined = _bounded_diagnostic(diagnostic_text, MAX_BUILD_DIAGNOSTIC_BYTES)
         if return_code != 0:
+            failure_excerpt = _bounded_diagnostic(output, 1400)
+            failure_body = (
+                "diagnostic_summary_begin\n"
+                + failure_excerpt
+                + "\ndiagnostic_summary_end\nfull_diagnostic_begin\n"
+                + joined
+                + "\nfull_diagnostic_end"
+            )
+            self._progress(
+                "build_failed",
+                source_path=relative,
+                source_revision=source_revision,
+                target=program,
+                exit_status=return_code,
+                duration_ms=int((time.monotonic() - build_started) * 1000),
+            )
             return DevelopmentResult(
                 "ok",
                 source_revision,
@@ -747,20 +877,24 @@ class NexusDevelopmentBroker:
                         ("source_path", relative),
                         ("source_revision", source_revision),
                         ("target", program),
+                        ("toolchain_id", toolchain_id),
+                        ("recipe", BUILD_RECIPE_VERSION),
                         ("exit_status", return_code),
                         ("diagnostic_sha256", _sha256_bytes(diagnostic_text.encode("utf-8", errors="replace"))),
                     ),
-                    joined,
+                    failure_body,
                 ),
             )
         kernel = build_root / "build" / "kernel"
         image = build_root / "nfs" / "fs.img"
         if not kernel.is_file() or not image.is_file():
             return self._operation_error("build_output_missing", source_revision)
+        kernel_sha256 = _sha256_bytes(kernel.read_bytes())
+        image_sha256 = _sha256_bytes(image.read_bytes())
         build_id = _sha256_bytes(
             (
-                f"{self._build_sequence}\0{relative}\0{source_revision}\0{program}\0"
-                f"{_sha256_bytes(kernel.read_bytes())}\0{_sha256_bytes(image.read_bytes())}"
+                f"{BUILD_RECIPE_VERSION}\0{relative}\0{source_revision}\0{program}\0"
+                f"{toolchain_id}\0{kernel_sha256}\0{image_sha256}"
             ).encode("ascii")
         )
         record = _BuildRecord(
@@ -771,9 +905,21 @@ class NexusDevelopmentBroker:
             build_root,
             kernel,
             image,
+            toolchain_id,
+            kernel_sha256,
+            image_sha256,
             time.monotonic(),
         )
         self._builds[build_id] = record
+        self._progress(
+            "build_completed",
+            source_path=relative,
+            source_revision=source_revision,
+            target=program,
+            build_id=build_id,
+            exit_status=0,
+            duration_ms=int((time.monotonic() - build_started) * 1000),
+        )
         return DevelopmentResult(
             "ok",
             source_revision,
@@ -785,6 +931,10 @@ class NexusDevelopmentBroker:
                     ("source_revision", source_revision),
                     ("target", program),
                     ("build_id", build_id),
+                    ("toolchain_id", toolchain_id),
+                    ("kernel_sha256", kernel_sha256),
+                    ("image_sha256", image_sha256),
+                    ("recipe", BUILD_RECIPE_VERSION),
                     ("exit_status", 0),
                     ("diagnostic_sha256", _sha256_bytes(diagnostic_text.encode("utf-8", errors="replace"))),
                     ("diagnostic_truncated", int(len(diagnostic_text.encode("utf-8", errors="replace")) > MAX_BUILD_DIAGNOSTIC_BYTES)),
@@ -793,9 +943,10 @@ class NexusDevelopmentBroker:
             ),
         )
 
-    def run_ucore_program(
+    def _run_ucore_case(
         self,
         build_id: object,
+        case_name: str,
         stdin: object,
         expected_output: object,
         expected_exit: object,
@@ -815,8 +966,9 @@ class NexusDevelopmentBroker:
             return self._operation_error("expected_exit_invalid", record.source_revision)
         if not isinstance(case_kind, str) or case_kind not in CASE_KINDS:
             return self._operation_error("case_kind_invalid", record.source_revision)
-        run_image = record.root / f"run-{case_kind}-{time.monotonic_ns()}.img"
-        input_file = record.root / f"run-{case_kind}-{time.monotonic_ns()}.stdin"
+        case_token = _sha256_bytes(case_name.encode("utf-8"))[:12]
+        run_image = record.root / f"run-{case_kind}-{case_token}-{time.monotonic_ns()}.img"
+        input_file = record.root / f"run-{case_kind}-{case_token}-{time.monotonic_ns()}.stdin"
         shutil.copy2(record.image, run_image)
         input_bytes = input_text.encode("utf-8")
         if input_text and not input_text.endswith("\n"):
@@ -856,6 +1008,17 @@ class NexusDevelopmentBroker:
         exit_status: int | None = None
         timed_out = False
         process: subprocess.Popen[bytes] | None = None
+        run_started = time.monotonic()
+        self._progress(
+            "run_guest_started",
+            build_id=build_id,
+            source_revision=record.source_revision,
+            target=record.target,
+            case_kind=case_kind,
+            case_name=case_name,
+            timeout_seconds=RUN_TIMEOUT_SECONDS,
+            input_bytes=len(input_bytes),
+        )
         try:
             process = subprocess.Popen(
                 command,
@@ -906,6 +1069,13 @@ class NexusDevelopmentBroker:
                             process.stdin.write(b"\n")
                         process.stdin.flush()
                         input_sent = True
+                        self._progress(
+                            "run_input_sent",
+                            build_id=build_id,
+                            case_kind=case_kind,
+                            case_name=case_name,
+                            input_bytes=len(input_bytes),
+                        )
                     matches = re.findall(r"NEXUS_PROGRAM_EXIT status=([0-9]+)", text)
                     if matches:
                         exit_status = int(matches[-1])
@@ -939,6 +1109,20 @@ class NexusDevelopmentBroker:
             and exit_status == expected_exit
             and expected in actual
         )
+        self._progress(
+            "run_guest_completed",
+            build_id=build_id,
+            source_revision=record.source_revision,
+            target=record.target,
+            case_kind=case_kind,
+            case_name=case_name,
+            actual_exit=-1 if exit_status is None else exit_status,
+            expected_exit=expected_exit,
+            passed=int(passed),
+            timed_out=int(timed_out),
+            output_bytes=len(output),
+            duration_ms=int((time.monotonic() - run_started) * 1000),
+        )
         exit_marker = (
             f"NEXUS_PROGRAM_EXIT status={exit_status}"
             if exit_status is not None
@@ -950,12 +1134,13 @@ class NexusDevelopmentBroker:
             "ok",
             record.source_revision,
             _result_content(
-                "ucore_run",
+                "ucore_run_case",
                 (
                     ("status", "passed" if passed else "failed"),
                     ("build_id", build_id),
                     ("source_revision", record.source_revision),
                     ("target", record.target),
+                    ("case_name", case_name),
                     ("case_kind", case_kind),
                     ("expected_exit", expected_exit),
                     ("actual_exit", -1 if exit_status is None else exit_status),
@@ -966,6 +1151,77 @@ class NexusDevelopmentBroker:
                     ("log_truncated", int(len(stable_log.encode("utf-8", errors="replace")) > MAX_RUN_LOG_BYTES)),
                 ),
                 log,
+            ),
+        )
+
+    def run_ucore_program(
+        self, build_id: object, cases: object
+    ) -> DevelopmentResult:
+        if not isinstance(build_id, str) or not _DIGEST_RE.fullmatch(build_id):
+            return self._operation_error("build_id_invalid")
+        record = self._builds.get(build_id)
+        if record is None:
+            return self._operation_error("build_id_unknown")
+        if (
+            not isinstance(cases, Sequence)
+            or isinstance(cases, (str, bytes, bytearray))
+            or not 1 <= len(cases) <= MAX_RUN_CASES
+        ):
+            return self._operation_error("run_cases_invalid", record.source_revision)
+        names: set[str] = set()
+        normalized: list[tuple[str, str, str, int, str]] = []
+        for item in cases:
+            if not isinstance(item, Mapping) or set(item) != {
+                "name", "stdin", "expected_output", "expected_exit", "case_kind"
+            }:
+                return self._operation_error("run_case_invalid", record.source_revision)
+            name = item.get("name")
+            if (
+                not isinstance(name, str)
+                or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", name)
+                or name in names
+            ):
+                return self._operation_error("run_case_name_invalid", record.source_revision)
+            names.add(name)
+            normalized.append((
+                name,
+                item.get("stdin"),
+                item.get("expected_output"),
+                item.get("expected_exit"),
+                item.get("case_kind"),
+            ))
+        results: list[DevelopmentResult] = []
+        passed = 0
+        kinds: set[str] = set()
+        for name, stdin, expected, expected_exit, case_kind in normalized:
+            result = self._run_ucore_case(
+                build_id, name, stdin, expected, expected_exit, case_kind
+            )
+            results.append(result)
+            if "\nstatus=passed\n" in f"\n{result.content}\n":
+                passed += 1
+            if isinstance(case_kind, str):
+                kinds.add(case_kind)
+        body_parts = []
+        for index, result in enumerate(results, 1):
+            body_parts.extend((f"case_{index}_begin", result.content, f"case_{index}_end"))
+        body = _bounded_text("\n".join(body_parts), 56 * 1024)
+        return DevelopmentResult(
+            "ok",
+            record.source_revision,
+            _result_content(
+                "ucore_run_suite",
+                (
+                    ("status", "passed" if passed == len(results) else "failed"),
+                    ("build_id", build_id),
+                    ("source_revision", record.source_revision),
+                    ("target", record.target),
+                    ("case_count", len(results)),
+                    ("passed_count", passed),
+                    ("case_kinds", ",".join(sorted(kinds))),
+                    ("independent_guest_count", len(results)),
+                ),
+                body,
             ),
         )
 

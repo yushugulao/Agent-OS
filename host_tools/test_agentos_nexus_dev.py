@@ -38,6 +38,7 @@ class NexusDevelopmentBrokerTests(unittest.TestCase):
     def test_write_requires_allowed_path_and_exact_revision(self) -> None:
         denied = self.broker.write_file("README.md", "bad", "missing")
         self.assertEqual(denied.status, "ok")
+        self.assertIn("path_not_allowed", denied.content)
 
         created = self.broker.write_file(
             "user/src/nexus_calc_ucore.c", "int main(void) { return 0; }\n", "missing"
@@ -145,10 +146,12 @@ class NexusDevelopmentBrokerTests(unittest.TestCase):
 
     def test_build_rejects_unknown_target_before_subprocess(self) -> None:
         source = self.root / "user/src/nexus_calc_ucore.c"
-        source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+        body = "int main(void) { return 0; }\n"
+        source.write_text(body, encoding="utf-8")
         with mock.patch.object(self.broker, "_copy_worktree") as copied:
             result = self.broker.build_ucore_program(
-                "user/src/nexus_calc_ucore.c", "nexus_other_ucore"
+                "user/src/nexus_calc_ucore.c", self.revision(body),
+                "nexus_other_ucore"
             )
         self.assertEqual(result.status, "ok")
         self.assertIn("target_source_mismatch", result.content)
@@ -156,14 +159,53 @@ class NexusDevelopmentBrokerTests(unittest.TestCase):
 
     def test_run_requires_owned_build_and_case_kind(self) -> None:
         unknown = self.broker.run_ucore_program(
-            "0" * 64, "1 + 1\n", "2", 0, "normal"
+            "0" * 64,
+            [{"name": "normal", "stdin": "1 + 1\n", "expected_output": "2",
+              "expected_exit": 0, "case_kind": "normal"}],
         )
         self.assertEqual(unknown.status, "ok")
         self.assertIn("build_id_unknown", unknown.content)
         invalid = self.broker.run_ucore_program(
-            "0" * 64, "", "", 0, "other"
+            "0" * 64, []
         )
         self.assertEqual(invalid.status, "ok")
+
+    def test_build_requires_exact_source_revision_before_copy(self) -> None:
+        source = self.root / "user/src/nexus_sample_ucore.c"
+        source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+        with mock.patch.object(self.broker, "_copy_worktree") as copied:
+            result = self.broker.build_ucore_program(
+                "user/src/nexus_sample_ucore.c", "0" * 64,
+                "nexus_sample_ucore",
+            )
+        self.assertIn("revision_conflict", result.content)
+        copied.assert_not_called()
+
+    def test_session_write_quota_rejects_commit_without_partial_file(self) -> None:
+        body = "x" * dev.MAX_WRITE_BYTES
+        for index in range(10):
+            result = self.broker.write_file(
+                f"user/src/nexus_quota{index}_ucore.c", body, "missing"
+            )
+            self.assertIn("atomic_commit=1", result.content)
+        rejected_path = self.root / "user/src/nexus_quota_over_ucore.c"
+        result = self.broker.write_file(
+            "user/src/nexus_quota_over_ucore.c", "y" * (9 * 1024), "missing"
+        )
+        self.assertIn("session_write_quota", result.content)
+        self.assertFalse(rejected_path.exists())
+
+    def test_run_suite_schema_rejects_duplicate_case_names(self) -> None:
+        record = dev._BuildRecord(
+            "1" * 64, "user/src/nexus_sample_ucore.c", "2" * 64,
+            "nexus_sample_ucore", self.root, self.root / "kernel",
+            self.root / "fs.img", "3" * 64, "4" * 64, "5" * 64, 0.0,
+        )
+        self.broker._builds[record.build_id] = record
+        case = {"name": "same", "stdin": "", "expected_output": "ok",
+                "expected_exit": 0, "case_kind": "normal"}
+        result = self.broker.run_ucore_program(record.build_id, [case, dict(case)])
+        self.assertIn("run_case_name_invalid", result.content)
 
 
 if __name__ == "__main__":

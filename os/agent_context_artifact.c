@@ -6,7 +6,7 @@
 #include "open_file_io_lease.h"
 
 #define AGENT_CONTEXT_ARTIFACT_CAPACITY 64U
-#define AGENT_CONTEXT_ARTIFACT_BINDINGS 16U
+#define AGENT_CONTEXT_ARTIFACT_BINDINGS AGENT_CONTEXT_ARTIFACT_CAPACITY
 #define AGENT_CONTEXT_ARTIFACT_CHUNK    512U
 
 struct agent_context_artifact_record {

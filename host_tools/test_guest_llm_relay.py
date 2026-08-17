@@ -1523,13 +1523,22 @@ class ProviderTranslationTests(unittest.TestCase):
         self.assertIsNone(valid.provider_content)
         self.assertEqual(valid.provider_reasoning_content, "reason")
 
+        for operation in ("missing", "null"):
+            with self.subTest(field="reasoning_content", operation=operation):
+                candidate = response()
+                message = candidate["choices"][0]["message"]
+                if operation == "missing":
+                    del message["reasoning_content"]
+                else:
+                    message["reasoning_content"] = None
+                parsed = relay.DeepSeekProvider._parse_response(candidate)
+                self.assertIsNone(parsed.provider_reasoning_content)
+
         cases = (
             ("content", "missing", None),
             ("content", "value", 7),
             ("content", "value", "bad\0content"),
             ("content", "value", "\ud800"),
-            ("reasoning_content", "missing", None),
-            ("reasoning_content", "value", None),
             ("reasoning_content", "value", ["not", "scalar"]),
             ("reasoning_content", "value", "bad\0reason"),
             ("reasoning_content", "value", "\ud800"),
@@ -3010,6 +3019,58 @@ class ProviderTranslationTests(unittest.TestCase):
             relay._validate_tool_arguments(
                 {"path": "x" * (relay.MAX_NEXUS_TOOL_ARGUMENT_STRING_BYTES + 1)},
                 "Nexus arguments",
+                max_arguments=relay.MAX_NEXUS_TOOL_ARGUMENTS,
+                max_string_bytes=relay.MAX_NEXUS_TOOL_ARGUMENT_STRING_BYTES,
+            )
+
+    def test_schema_array_items_bounds_and_uniqueness(self) -> None:
+        schema = {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "uniqueItems": True,
+            "items": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        }
+        self.assertTrue(relay._json_value_matches_schema([{"name": "a"}], schema))
+        for rejected in (
+            [],
+            [{"name": "a"}, {"name": "a"}],
+            [{"name": "a"}, {"name": "b"}, {"name": "c"}],
+            [{"name": 1}],
+        ):
+            with self.subTest(value=rejected):
+                self.assertFalse(relay._json_value_matches_schema(rejected, schema))
+
+    def test_provider_arguments_preserve_bounded_structured_tool_input(self) -> None:
+        parsed = relay._parse_provider_arguments(
+            json.dumps(
+                {
+                    "build_id": "a" * 64,
+                    "cases": [
+                        {
+                            "name": "normal",
+                            "stdin": "1+1\n",
+                            "expected_output": "2",
+                            "expected_exit": 0,
+                            "case_kind": "normal",
+                        }
+                    ],
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        self.assertEqual(parsed["cases"][0]["case_kind"], "normal")
+        with self.assertRaisesRegex(
+            relay.ProviderError, "string or unsigned integer"
+        ):
+            relay._validate_tool_arguments(
+                parsed,
+                "Guest wire arguments",
                 max_arguments=relay.MAX_NEXUS_TOOL_ARGUMENTS,
                 max_string_bytes=relay.MAX_NEXUS_TOOL_ARGUMENT_STRING_BYTES,
             )

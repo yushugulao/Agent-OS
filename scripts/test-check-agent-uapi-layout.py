@@ -23,7 +23,7 @@ class AgentUapiLayoutTests(unittest.TestCase):
         )
 
     def test_golden_contract_has_expected_coverage(self):
-        self.assertEqual(len(self.golden), 701)
+        self.assertEqual(len(self.golden), 702)
         self.assertEqual(
             self.golden["agent_uapi_layout_value_agent_uapi_abi_version"], 2
         )
@@ -449,7 +449,8 @@ class AgentUapiLayoutTests(unittest.TestCase):
                 .replace(
                     "#define AGENT_TASK_DELEGATE_COMPLETE_F_ALL \\\n"
                     "\t(AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL | \\\n"
-                    "\t AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL)",
+                    "\t AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL | \\\n"
+                    "\t AGENT_TASK_DELEGATE_COMPLETE_F_QUERY_TERMINAL)",
                     "#define AGENT_TASK_DELEGATE_COMPLETE_F_ALL 0U",
                 ),
                 encoding="utf-8",

@@ -1119,6 +1119,84 @@ out:
 }
 
 static int
+agent_task_delegate_terminal_query_ready(
+	struct proc *worker, struct thread *thread,
+	const struct agent_task_delegate_complete *complete,
+	struct agent_task_delegate_complete_result *result)
+{
+	struct agent_task_delegate_slot *slot = 0;
+	struct workflow_lifecycle_key lifecycle;
+	uint state;
+	int enabled;
+
+	agent_task_delegate_complete_result_fill(
+		0, result, AGENT_TASK_CHANNEL_BAD_REQUEST,
+		AGENT_TASK_DELEGATE_STATE_NONE);
+	if (worker == 0 || thread == 0 || complete == 0 ||
+	    complete->version != AGENT_TASK_DELEGATE_VERSION ||
+	    complete->size != sizeof(*complete) ||
+	    complete->flags != AGENT_TASK_DELEGATE_COMPLETE_F_QUERY_TERMINAL ||
+	    complete->reserved != 0 || complete->terminal_status != 0 ||
+	    complete->ack_terminal_status != 0 ||
+	    complete->terminal_generation != 0 || complete->owner_pid <= 0 ||
+	    complete->owner_control_id == 0 ||
+	    complete->channel_generation == 0 || complete->request_id == 0 ||
+	    complete->slot_generation == 0 || complete->task_id == 0 ||
+	    complete->correlation_id == 0 || thread != curr_thread() ||
+	    thread->process != worker || thread->identity_generation == 0)
+		return result->status;
+	lifecycle.id = complete->lifecycle.id;
+	lifecycle.generation = complete->lifecycle.generation;
+	enabled = intr_save();
+	if (!proc_teardown_live(worker) || !worker->is_agent ||
+	    !agent_task_delegate_lifecycle_matches(worker, lifecycle)) {
+		result->status = AGENT_TASK_CHANNEL_STALE;
+		goto out;
+	}
+	for (uint i = 0; i < AGENT_TASK_DELEGATE_CAPACITY; i++) {
+		struct agent_task_delegate_slot *candidate =
+			&agent_task_delegate_slots[i];
+
+		if ((candidate->state == AGENT_TASK_DELEGATE_SLOT_CLAIMED ||
+		     candidate->state == AGENT_TASK_DELEGATE_SLOT_READY) &&
+		    candidate->owner_pid == complete->owner_pid &&
+		    candidate->owner_control_id == complete->owner_control_id &&
+		    candidate->sqe.ring_generation ==
+			    complete->channel_generation &&
+		    candidate->sqe.request_id == complete->request_id &&
+		    candidate->sqe.slot_generation ==
+			    complete->slot_generation &&
+		    candidate->descriptor.task_id == complete->task_id &&
+		    candidate->descriptor.correlation_id ==
+			    complete->correlation_id &&
+		    workflow_lifecycle_key_equal(
+			    candidate->lifecycle, lifecycle) &&
+		    candidate->worker_pid == worker->pid &&
+		    candidate->worker_agent_id == worker->agent_id &&
+		    candidate->worker_control_id == worker->agent_control_id &&
+		    candidate->worker_thread_generation ==
+			    thread->identity_generation) {
+			slot = candidate;
+			break;
+		}
+	}
+	if (slot == 0) {
+		result->status = AGENT_TASK_CHANNEL_STALE;
+		goto out;
+	}
+	state = agent_task_delegate_public_state(slot);
+	agent_task_delegate_complete_result_fill(
+		slot, result,
+		slot->state == AGENT_TASK_DELEGATE_SLOT_CLAIMED &&
+			slot->terminal_pending ?
+			AGENT_TASK_CHANNEL_RETRY : AGENT_TASK_CHANNEL_OK,
+		state);
+out:
+	intr_restore(enabled);
+	return result->status;
+}
+
+static int
 agent_task_delegate_complete_ready(
 	struct proc *worker, struct thread *thread,
 	const struct agent_task_delegate_complete *complete,
@@ -1135,6 +1213,10 @@ agent_task_delegate_complete_ready(
 	if (complete != 0 &&
 	    complete->flags == AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL)
 		return agent_task_delegate_cancel_request_ready(
+			worker, thread, complete, result);
+	if (complete != 0 &&
+	    complete->flags == AGENT_TASK_DELEGATE_COMPLETE_F_QUERY_TERMINAL)
+		return agent_task_delegate_terminal_query_ready(
 			worker, thread, complete, result);
 	if (worker == 0 || thread == 0 || complete == 0 ||
 	    complete->version != AGENT_TASK_DELEGATE_VERSION ||
@@ -1529,6 +1611,8 @@ agent_task_bridge_op(const struct agent_task_sqe *sqe,
 		     const struct agent_task_resource_view *input,
 		     struct agent_op *op)
 {
+	struct agent_task_delegate_descriptor descriptor;
+
 	if (sqe == 0 || input == 0 || op == 0)
 		return -1;
 	memset(op, 0, sizeof(*op));
@@ -1540,6 +1624,23 @@ agent_task_bridge_op(const struct agent_task_sqe *sqe,
 	if (!agent_task_bridge_resource_input(sqe, input) &&
 	    !agent_task_bridge_delegate_input(sqe, input))
 		return -1;
+	/*
+	 * DELEGATE_TASK is the Task Channel transport.  A brokered Harness Task
+	 * carries the governed operation in descriptor.task_type so admission,
+	 * provenance, capability, side-effect and resource checks run against the
+	 * real Tool Registry entry.  Ordinary delegated Agent work continues to
+	 * use DELEGATE_TASK as its operation type.
+	 */
+	if (sqe->tool_id == AGENT_TOOL_DELEGATE_TASK &&
+	    input->handle.type == AGENT_ARTIFACT_TASK) {
+		memmove(&descriptor, input->snapshot, sizeof(descriptor));
+		if (descriptor.task_type == AGENT_TOOL_DELEGATE_TASK ||
+		    (descriptor.task_type >= AGENT_TOOL_APPLY_PATCH &&
+		     descriptor.task_type <= AGENT_TOOL_RUN_UCORE_PROGRAM))
+			op->tool_id = (int)descriptor.task_type;
+		else
+			return -1;
+	}
 	uint length = input->length > sizeof(op->payload) ?
 		      sizeof(op->payload) : (uint)input->length;
 	memmove(op->payload, input->snapshot, length);

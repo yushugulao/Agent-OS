@@ -476,6 +476,7 @@ def validate_feature_abi_constants(root):
             "AGENT_TASK_DELEGATE_CLAIM_F_WAIT": 0,
             "AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL": 0,
             "AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL": 1,
+            "AGENT_TASK_DELEGATE_COMPLETE_F_QUERY_TERMINAL": 2,
         },
         "agent_lifecycle_abi.h": {
             "AGENT_WORKFLOW_SCHED_F_ACTIVE": 0,
@@ -508,7 +509,8 @@ def validate_feature_abi_constants(root):
     if not re.search(
         r"^#define\s+AGENT_TASK_DELEGATE_COMPLETE_F_ALL\s+\\?\s*$\n"
         r"\s*\(AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL\s*\|\s*\\?\s*$\n"
-        r"\s*AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL\)\s*$",
+        r"\s*AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL\s*\|\s*\\?\s*$\n"
+        r"\s*AGENT_TASK_DELEGATE_COMPLETE_F_QUERY_TERMINAL\)\s*$",
         task,
         re.MULTILINE,
     ):

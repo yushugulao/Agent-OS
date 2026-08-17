@@ -165,6 +165,10 @@ _Static_assert(AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL == (1U << 1) &&
 	       AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL !=
 		       AGENT_TASK_DELEGATE_COMPLETE_F_ACK_TERMINAL,
 	       "delegated controller cancellation flag");
+_Static_assert(AGENT_TASK_DELEGATE_COMPLETE_F_QUERY_TERMINAL == (1U << 2) &&
+	       AGENT_TASK_DELEGATE_COMPLETE_F_QUERY_TERMINAL !=
+		       AGENT_TASK_DELEGATE_COMPLETE_F_REQUEST_CANCEL,
+	       "delegated provider terminal query flag");
 _Static_assert(sizeof(struct task_delegate_controller_command) == 96,
 	       "controller receives one exact cancellation capability binding");
 _Static_assert((TASK_DELEGATE_SIDE_EFFECTS & TASK_DELEGATE_LEASE_EFFECTS) ==
