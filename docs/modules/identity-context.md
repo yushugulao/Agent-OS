@@ -54,7 +54,7 @@ struct workflow_lifecycle_key {
 | `Investigator` | 读取元数据和文件内容、发送消息、订阅文件、写结果和审计记录、接收 delegated task | 90 |
 | `Recovery` | 读取元数据和文件内容、发送消息、订阅文件、执行动作、写结果和审计记录、接收 delegated task | 120 |
 | `Artifact` | 读取元数据和文件内容、发送消息、订阅文件、写结果和审计记录、接收 delegated task | 100 |
-| `Orchestrator` | 14 项 Agent 能力位，可创建并管理协作者 | 110 |
+| `Orchestrator` | 16 项 Agent 能力位，可创建并管理协作者 | 110 |
 
 表中的权重只用于同一工作流内部选择 Agent。多个工作流之间的 EEVDF 调度对象保持等权。子进程或 `exec` 都不能扩大权限。进程最终拥有的能力集合，是角色策略、映像配置、父进程有效能力和请求掩码的交集。
 
